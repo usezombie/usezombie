@@ -1,0 +1,29 @@
+# UseZombie local dev — Postgres + Zig binary
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: usezombie
+      POSTGRES_PASSWORD: usezombie
+      POSTGRES_DB: usezombiedb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  zombied:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://usezombie:usezombie@postgres:5432/usezombiedb
+      API_KEY: local-dev-api-key
+      AGENT_CONFIG_DIR: /app/config
+    depends_on:
+      - postgres
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres-data:
