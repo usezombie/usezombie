@@ -298,7 +298,8 @@ fn executeRun(
 
             // ── Produce run_summary.md (M1_002 Gap 2) ────────────────────
             // Best-effort: DONE is committed; a summary failure is non-fatal.
-            const summary_content = std.fmt.allocPrint(alloc,
+            const summary_content = std.fmt.allocPrint(
+                alloc,
                 "# Run Summary\n\n" ++
                     "- **run_id**: {s}\n" ++
                     "- **spec_id**: {s}\n" ++
