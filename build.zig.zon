@@ -2,7 +2,7 @@
     .name = .zombied,
     .version = "0.1.0",
     .minimum_zig_version = "0.15.2",
-    .fingerprint = 0xc35380d402f777b0,
+    .fingerprint = 0xc908abec9a0e1bf3,
     .dependencies = .{
         .nullclaw = .{
             .url = "git+https://github.com/nullclaw/nullclaw.git#v2026.3.1",

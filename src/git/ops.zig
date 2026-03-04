@@ -204,11 +204,9 @@ pub fn createPullRequest(
     defer alloc.free(auth_header);
 
     const result = try run(alloc, &.{
-        "curl", "-s", "-X", "POST",
-        "-H", "Content-Type: application/json",
-        "-H", "Accept: application/vnd.github+json",
-        "-H", auth_header,
-        "-d",    payload,
+        "curl",  "-s",                             "-X", "POST",
+        "-H",    "Content-Type: application/json", "-H", "Accept: application/vnd.github+json",
+        "-H",    auth_header,                      "-d", payload,
         api_url,
     }, null);
     defer alloc.free(result);

@@ -441,8 +441,9 @@ pub fn handleRetryRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
         \\INSERT INTO run_transitions (run_id, attempt, state_from, state_to, actor, reason_code, notes, ts)
         \\VALUES ($1, $2, $3, 'SPEC_QUEUED', 'orchestrator', 'MANUAL_RETRY', $4, $5)
     , .{
-        run_id, @as(i32, @intCast(current.attempt)),
-        current.state.label(), parsed.value.reason, now_ms,
+        run_id,                @as(i32, @intCast(current.attempt)),
+        current.state.label(), parsed.value.reason,
+        now_ms,
     }) catch {
         errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Database error", req_id);
         return;
