@@ -10,20 +10,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const db = @import("db/pool.zig");
-const runtime_config = @import("config/runtime.zig");
-const events_bus = @import("events/bus.zig");
-const clerk_auth = @import("auth/clerk.zig");
-const http_server = @import("http/server.zig");
-const http_handler = @import("http/handler.zig");
-const worker = @import("pipeline/worker.zig");
+const cli_commands = @import("cli/commands.zig");
+const cmd_serve = @import("cmd/serve.zig");
+const cmd_doctor = @import("cmd/doctor.zig");
+const cmd_run = @import("cmd/run.zig");
+const cmd_migrate = @import("cmd/migrate.zig");
 
 const log = std.log.scoped(.zombied);
 
-var shutdown_requested = std.atomic.Value(bool).init(false);
 var runtime_log_level = std.atomic.Value(u8).init(@intFromEnum(if (builtin.mode == .Debug) std.log.Level.debug else std.log.Level.info));
 
-// Logging configuration — follow Ghostty pattern
 pub const std_options: std.Options = .{
     .log_level = .debug,
     .logFn = zombiedLog,
@@ -79,48 +75,6 @@ fn zombiedLog(
     _ = stderr.write(line) catch {};
 }
 
-fn onSignal(sig: i32) callconv(.c) void {
-    _ = sig;
-    shutdown_requested.store(true, .release);
-}
-
-fn installSignalHandlers() void {
-    const action = std.posix.Sigaction{
-        .handler = .{ .handler = onSignal },
-        .mask = std.posix.sigemptyset(),
-        .flags = 0,
-    };
-    std.posix.sigaction(std.posix.SIG.INT, &action, null);
-    std.posix.sigaction(std.posix.SIG.TERM, &action, null);
-}
-
-fn signalWatcher(wstate: *worker.WorkerState) void {
-    while (!shutdown_requested.load(.acquire)) {
-        std.Thread.sleep(100 * std.time.ns_per_ms);
-    }
-
-    wstate.running.store(false, .release);
-    http_server.stop();
-}
-
-// ── CLI ───────────────────────────────────────────────────────────────────
-
-const Subcommand = enum { serve, doctor, run, migrate };
-
-fn parseSubcommand() Subcommand {
-    var args = std.process.args();
-    _ = args.next();
-    const cmd = args.next() orelse return .serve;
-    return std.meta.stringToEnum(Subcommand, cmd) orelse .serve;
-}
-
-fn isHexString(s: []const u8) bool {
-    for (s) |ch| {
-        if (!std.ascii.isHex(ch)) return false;
-    }
-    return true;
-}
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     defer _ = gpa.deinit();
@@ -131,12 +85,12 @@ pub fn main() !void {
         log.warn("debug build — not for production use", .{});
     }
 
-    const cmd = parseSubcommand();
+    const cmd = cli_commands.parseSubcommandFromProcessArgs();
     switch (cmd) {
-        .serve => try cmdServe(alloc),
-        .doctor => try cmdDoctor(alloc),
-        .run => try cmdRun(alloc),
-        .migrate => try cmdMigrate(alloc),
+        .serve => try cmd_serve.run(alloc),
+        .doctor => try cmd_doctor.run(alloc),
+        .run => try cmd_run.run(alloc),
+        .migrate => try cmd_migrate.run(alloc),
     }
 }
 
@@ -148,352 +102,10 @@ test "parseLogLevel accepts common values" {
     try std.testing.expectEqual(@as(?std.log.Level, null), parseLogLevel("trace"));
 }
 
-fn runCanonicalMigrations(pool: *db.Pool) !void {
-    const schema = @import("schema");
-    const migrations = [_]db.Migration{
-        .{ .version = 1, .sql = schema.initial_sql },
-        .{ .version = 2, .sql = schema.vault_sql },
-        .{ .version = 3, .sql = schema.request_correlation_sql },
-        .{ .version = 4, .sql = schema.side_effect_ledger_sql },
-    };
-    try db.runMigrations(pool, &migrations);
-}
-
-// ── serve ─────────────────────────────────────────────────────────────────
-
-fn cmdServe(alloc: std.mem.Allocator) !void {
-    log.info("starting zombied serve", .{});
-
-    var serve_cfg = runtime_config.ServeConfig.load(alloc) catch |err| {
-        switch (err) {
-            runtime_config.ValidationError.MissingApiKey,
-            runtime_config.ValidationError.InvalidApiKeyList,
-            runtime_config.ValidationError.MissingClerkJwksUrl,
-            runtime_config.ValidationError.MissingEncryptionMasterKey,
-            runtime_config.ValidationError.InvalidEncryptionMasterKey,
-            runtime_config.ValidationError.MissingGitHubAppId,
-            runtime_config.ValidationError.MissingGitHubAppPrivateKey,
-            runtime_config.ValidationError.InvalidPort,
-            runtime_config.ValidationError.InvalidMaxAttempts,
-            runtime_config.ValidationError.InvalidWorkerConcurrency,
-            runtime_config.ValidationError.InvalidRunTimeoutMs,
-            runtime_config.ValidationError.InvalidRateLimitCapacity,
-            runtime_config.ValidationError.InvalidRateLimitRefillPerSec,
-            runtime_config.ValidationError.InvalidReadyMaxQueueDepth,
-            runtime_config.ValidationError.InvalidReadyMaxQueueAgeMs,
-            => runtime_config.ServeConfig.printValidationError(err),
-            else => std.debug.print("fatal: failed to load runtime config: {}\n", .{err}),
-        }
-        std.process.exit(1);
-    };
-    defer serve_cfg.deinit();
-
-    const api_pool = db.initFromEnvForRole(alloc, .api) catch |err| {
-        std.debug.print("fatal: api database init failed: {}\n", .{err});
-        std.process.exit(1);
-    };
-    defer api_pool.deinit();
-
-    const worker_pool = db.initFromEnvForRole(alloc, .worker) catch |err| {
-        std.debug.print("fatal: worker database init failed: {}\n", .{err});
-        std.process.exit(1);
-    };
-    defer worker_pool.deinit();
-
-    runCanonicalMigrations(api_pool) catch |err| {
-        std.debug.print("fatal: schema migration failed: {}\n", .{err});
-        std.process.exit(1);
-    };
-
-    std.fs.makeDirAbsolute(serve_cfg.cache_root) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => log.warn("could not create cache root {s}: {}", .{ serve_cfg.cache_root, err }),
-    };
-
-    var wstate = worker.WorkerState.init();
-
-    var ctx = http_handler.Context{
-        .pool = api_pool,
-        .alloc = alloc,
-        .api_keys = serve_cfg.api_keys,
-        .clerk = null,
-        .worker_state = &wstate,
-        .ready_max_queue_depth = serve_cfg.ready_max_queue_depth,
-        .ready_max_queue_age_ms = serve_cfg.ready_max_queue_age_ms,
-    };
-
-    var clerk = if (serve_cfg.clerk_enabled) clerk_auth.Verifier.init(alloc, .{
-        .jwks_url = serve_cfg.clerk_jwks_url orelse "",
-        .issuer = serve_cfg.clerk_issuer,
-        .audience = serve_cfg.clerk_audience,
-    }) else null;
-    defer if (clerk) |*v| v.deinit();
-    if (clerk) |*v| ctx.clerk = v;
-
-    const wcfg = worker.WorkerConfig{
-        .pool = worker_pool,
-        .config_dir = serve_cfg.config_dir,
-        .cache_root = serve_cfg.cache_root,
-        .github_app_id = serve_cfg.github_app_id,
-        .github_app_private_key = serve_cfg.github_app_private_key,
-        .pipeline_profile_path = serve_cfg.pipeline_profile_path,
-        .max_attempts = serve_cfg.max_attempts,
-        .run_timeout_ms = serve_cfg.run_timeout_ms,
-        .rate_limit_capacity = serve_cfg.rate_limit_capacity,
-        .rate_limit_refill_per_sec = serve_cfg.rate_limit_refill_per_sec,
-    };
-
-    shutdown_requested.store(false, .release);
-    installSignalHandlers();
-
-    var event_bus = events_bus.Bus.init();
-    events_bus.install(&event_bus);
-    defer events_bus.uninstall();
-
-    const worker_count: usize = @max(@as(usize, @intCast(serve_cfg.worker_concurrency)), 1);
-    var worker_threads = try alloc.alloc(std.Thread, worker_count);
-    defer alloc.free(worker_threads);
-    var spawned_workers: usize = 0;
-    var signal_thread: ?std.Thread = null;
-    var event_thread: ?std.Thread = null;
-    errdefer {
-        wstate.running.store(false, .release);
-        shutdown_requested.store(true, .release);
-        event_bus.stop();
-        if (signal_thread) |*t| t.join();
-        if (event_thread) |*t| t.join();
-        while (spawned_workers > 0) {
-            spawned_workers -= 1;
-            worker_threads[spawned_workers].join();
-        }
-    }
-    for (worker_threads) |*t| {
-        t.* = try std.Thread.spawn(.{}, worker.workerLoop, .{ wcfg, &wstate });
-        spawned_workers += 1;
-    }
-    signal_thread = try std.Thread.spawn(.{}, signalWatcher, .{&wstate});
-    event_thread = try std.Thread.spawn(.{}, events_bus.runThread, .{&event_bus});
-
-    log.info("HTTP server starting port={d} worker_concurrency={d}", .{ serve_cfg.port, worker_count });
-    http_server.serve(&ctx, .{ .port = serve_cfg.port }) catch |err| {
-        log.err("http server exited with error: {}", .{err});
-    };
-
-    // Server exited. Ensure worker and watcher terminate and join both.
-    wstate.running.store(false, .release);
-    shutdown_requested.store(true, .release);
-    event_bus.stop();
-    for (worker_threads) |*t| t.join();
-    if (signal_thread) |*t| t.join();
-    if (event_thread) |*t| t.join();
-}
-
-// ── doctor ────────────────────────────────────────────────────────────────
-
-fn cmdDoctor(alloc: std.mem.Allocator) !void {
-    var ok = true;
-    var stdout_buf: [8192]u8 = undefined;
-    var stdout_w = std.fs.File.stdout().writer(&stdout_buf);
-    const stdout = &stdout_w.interface;
-
-    try stdout.print("zombied doctor\n\n", .{});
-
-    db_check: {
-        const pool = db.initFromEnvForRole(alloc, .api) catch {
-            try stdout.print("  [FAIL] DATABASE_URL_API or DATABASE_URL not set/invalid\n", .{});
-            ok = false;
-            break :db_check;
-        };
-        pool.deinit();
-        try stdout.print("  [OK]   API database config\n", .{});
-    }
-
-    worker_db_check: {
-        const pool = db.initFromEnvForRole(alloc, .worker) catch {
-            try stdout.print("  [FAIL] DATABASE_URL_WORKER or DATABASE_URL not set/invalid\n", .{});
-            ok = false;
-            break :worker_db_check;
-        };
-        pool.deinit();
-        try stdout.print("  [OK]   Worker database config\n", .{});
-    }
-
-    {
-        const key = std.process.getEnvVarOwned(alloc, "ENCRYPTION_MASTER_KEY") catch null;
-        if (key) |k| {
-            defer alloc.free(k);
-            if (k.len == 64) {
-                try stdout.print("  [OK]   ENCRYPTION_MASTER_KEY set\n", .{});
-            } else {
-                try stdout.print("  [FAIL] ENCRYPTION_MASTER_KEY must be 64 hex chars\n", .{});
-                ok = false;
-            }
-        } else {
-            try stdout.print("  [FAIL] ENCRYPTION_MASTER_KEY not set\n", .{});
-            ok = false;
-        }
-    }
-
-    {
-        const app_id = std.process.getEnvVarOwned(alloc, "GITHUB_APP_ID") catch null;
-        if (app_id) |id| {
-            defer alloc.free(id);
-            if (id.len > 0) {
-                try stdout.print("  [OK]   GITHUB_APP_ID set\n", .{});
-            } else {
-                try stdout.print("  [FAIL] GITHUB_APP_ID is empty\n", .{});
-                ok = false;
-            }
-        } else {
-            try stdout.print("  [FAIL] GITHUB_APP_ID not set\n", .{});
-            ok = false;
-        }
-    }
-
-    {
-        const key = std.process.getEnvVarOwned(alloc, "GITHUB_APP_PRIVATE_KEY") catch null;
-        if (key) |k| {
-            defer alloc.free(k);
-            if (k.len > 0) {
-                try stdout.print("  [OK]   GITHUB_APP_PRIVATE_KEY set\n", .{});
-            } else {
-                try stdout.print("  [FAIL] GITHUB_APP_PRIVATE_KEY is empty\n", .{});
-                ok = false;
-            }
-        } else {
-            try stdout.print("  [FAIL] GITHUB_APP_PRIVATE_KEY not set\n", .{});
-            ok = false;
-        }
-    }
-
-    {
-        const config_dir = std.process.getEnvVarOwned(alloc, "AGENT_CONFIG_DIR") catch
-            try alloc.dupe(u8, "./config");
-        defer alloc.free(config_dir);
-
-        const required_files = [_][]const u8{
-            "echo-prompt.md",        "scout-prompt.md", "warden-prompt.md",
-            "echo.json",             "scout.json",      "warden.json",
-            "pipeline-default.json",
-        };
-        for (required_files) |fname| {
-            const path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ config_dir, fname });
-            defer alloc.free(path);
-            if (std.fs.accessAbsolute(path, .{})) |_| {
-                try stdout.print("  [OK]   config/{s}\n", .{fname});
-            } else |_| {
-                try stdout.print("  [FAIL] config/{s} missing\n", .{fname});
-                ok = false;
-            }
-        }
-    }
-
-    {
-        const clerk_secret = std.process.getEnvVarOwned(alloc, "CLERK_SECRET_KEY") catch null;
-        if (clerk_secret) |secret| {
-            defer alloc.free(secret);
-            if (std.mem.trim(u8, secret, " \t\r\n").len > 0) {
-                try stdout.print("  [OK]   CLERK_SECRET_KEY set\n", .{});
-                const jwks_url = std.process.getEnvVarOwned(alloc, "CLERK_JWKS_URL") catch null;
-                if (jwks_url) |url| {
-                    defer alloc.free(url);
-                    if (url.len == 0) {
-                        try stdout.print("  [FAIL] CLERK_JWKS_URL is empty\n", .{});
-                        ok = false;
-                    } else {
-                        var verifier = clerk_auth.Verifier.init(alloc, .{
-                            .jwks_url = url,
-                        });
-                        defer verifier.deinit();
-                        var jwks_ok = true;
-                        verifier.checkJwksConnectivity() catch {
-                            try stdout.print("  [FAIL] CLERK JWKS fetch failed\n", .{});
-                            ok = false;
-                            jwks_ok = false;
-                        };
-                        if (jwks_ok) {
-                            try stdout.print("  [OK]   Clerk JWKS reachable\n", .{});
-                        }
-                    }
-                } else {
-                    try stdout.print("  [FAIL] CLERK_JWKS_URL not set\n", .{});
-                    ok = false;
-                }
-            } else {
-                try stdout.print("  [FAIL] CLERK_SECRET_KEY is empty\n", .{});
-                ok = false;
-            }
-        } else {
-            const key = std.process.getEnvVarOwned(alloc, "API_KEY") catch null;
-            if (key) |k| {
-                defer alloc.free(k);
-                try stdout.print("  [OK]   API_KEY set (dev fallback)\n", .{});
-            } else {
-                try stdout.print("  [FAIL] API_KEY not set (required when Clerk is disabled)\n", .{});
-                ok = false;
-            }
-        }
-    }
-
-    try stdout.print("\n{s}\n", .{
-        if (ok) "All checks passed." else "Some checks failed — fix before running serve.",
-    });
-    try stdout.flush();
-    if (!ok) std.process.exit(1);
-}
-
-// ── run (one-shot) ────────────────────────────────────────────────────────
-
-fn cmdRun(alloc: std.mem.Allocator) !void {
-    var args = std.process.args();
-    _ = args.next();
-    _ = args.next();
-    const spec_path = args.next() orelse {
-        std.debug.print("usage: zombied run <spec_path>\n", .{});
-        std.process.exit(1);
-    };
-
-    log.info("one-shot run spec_path={s}", .{spec_path});
-
-    const spec_content = std.fs.cwd().readFileAlloc(alloc, spec_path, 512 * 1024) catch |err| {
-        std.debug.print("error reading spec: {}\n", .{err});
-        std.process.exit(1);
-    };
-    defer alloc.free(spec_content);
-
-    const pool = db.initFromEnvForRole(alloc, .worker) catch |err| {
-        std.debug.print("fatal: database init failed: {}\n", .{err});
-        std.process.exit(1);
-    };
-    defer pool.deinit();
-
-    runCanonicalMigrations(pool) catch |err| {
-        log.warn("one-shot migration run skipped due to error: {}", .{err});
-    };
-
-    log.info("spec loaded ({d} bytes) — pipeline runs via `zombied serve`", .{spec_content.len});
-    log.info("one-shot mode: POST /v1/runs to trigger pipeline", .{});
-}
-
-// ── migrate ───────────────────────────────────────────────────────────────
-
-fn cmdMigrate(alloc: std.mem.Allocator) !void {
-    const pool = db.initFromEnvForRole(alloc, .api) catch |err| {
-        std.debug.print("fatal: api database init failed: {}\n", .{err});
-        std.process.exit(1);
-    };
-    defer pool.deinit();
-
-    runCanonicalMigrations(pool) catch |err| {
-        std.debug.print("fatal: schema migration failed: {}\n", .{err});
-        std.process.exit(1);
-    };
-    log.info("schema migrations completed", .{});
-}
-
 test {
     _ = @import("types.zig");
     _ = @import("state/machine.zig");
     _ = @import("secrets/crypto.zig");
     _ = @import("db/pool.zig");
+    _ = @import("cli/commands.zig");
 }
