@@ -19,6 +19,17 @@ var shutdown_requested = std.atomic.Value(bool).init(false);
 var stop_server_fn: *const fn () void = http_server.stop;
 var stop_server_test_counter: ?*std.atomic.Value(u32) = null;
 
+const SecurityEnvError = error{
+    MissingDatabaseUrlApi,
+    MissingDatabaseUrlWorker,
+    MissingRedisUrlApi,
+    MissingRedisUrlWorker,
+    SameDatabaseUrlForApiAndWorker,
+    SameRedisUrlForApiAndWorker,
+    RedisApiTlsRequired,
+    RedisWorkerTlsRequired,
+};
+
 fn onSignal(sig: i32) callconv(.c) void {
     _ = sig;
     shutdown_requested.store(true, .release);
@@ -43,8 +54,57 @@ fn signalWatcher(wstate: *worker.WorkerState) void {
     stop_server_fn();
 }
 
+fn validateRoleSeparatedSecurityValues(
+    db_api: []const u8,
+    db_worker: []const u8,
+    redis_api: []const u8,
+    redis_worker: []const u8,
+) SecurityEnvError!void {
+    if (std.mem.trim(u8, db_api, " \t\r\n").len == 0) return SecurityEnvError.MissingDatabaseUrlApi;
+    if (std.mem.trim(u8, db_worker, " \t\r\n").len == 0) return SecurityEnvError.MissingDatabaseUrlWorker;
+    if (std.mem.trim(u8, redis_api, " \t\r\n").len == 0) return SecurityEnvError.MissingRedisUrlApi;
+    if (std.mem.trim(u8, redis_worker, " \t\r\n").len == 0) return SecurityEnvError.MissingRedisUrlWorker;
+
+    if (std.mem.eql(u8, db_api, db_worker)) return SecurityEnvError.SameDatabaseUrlForApiAndWorker;
+    if (std.mem.eql(u8, redis_api, redis_worker)) return SecurityEnvError.SameRedisUrlForApiAndWorker;
+    if (!std.mem.startsWith(u8, redis_api, "rediss://")) return SecurityEnvError.RedisApiTlsRequired;
+    if (!std.mem.startsWith(u8, redis_worker, "rediss://")) return SecurityEnvError.RedisWorkerTlsRequired;
+}
+
+fn enforceRoleSeparatedSecurityEnv(alloc: std.mem.Allocator) SecurityEnvError!void {
+    const db_api = std.process.getEnvVarOwned(alloc, db.roleEnvVarName(.api)) catch
+        return SecurityEnvError.MissingDatabaseUrlApi;
+    defer alloc.free(db_api);
+    const db_worker = std.process.getEnvVarOwned(alloc, db.roleEnvVarName(.worker)) catch
+        return SecurityEnvError.MissingDatabaseUrlWorker;
+    defer alloc.free(db_worker);
+    if (std.mem.eql(u8, db_api, db_worker)) return SecurityEnvError.SameDatabaseUrlForApiAndWorker;
+
+    const redis_api = std.process.getEnvVarOwned(alloc, queue_redis.roleEnvVarName(.api)) catch
+        return SecurityEnvError.MissingRedisUrlApi;
+    defer alloc.free(redis_api);
+    const redis_worker = std.process.getEnvVarOwned(alloc, queue_redis.roleEnvVarName(.worker)) catch
+        return SecurityEnvError.MissingRedisUrlWorker;
+    defer alloc.free(redis_worker);
+    try validateRoleSeparatedSecurityValues(db_api, db_worker, redis_api, redis_worker);
+}
+
 pub fn run(alloc: std.mem.Allocator) !void {
     log.info("starting zombied serve", .{});
+
+    enforceRoleSeparatedSecurityEnv(alloc) catch |err| {
+        switch (err) {
+            SecurityEnvError.MissingDatabaseUrlApi => std.debug.print("fatal: DATABASE_URL_API not set\n", .{}),
+            SecurityEnvError.MissingDatabaseUrlWorker => std.debug.print("fatal: DATABASE_URL_WORKER not set\n", .{}),
+            SecurityEnvError.MissingRedisUrlApi => std.debug.print("fatal: REDIS_URL_API not set\n", .{}),
+            SecurityEnvError.MissingRedisUrlWorker => std.debug.print("fatal: REDIS_URL_WORKER not set\n", .{}),
+            SecurityEnvError.SameDatabaseUrlForApiAndWorker => std.debug.print("fatal: DATABASE_URL_API and DATABASE_URL_WORKER must differ (role separation required)\n", .{}),
+            SecurityEnvError.SameRedisUrlForApiAndWorker => std.debug.print("fatal: REDIS_URL_API and REDIS_URL_WORKER must differ (ACL role separation required)\n", .{}),
+            SecurityEnvError.RedisApiTlsRequired => std.debug.print("fatal: REDIS_URL_API must use rediss:// (TLS required)\n", .{}),
+            SecurityEnvError.RedisWorkerTlsRequired => std.debug.print("fatal: REDIS_URL_WORKER must use rediss:// (TLS required)\n", .{}),
+        }
+        std.process.exit(1);
+    };
 
     var serve_cfg = runtime_config.ServeConfig.load(alloc) catch |err| {
         switch (err) {
@@ -280,5 +340,34 @@ test "integration: migrate_on_start env parser accepts deterministic values" {
     try std.testing.expect(try common.migrateOnStartEnabledFromEnv(alloc));
     try std.posix.setenv("MIGRATE_ON_START", "0", true);
     try std.testing.expect(!try common.migrateOnStartEnabledFromEnv(alloc));
-    try std.posix.unsetenv("MIGRATE_ON_START");
+}
+
+test "enforceRoleSeparatedSecurityEnv requires split role URLs and redis TLS" {
+    try std.testing.expectError(SecurityEnvError.MissingDatabaseUrlApi, validateRoleSeparatedSecurityValues(
+        "",
+        "postgres://worker:pw@db.local:5432/worker",
+        "rediss://api:pw@cache.local:6379",
+        "rediss://worker:pw@cache.local:6379",
+    ));
+
+    try std.testing.expectError(SecurityEnvError.SameDatabaseUrlForApiAndWorker, validateRoleSeparatedSecurityValues(
+        "postgres://shared:pw@db.local:5432/app",
+        "postgres://shared:pw@db.local:5432/app",
+        "rediss://api:pw@cache.local:6379",
+        "rediss://worker:pw@cache.local:6379",
+    ));
+
+    try std.testing.expectError(SecurityEnvError.RedisApiTlsRequired, validateRoleSeparatedSecurityValues(
+        "postgres://api:pw@db.local:5432/app",
+        "postgres://worker:pw@db.local:5432/worker",
+        "redis://api:pw@cache.local:6379",
+        "rediss://worker:pw@cache.local:6379",
+    ));
+
+    try validateRoleSeparatedSecurityValues(
+        "postgres://api:pw@db.local:5432/app",
+        "postgres://worker:pw@db.local:5432/worker",
+        "rediss://api:pw@cache.local:6379",
+        "rediss://worker:pw@cache.local:6379",
+    );
 }

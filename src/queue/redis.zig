@@ -9,6 +9,14 @@ pub const RedisRole = enum {
     worker,
 };
 
+pub fn roleEnvVarName(role: RedisRole) []const u8 {
+    return switch (role) {
+        .api => "REDIS_URL_API",
+        .worker => "REDIS_URL_WORKER",
+        .default => "REDIS_URL",
+    };
+}
+
 pub const QueueMessage = struct {
     message_id: []u8,
     run_id: []u8,
@@ -300,6 +308,13 @@ pub const Client = struct {
         try self.ensureConsumerGroup();
     }
 
+    pub fn aclWhoAmI(self: *Client) ![]u8 {
+        var resp = try self.command(&.{ "ACL", "WHOAMI" });
+        defer resp.deinit(self.alloc);
+        const who = valueAsString(resp) orelse return error.RedisUnexpectedResponse;
+        return try self.alloc.dupe(u8, who);
+    }
+
     pub fn xaddRun(
         self: *Client,
         run_id: []const u8,
@@ -491,18 +506,12 @@ fn ensureSimpleOk(v: RespValue) !void {
 }
 
 fn resolveRedisUrl(alloc: std.mem.Allocator, role: RedisRole) ![]u8 {
-    const primary = switch (role) {
-        .api => "REDIS_URL_API",
-        .worker => "REDIS_URL_WORKER",
-        .default => "REDIS_URL",
-    };
-
-    if (std.process.getEnvVarOwned(alloc, primary)) |url| {
-        return url;
-    } else |_| {
-        if (role == .default) return error.MissingRedisUrl;
-        return std.process.getEnvVarOwned(alloc, "REDIS_URL") catch error.MissingRedisUrl;
+    const url = std.process.getEnvVarOwned(alloc, roleEnvVarName(role)) catch return error.MissingRedisUrl;
+    if (std.mem.trim(u8, url, " \t\r\n").len == 0) {
+        alloc.free(url);
+        return error.MissingRedisUrl;
     }
+    return url;
 }
 
 fn parseRedisUrl(alloc: std.mem.Allocator, url: []const u8) !Config {
@@ -700,4 +709,10 @@ test "integration: ensureConsumerGroup is idempotent for readiness checks" {
 
     try client.ensureConsumerGroup();
     try client.ensureConsumerGroup();
+}
+
+test "roleEnvVarName maps redis roles deterministically" {
+    try std.testing.expectEqualStrings("REDIS_URL", roleEnvVarName(.default));
+    try std.testing.expectEqualStrings("REDIS_URL_API", roleEnvVarName(.api));
+    try std.testing.expectEqualStrings("REDIS_URL_WORKER", roleEnvVarName(.worker));
 }

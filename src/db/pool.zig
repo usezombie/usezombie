@@ -16,6 +16,15 @@ pub const DbRole = enum {
     callback,
 };
 
+pub fn roleEnvVarName(role: DbRole) []const u8 {
+    return switch (role) {
+        .api => "DATABASE_URL_API",
+        .worker => "DATABASE_URL_WORKER",
+        .callback => "DATABASE_URL_CALLBACK",
+        .default => "DATABASE_URL",
+    };
+}
+
 pub const Config = struct {
     url: []const u8,
     pool_size: u32 = 4,
@@ -93,19 +102,12 @@ pub fn parseUrl(alloc: std.mem.Allocator, url: []const u8) !pg.Pool.Opts {
 }
 
 fn resolveDatabaseUrl(alloc: std.mem.Allocator, role: DbRole) ![]const u8 {
-    const primary = switch (role) {
-        .api => "DATABASE_URL_API",
-        .worker => "DATABASE_URL_WORKER",
-        .callback => "DATABASE_URL_CALLBACK",
-        .default => "DATABASE_URL",
-    };
-
-    if (std.process.getEnvVarOwned(alloc, primary)) |url| {
-        return url;
-    } else |_| {
-        if (role == .default) return error.MissingDatabaseUrl;
-        return std.process.getEnvVarOwned(alloc, "DATABASE_URL") catch error.MissingDatabaseUrl;
+    const url = std.process.getEnvVarOwned(alloc, roleEnvVarName(role)) catch return error.MissingDatabaseUrl;
+    if (std.mem.trim(u8, url, " \t\r\n").len == 0) {
+        alloc.free(url);
+        return error.MissingDatabaseUrl;
     }
+    return url;
 }
 
 /// Initialize a pool using DATABASE_URL for the selected role.
@@ -365,4 +367,11 @@ test "parseUrl parses host, port, db, credentials" {
     try std.testing.expectEqualStrings("alice", opts.auth.username);
     try std.testing.expectEqualStrings("secret", password);
     try std.testing.expectEqualStrings("usezombiedb", database);
+}
+
+test "roleEnvVarName maps db roles deterministically" {
+    try std.testing.expectEqualStrings("DATABASE_URL", roleEnvVarName(.default));
+    try std.testing.expectEqualStrings("DATABASE_URL_API", roleEnvVarName(.api));
+    try std.testing.expectEqualStrings("DATABASE_URL_WORKER", roleEnvVarName(.worker));
+    try std.testing.expectEqualStrings("DATABASE_URL_CALLBACK", roleEnvVarName(.callback));
 }
