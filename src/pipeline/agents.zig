@@ -295,30 +295,63 @@ fn buildEchoTools(
     workspace_path: []const u8,
     cfg: *const Config,
 ) ![]tools_mod.Tool {
+    return buildRestrictedTools(alloc, workspace_path, cfg, .{
+        .include_shell = false,
+        .include_memory_list = true,
+    });
+}
+
+const RestrictedToolOptions = struct {
+    include_shell: bool = false,
+    include_memory_list: bool = false,
+};
+
+fn buildRestrictedTools(
+    alloc: std.mem.Allocator,
+    workspace_path: []const u8,
+    cfg: *const Config,
+    opts: RestrictedToolOptions,
+) ![]tools_mod.Tool {
     var list: std.ArrayList(tools_mod.Tool) = .empty;
     errdefer {
         for (list.items) |t| t.deinit(alloc);
         list.deinit(alloc);
     }
 
-    const ft = try alloc.create(tools_mod.file_read.FileReadTool);
-    ft.* = .{
+    if (opts.include_shell) {
+        try appendTool(alloc, &list, tools_mod.shell.ShellTool{
+            .workspace_dir = workspace_path,
+            .allowed_paths = cfg.autonomy.allowed_paths,
+            .timeout_ns = cfg.tools.shell_timeout_secs * std.time.ns_per_s,
+            .max_output_bytes = cfg.tools.shell_max_output_bytes,
+        });
+    }
+
+    try appendTool(alloc, &list, tools_mod.file_read.FileReadTool{
         .workspace_dir = workspace_path,
         .allowed_paths = cfg.autonomy.allowed_paths,
         .max_file_size = cfg.tools.max_file_size_bytes,
-    };
-    try list.append(alloc, ft.tool());
+    });
 
-    // Memory recall for context (read-only memory access)
-    const mrt = try alloc.create(tools_mod.memory_recall.MemoryRecallTool);
-    mrt.* = .{};
-    try list.append(alloc, mrt.tool());
+    try appendTool(alloc, &list, tools_mod.memory_recall.MemoryRecallTool{});
 
-    const mlt = try alloc.create(tools_mod.memory_list.MemoryListTool);
-    mlt.* = .{};
-    try list.append(alloc, mlt.tool());
+    if (opts.include_memory_list) {
+        // Echo needs memory list for broad recall context.
+        try appendTool(alloc, &list, tools_mod.memory_list.MemoryListTool{});
+    }
 
     return list.toOwnedSlice(alloc);
+}
+
+fn appendTool(
+    alloc: std.mem.Allocator,
+    list: *std.ArrayList(tools_mod.Tool),
+    tool_value: anytype,
+) !void {
+    const ToolType = @TypeOf(tool_value);
+    const ptr = try alloc.create(ToolType);
+    ptr.* = tool_value;
+    try list.append(alloc, ptr.tool());
 }
 
 /// Warden tools: file_read + shell + memory recall (no write/edit)
@@ -327,34 +360,10 @@ fn buildWardenTools(
     workspace_path: []const u8,
     cfg: *const Config,
 ) ![]tools_mod.Tool {
-    var list: std.ArrayList(tools_mod.Tool) = .empty;
-    errdefer {
-        for (list.items) |t| t.deinit(alloc);
-        list.deinit(alloc);
-    }
-
-    const st = try alloc.create(tools_mod.shell.ShellTool);
-    st.* = .{
-        .workspace_dir = workspace_path,
-        .allowed_paths = cfg.autonomy.allowed_paths,
-        .timeout_ns = cfg.tools.shell_timeout_secs * std.time.ns_per_s,
-        .max_output_bytes = cfg.tools.shell_max_output_bytes,
-    };
-    try list.append(alloc, st.tool());
-
-    const ft = try alloc.create(tools_mod.file_read.FileReadTool);
-    ft.* = .{
-        .workspace_dir = workspace_path,
-        .allowed_paths = cfg.autonomy.allowed_paths,
-        .max_file_size = cfg.tools.max_file_size_bytes,
-    };
-    try list.append(alloc, ft.tool());
-
-    const mrt = try alloc.create(tools_mod.memory_recall.MemoryRecallTool);
-    mrt.* = .{};
-    try list.append(alloc, mrt.tool());
-
-    return list.toOwnedSlice(alloc);
+    return buildRestrictedTools(alloc, workspace_path, cfg, .{
+        .include_shell = true,
+        .include_memory_list = false,
+    });
 }
 
 /// Parse Warden's verdict: PASS if no T1/T2 findings, FAIL otherwise.

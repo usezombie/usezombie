@@ -30,54 +30,94 @@ pub const WorktreeHandle = struct {
     }
 };
 
+const CommandResources = struct {
+    child: std.process.Child,
+    alloc: std.mem.Allocator,
+    stdout: ?[]u8 = null,
+    stderr: ?[]u8 = null,
+
+    fn init(
+        alloc: std.mem.Allocator,
+        argv: []const []const u8,
+        cwd: ?[]const u8,
+    ) !CommandResources {
+        var child = std.process.Child.init(argv, alloc);
+        child.cwd = cwd;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Pipe;
+        try child.spawn();
+        return .{ .child = child, .alloc = alloc };
+    }
+
+    fn readOutput(self: *CommandResources) !void {
+        self.stdout = if (self.child.stdout) |*s|
+            try s.readToEndAlloc(self.alloc, 1024 * 1024)
+        else
+            try self.alloc.dupe(u8, "");
+        errdefer if (self.stdout) |b| self.alloc.free(b);
+
+        self.stderr = if (self.child.stderr) |*s|
+            try s.readToEndAlloc(self.alloc, 1024 * 1024)
+        else
+            try self.alloc.dupe(u8, "");
+        errdefer if (self.stderr) |b| self.alloc.free(b);
+    }
+
+    fn takeStdout(self: *CommandResources) []const u8 {
+        const out = self.stdout orelse "";
+        self.stdout = null;
+        return out;
+    }
+
+    fn stderrOrEmpty(self: *const CommandResources) []const u8 {
+        return self.stderr orelse "";
+    }
+
+    fn deinit(self: *CommandResources) void {
+        if (self.stdout) |b| self.alloc.free(b);
+        if (self.stderr) |b| self.alloc.free(b);
+        self.child.deinit();
+    }
+};
+
 fn run(
     alloc: std.mem.Allocator,
     argv: []const []const u8,
     cwd: ?[]const u8,
     timeout_ms: u64,
 ) ![]const u8 {
-    var child = std.process.Child.init(argv, alloc);
-    child.cwd = cwd;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
+    var resources = try CommandResources.init(alloc, argv, cwd);
+    defer resources.deinit();
 
     const start_ms = std.time.milliTimestamp();
     const term = while (true) {
-        if (try child.tryWait()) |t| break t;
+        if (try resources.child.tryWait()) |t| break t;
 
         if (std.time.milliTimestamp() - start_ms > @as(i64, @intCast(timeout_ms))) {
-            _ = child.kill() catch {};
-            _ = child.wait() catch {};
+            if (resources.child.stdout) |*pipe| pipe.close();
+            if (resources.child.stderr) |*pipe| pipe.close();
+            _ = resources.child.kill() catch {};
+            _ = resources.child.wait() catch {};
             return GitError.CommandTimedOut;
         }
 
         std.Thread.sleep(50 * std.time.ns_per_ms);
     };
 
-    const stdout = if (child.stdout) |*s|
-        try s.readToEndAlloc(alloc, 1024 * 1024)
-    else
-        try alloc.dupe(u8, "");
-    const stderr = if (child.stderr) |*s|
-        try s.readToEndAlloc(alloc, 1024 * 1024)
-    else
-        try alloc.dupe(u8, "");
-    defer alloc.free(stderr);
+    try resources.readOutput();
+    const stderr = resources.stderrOrEmpty();
 
     switch (term) {
         .Exited => |code| if (code != 0) {
             log.err("command failed code={d} argv[0]={s} stderr={s}", .{ code, argv[0], stderr });
-            alloc.free(stdout);
             return GitError.CommandFailed;
         },
         else => {
-            alloc.free(stdout);
             return GitError.CommandFailed;
         },
     }
 
-    return stdout;
+    return resources.takeStdout();
 }
 
 /// Ensure a bare clone of the repo exists at cache_root/<workspace_id>.git.
