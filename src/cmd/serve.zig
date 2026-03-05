@@ -7,6 +7,7 @@ const clerk_auth = @import("../auth/clerk.zig");
 const http_server = @import("../http/server.zig");
 const http_handler = @import("../http/handler.zig");
 const worker = @import("../pipeline/worker.zig");
+const git_ops = @import("../git/ops.zig");
 const obs_log = @import("../observability/logging.zig");
 const common = @import("common.zig");
 
@@ -86,6 +87,13 @@ pub fn run(alloc: std.mem.Allocator) !void {
         error.PathAlreadyExists => {},
         else => obs_log.logWarnErr(.zombied, err, "could not create cache root {s}", .{serve_cfg.cache_root}),
     };
+    {
+        const stats = git_ops.cleanupRuntimeArtifacts(alloc, serve_cfg.cache_root, "/tmp");
+        log.info(
+            "runtime cleanup startup removed_worktrees={d} failed_worktrees={d} pruned_bare={d} failed_prunes={d}",
+            .{ stats.removed_worktrees, stats.failed_worktree_removals, stats.pruned_bare_repos, stats.failed_bare_prunes },
+        );
+    }
 
     var wstate = worker.WorkerState.init();
 
@@ -162,4 +170,11 @@ pub fn run(alloc: std.mem.Allocator) !void {
     for (worker_threads) |*t| t.join();
     if (signal_thread) |*t| t.join();
     if (event_thread) |*t| t.join();
+    {
+        const stats = git_ops.cleanupRuntimeArtifacts(alloc, serve_cfg.cache_root, "/tmp");
+        log.info(
+            "runtime cleanup shutdown removed_worktrees={d} failed_worktrees={d} pruned_bare={d} failed_prunes={d}",
+            .{ stats.removed_worktrees, stats.failed_worktree_removals, stats.pruned_bare_repos, stats.failed_bare_prunes },
+        );
+    }
 }

@@ -33,6 +33,13 @@ pub const WorktreeHandle = struct {
     }
 };
 
+pub const RuntimeCleanupStats = struct {
+    removed_worktrees: u32 = 0,
+    failed_worktree_removals: u32 = 0,
+    pruned_bare_repos: u32 = 0,
+    failed_bare_prunes: u32 = 0,
+};
+
 const CommandResources = struct {
     child: std.process.Child,
     alloc: std.mem.Allocator,
@@ -139,6 +146,12 @@ fn isSafeRelativePath(path: []const u8) bool {
         if (!isSafeIdentifierSegment(segment)) return false;
     }
     return true;
+}
+
+fn isSafeWorktreeDirName(name: []const u8) bool {
+    const prefix = "zombie-wt-";
+    if (!std.mem.startsWith(u8, name, prefix)) return false;
+    return isSafeIdentifierSegment(name[prefix.len..]);
 }
 
 fn run(
@@ -268,6 +281,74 @@ pub fn removeWorktree(
         30_000,
     ) catch return;
     alloc.free(out2);
+}
+
+pub fn cleanupRuntimeArtifacts(
+    alloc: std.mem.Allocator,
+    cache_root: []const u8,
+    worktree_root: []const u8,
+) RuntimeCleanupStats {
+    var stats = RuntimeCleanupStats{};
+
+    cleanupWorktrees(alloc, worktree_root, &stats);
+    cleanupBareRepoPrunes(alloc, cache_root, &stats);
+
+    return stats;
+}
+
+fn cleanupWorktrees(
+    alloc: std.mem.Allocator,
+    worktree_root: []const u8,
+    stats: *RuntimeCleanupStats,
+) void {
+    var dir = std.fs.openDirAbsolute(worktree_root, .{ .iterate = true }) catch return;
+    defer dir.close();
+
+    var it = dir.iterate();
+    while (it.next() catch null) |entry| {
+        if (entry.kind != .directory) continue;
+        if (!isSafeWorktreeDirName(entry.name)) continue;
+
+        const abs = std.fmt.allocPrint(alloc, "{s}/{s}", .{ worktree_root, entry.name }) catch continue;
+        defer alloc.free(abs);
+        std.fs.deleteTreeAbsolute(abs) catch {
+            stats.failed_worktree_removals += 1;
+            continue;
+        };
+        stats.removed_worktrees += 1;
+    }
+}
+
+fn cleanupBareRepoPrunes(
+    alloc: std.mem.Allocator,
+    cache_root: []const u8,
+    stats: *RuntimeCleanupStats,
+) void {
+    var dir = std.fs.openDirAbsolute(cache_root, .{ .iterate = true }) catch return;
+    defer dir.close();
+
+    var it = dir.iterate();
+    while (it.next() catch null) |entry| {
+        if (entry.kind != .directory) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".git")) continue;
+
+        const stem = entry.name[0 .. entry.name.len - 4];
+        if (!isSafeIdentifierSegment(stem)) continue;
+
+        const bare_path = std.fmt.allocPrint(alloc, "{s}/{s}", .{ cache_root, entry.name }) catch continue;
+        defer alloc.free(bare_path);
+        const out = run(
+            alloc,
+            &.{ "git", "-c", "core.hooksPath=/dev/null", "worktree", "prune" },
+            bare_path,
+            30_000,
+        ) catch {
+            stats.failed_bare_prunes += 1;
+            continue;
+        };
+        alloc.free(out);
+        stats.pruned_bare_repos += 1;
+    }
 }
 
 /// Write a file in the worktree and commit it.
@@ -697,4 +778,37 @@ test "integration: findOpenPullRequestByHead rejects invalid branch ref" {
         GitError.InvalidGitRef,
         findOpenPullRequestByHead(std.testing.allocator, "https://github.com/org/repo.git", "../bad", "token", null),
     );
+}
+
+test "isSafeWorktreeDirName accepts only controlled prefix and identifiers" {
+    try std.testing.expect(isSafeWorktreeDirName("zombie-wt-run_123"));
+    try std.testing.expect(isSafeWorktreeDirName("zombie-wt-r-abc.1"));
+    try std.testing.expect(!isSafeWorktreeDirName("zombie-wt-"));
+    try std.testing.expect(!isSafeWorktreeDirName("tmp-zombie-wt-run_123"));
+    try std.testing.expect(!isSafeWorktreeDirName("zombie-wt-run/123"));
+    try std.testing.expect(!isSafeWorktreeDirName("zombie-wt-run 123"));
+}
+
+test "integration: cleanupRuntimeArtifacts removes stale worktrees in root" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("cache");
+    try tmp.dir.makePath("wt/zombie-wt-run_1");
+    try tmp.dir.makePath("wt/not-zombie");
+
+    const cache_root = try tmp.dir.realpathAlloc(std.testing.allocator, "cache");
+    defer std.testing.allocator.free(cache_root);
+    const wt_root = try tmp.dir.realpathAlloc(std.testing.allocator, "wt");
+    defer std.testing.allocator.free(wt_root);
+
+    const stats = cleanupRuntimeArtifacts(std.testing.allocator, cache_root, wt_root);
+    try std.testing.expectEqual(@as(u32, 1), stats.removed_worktrees);
+    try std.testing.expectEqual(@as(u32, 0), stats.failed_worktree_removals);
+
+    try std.testing.expectError(
+        error.FileNotFound,
+        tmp.dir.access("wt/zombie-wt-run_1", .{}),
+    );
+    try tmp.dir.access("wt/not-zombie", .{});
 }
