@@ -1,10 +1,10 @@
-# M4_003: Dynamic Agent Topology (Don’t Stick To Static Agents)
+# M4_003: Dynamic Agent Topology Runtime Baseline (Don’t Stick To Static Agents)
 
 **Prototype:** v1.0.0
 **Milestone:** M4
 **Workstream:** 003
 **Date:** Mar 05, 2026
-**Status:** IN_PROGRESS
+**Status:** DONE
 **Priority:** P0 — start before CLI freeze
 **Depends on:** M3_001 reliability hardening baseline
 
@@ -12,7 +12,7 @@
 
 ## 1.0 Topology Core
 
-**Status:** IN_PROGRESS
+**Status:** DONE
 
 Replace hard-coded role order in worker control flow with a deterministic, profile-driven stage list.
 
@@ -20,13 +20,13 @@ Replace hard-coded role order in worker control flow with a deterministic, profi
 - 1.1 DONE Role registry lookup API added in `src/pipeline/agents.zig` (`lookupRole`, `runByRole`)
 - 1.2 DONE Profile loader added in `src/pipeline/topology.zig` with validation (first stage echo, final gate warden)
 - 1.3 DONE Worker execution now reads pipeline profile and iterates build/gate stages from config
-- 1.4 DONE Support non-built-in role adapters beyond echo/scout/warden
+- 1.4 DONE Support non-built-in role skills beyond echo/scout/warden
 
 ---
 
 ## 2.0 Compatibility and Runtime Behavior
 
-**Status:** IN_PROGRESS
+**Status:** DONE
 
 Preserve default v1 behavior while enabling extension through config changes.
 
@@ -40,13 +40,26 @@ Preserve default v1 behavior while enabling extension through config changes.
 
 ## 3.0 Acceptance Criteria
 
-**Status:** IN_PROGRESS
+**Status:** DONE
 
 - [x] 3.1 Pipeline definition is config-driven, not hard-coded to 3 role calls
 - [x] 3.2 Default profile reproduces current Echo → Scout → Warden flow
 - [x] 3.3 Adding a new middle stage in profile does not require worker loop rewrite
 - [x] 3.4 Logs/events include stage and role identity for executions
-- [x] 3.5 Arbitrary role plugin model beyond built-in adapters
+- [x] 3.5 Arbitrary role plugin model beyond built-in skills
+
+---
+
+## Supersession Boundary
+
+`M4_003` is the runtime baseline only (profile-driven stage execution in worker/runtime).
+
+Harness control-plane ownership is in `M5_002`, including:
+- multi-tenant profile APIs and DB model
+- compile/validate/activate lifecycle
+- workspace policy/quotas and control-plane observability
+
+`M5_002` depends on this baseline and does not replace it.
 
 ---
 
