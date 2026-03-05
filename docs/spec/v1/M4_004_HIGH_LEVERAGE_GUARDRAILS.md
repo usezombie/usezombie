@@ -24,7 +24,7 @@ This workstream contains the must-have reliability and safety guardrails deferre
 - 1.5 DONE D7 Backoff standardization with full `Retry-After` plumbing
 - 1.6 DONE D9 Error-context logging consistency across all critical boundaries
 - 1.7 DONE D10 Error classification harmonization (worker + API)
-- 1.8 PENDING D11 Secure execution boundary hardening
+- 1.8 IN_PROGRESS D11 Secure execution boundary hardening
 - 1.9 PENDING D12 Graceful shutdown and stale runtime cleanup
 - 1.10 DONE D13 Exactly-once transactional correctness closure (run creation upsert + idempotent replay path)
 - 1.11 DONE D14 Side-effect idempotency ledger completion (`run_side_effects` + PR side-effect claim/done tracking)
@@ -51,7 +51,7 @@ This workstream contains the must-have reliability and safety guardrails deferre
 
 **Dimensions:**
 - 2.2.1 IN_PROGRESS Close execution-boundary gaps (path, hooks, env exposure)
-- 2.2.2 IN_PROGRESS Complete exactly-once + idempotency protections for all side effects (PR path recovery + replay hardening in progress)
+- 2.2.2 DONE Complete exactly-once + idempotency protections for all side effects (PR + push side-effect claim/recovery/done ledger coverage)
 - 2.2.3 PENDING Enforce shutdown, cancellation, and thread/allocator correctness invariants
 
 ### 2.3 Verification Track
