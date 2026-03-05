@@ -55,7 +55,7 @@
 | 16 | ⚠️ Partial | Main allocator is now thread-safe and worker concurrency is configurable; global leak-reporting/thread-safety guardrails still need tightening |
 | 17 | ⚠️ Partial | Versioned migrations + tx done; SQL splitting remains heuristic |
 | 18 | ⚠️ Partial | `/healthz` + `/readyz` improved, and `/readyz` now exposes queue depth + oldest age; richer readiness policy is still missing |
-| 19 | ❌ Open | No `/metrics` endpoint or observer wiring yet |
+| 19 | ⚠️ Partial | `/metrics` endpoint + core counters are available; observer wiring and correlation propagation are still missing |
 | 20 | ⚠️ Partial | Doctor checks improved; serve-time fail-fast and key-rotation model still missing |
 | 21 | ⚠️ Partial | Unit/integration/e2e targets added; coverage measurement and deeper module tests still missing |
 | 22 | ✅ Fixed | Comment policy section exists and is aligned with current style |
@@ -531,7 +531,7 @@ Advanced path then adds:
 | 16 | Thread safety & Zig allocator pitfalls | **High** | Shared GPA across threads; leak detection ignored |
 | 17 | Schema migration safety | **High** | Naïve SQL split; non-transactional; silent failures |
 | 18 | Health check depth (readiness vs liveness) | **Medium–High** | `/healthz` always returns ok even with DB down |
-| 19 | Metrics / telemetry / tracing | **Medium** | NoopObserver; no counters; no correlation IDs |
+| 19 | Metrics / telemetry / tracing | **Medium** | NoopObserver and incomplete correlation propagation remain, though core counters are now exposed |
 | 20 | Config validation & secret hygiene | **Medium–High** | Permissive defaults; no key rotation; no fail-fast |
 
 ---
@@ -737,7 +737,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 ---
 
 ## 19. Metrics / telemetry / tracing
-**Status (Mar 05, 2026): ❌ Open**
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### Severity: Medium
 
@@ -745,14 +745,21 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 
 | File | Line | Issue |
 |------|------|-------|
+| `src/http/server.zig` | 35–42 | `/metrics` endpoint exists and is Prometheus-scrapeable, but there is no auth/TLS boundary guidance yet |
+| `src/observability/metrics.zig` | 1–168 | Core counters/gauges are present, but no histogram/latency distribution and no trace correlation IDs |
 | `src/pipeline/agents.zig` | 109–111, 177–179, 246–248 | `NoopObserver` — nullclaw's observability hooks disabled |
 | `src/pipeline/agents.zig` | 30–40 | Single log line for "nullclaw_run" events |
-| `src/http/handler.zig` | 48–53 | `request_id` generated but not propagated to worker/state transitions |
+| `src/http/handler.zig` | 49–54 | `request_id` generated but not propagated to worker/state transitions |
 
 ### Recommendation
 - Wire `LogObserver` or `MultiObserver` instead of `NoopObserver`
 - Propagate `request_id` through the full run lifecycle
 - Expose `/metrics` endpoint with: runs_total, runs_completed, retries_total, agent_duration_seconds, queue_depth
+
+### Oracle review: remaining scope after this fix
+- Add histogram-style timing metrics (agent latency, end-to-end run latency) for SLO usefulness.
+- Wire NullClaw observer backends so metrics/logs/traces share correlation metadata.
+- Document secure scrape pattern (network policy, auth proxy, or internal-only exposure).
 
 ---
 
