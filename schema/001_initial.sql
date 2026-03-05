@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS runs (
     mode            TEXT NOT NULL DEFAULT 'api',  -- web|api
     requested_by    TEXT NOT NULL,
     idempotency_key TEXT NOT NULL,
+    request_id      TEXT,
     branch          TEXT,
     pr_url          TEXT,
     created_at      BIGINT NOT NULL,
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS idx_runs_state      ON runs(state, created_at);
 CREATE INDEX IF NOT EXISTS idx_runs_workspace  ON runs(workspace_id, state);
+CREATE INDEX IF NOT EXISTS idx_runs_request_id ON runs(request_id);
 
 -- ── Run transitions (append-only audit trail) ─────────────────────────────
 CREATE TABLE IF NOT EXISTS run_transitions (

@@ -55,7 +55,7 @@
 | 16 | ⚠️ Partial | Main allocator is now thread-safe and worker concurrency is configurable; global leak-reporting/thread-safety guardrails still need tightening |
 | 17 | ⚠️ Partial | Versioned migrations + tx done; SQL splitting remains heuristic |
 | 18 | ⚠️ Partial | `/healthz` + `/readyz` improved, and `/readyz` now supports queue depth/age thresholds; migration/dependency readiness gates are still missing |
-| 19 | ⚠️ Partial | `/metrics` now exposes core counters + duration histograms, and observer wiring is enabled; correlation propagation is still missing |
+| 19 | ⚠️ Partial | `/metrics` now exposes core counters + duration histograms, observer wiring is enabled, and `request_id` is persisted/propagated into worker lifecycle events; trace-level correlation is still missing |
 | 20 | ⚠️ Partial | Serve-time config is now centralized in `src/config/runtime.zig`, fail-fast on critical env is active, and API key rotation is supported; secret versioning/rotation model is still missing |
 | 21 | ⚠️ Partial | Unit/integration/e2e targets added; coverage measurement and deeper module tests still missing |
 | 22 | ✅ Fixed | Comment policy section exists and is aligned with current style |
@@ -332,7 +332,7 @@ Apply in:
 | `src/pipeline/agents.zig` | NullClaw observer wiring | Replaced hardcoded `NoopObserver` with env-selectable backend (`NULLCLAW_OBSERVER=log|noop|verbose`), defaulting to `LogObserver` |
 
 ### Remaining gaps
-- End-to-end correlation (`request_id`/`run_id`) is not yet propagated through every log/observer event.
+- Correlation is improved (`request_id` now flows API → run row → worker/agent lifecycle events), but not yet normalized across every log/observer event.
 - Durable sink strategy (for example `MultiObserver` with file/OTel bridge) is not yet standardized.
 
 ---
@@ -477,7 +477,7 @@ Advanced path then adds:
 | 16 | Thread safety & Zig allocator pitfalls | **High** | Shared GPA across threads; leak detection ignored |
 | 17 | Schema migration safety | **High** | Naïve SQL split; non-transactional; silent failures |
 | 18 | Health check depth (readiness vs liveness) | **Medium–High** | Readiness still lacks migration/dependency gates under degraded upstream conditions |
-| 19 | Metrics / telemetry / tracing | **Medium** | Core counters and duration histograms are in place with default LogObserver wiring, but correlation propagation is still missing |
+| 19 | Metrics / telemetry / tracing | **Medium** | Core counters and duration histograms are in place with default LogObserver wiring, but trace-context normalization/export is still missing |
 | 20 | Config validation & secret hygiene | **Medium–High** | Core fail-fast and API key rotation exist; encrypted-secret key versioning/rotation is still missing |
 
 ---
@@ -691,19 +691,17 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 | File | Line | Issue |
 |------|------|-------|
 | `src/http/server.zig` | 35–42 | `/metrics` endpoint exists and is Prometheus-scrapeable, but there is no auth/TLS boundary guidance yet |
-| `src/observability/metrics.zig` | 1–250 | Core counters/gauges plus duration histograms are present, but trace correlation IDs are still absent |
-| `src/pipeline/agents.zig` | observer runtime selection | Observer is now enabled by default (`LogObserver`), but events are not yet correlated with request/run IDs across layers |
-| `src/pipeline/agents.zig` | 30–40 | Single log line for "nullclaw_run" events |
-| `src/http/handler.zig` | 49–54 | `request_id` generated but not propagated to worker/state transitions |
+| `src/observability/metrics.zig` | 1–250 | Core counters/gauges and duration histograms are present, but no trace/span exporter integration exists |
+| `src/http/handler.zig` + `src/pipeline/worker.zig` | run creation + claim path | `request_id` now persists on `runs` and is carried into worker lifecycle events, but state/policy event payloads still rely on `run_id` only |
+| `src/pipeline/agents.zig` | `emitNullclawRunEvent` | Agent run telemetry now includes `request_id`, but correlation is not yet normalized into a single trace context model |
 
 ### Recommendation
 - Keep `LogObserver` as default and extend to `MultiObserver` (file/collector sink) for durable telemetry export
-- Propagate `request_id` through the full run lifecycle
 - Extend histogram labels/aggregation strategy as SLO requirements evolve (actor/provider/tenant dimensions)
 
 ### Oracle review: remaining scope after this fix
 - Add histogram-style timing metrics (agent latency, end-to-end run latency) for SLO usefulness.
-- Wire NullClaw observer backends so metrics/logs/traces share correlation metadata.
+- Normalize one trace context contract across HTTP, worker, state, and policy events (for example `trace_id` + `span_id` mapping).
 - Document secure scrape pattern (network policy, auth proxy, or internal-only exposure).
 
 ---
@@ -751,7 +749,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 | **P3** | Schema migration safety (versioned, transactional, separate command) | M (3–4h) | 17 |
 | **P3** | Config validation fail-fast + multi-key rotation | S (1–2h) | 20 |
 | **P3** | Event bus + outbox/dead-letter table | L (1–2d) | 4, 5 |
-| **P4** | Metrics endpoint + request_id propagation | M (3–4h) | 19 |
+| **P4** | Telemetry correlation hardening + secure scrape guidance | M (3–4h) | 19 |
 | **P5** | Per-run ArenaAllocator + ResourceBundle | S (1–2h) | 1, 2 |
 | **P1** | Test coverage — pure logic tests + coverage tooling | M (4–6h) | 21 |
 | **P3** | Comment policy enforcement (module `//!` required, strip noise) | S (1h) | 22 |

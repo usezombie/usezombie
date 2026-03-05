@@ -17,6 +17,7 @@ const err_classify = @import("../reliability/error_classify.zig");
 const reliable = @import("../reliability/reliable_call.zig");
 const rate_limit = @import("../reliability/rate_limit.zig");
 const metrics = @import("../observability/metrics.zig");
+const events = @import("../events/bus.zig");
 const log = std.log.scoped(.worker);
 
 // ── Worker configuration ──────────────────────────────────────────────────
@@ -47,6 +48,7 @@ pub const WorkerState = struct {
 
 const RunContext = struct {
     run_id: []const u8,
+    request_id: []const u8,
     workspace_id: []const u8,
     spec_id: []const u8,
     tenant_id: []const u8,
@@ -196,7 +198,7 @@ fn processNextRun(
 
     // Claim a queued run under transaction.
     var result = try conn.query(
-        \\SELECT r.run_id, r.workspace_id, r.spec_id, r.tenant_id, r.attempt,
+        \\SELECT r.run_id, r.workspace_id, r.spec_id, r.tenant_id, r.attempt, r.request_id,
         \\       w.repo_url, w.default_branch,
         \\       s.file_path
         \\FROM runs r
@@ -224,11 +226,14 @@ fn processNextRun(
     const tenant_id = try alloc.dupe(u8, try row.get([]u8, 3));
     defer alloc.free(tenant_id);
     const attempt = @as(u32, @intCast(try row.get(i32, 4)));
-    const repo_url = try alloc.dupe(u8, try row.get([]u8, 5));
+    const request_id_raw = try row.get(?[]u8, 5);
+    const request_id = try alloc.dupe(u8, request_id_raw orelse "-");
+    defer alloc.free(request_id);
+    const repo_url = try alloc.dupe(u8, try row.get([]u8, 6));
     defer alloc.free(repo_url);
-    const default_branch = try alloc.dupe(u8, try row.get([]u8, 6));
+    const default_branch = try alloc.dupe(u8, try row.get([]u8, 7));
     defer alloc.free(default_branch);
-    const spec_path = try alloc.dupe(u8, try row.get([]u8, 7));
+    const spec_path = try alloc.dupe(u8, try row.get([]u8, 8));
     defer alloc.free(spec_path);
 
     result.drain() catch |err| {
@@ -243,10 +248,18 @@ fn processNextRun(
 
     if (!worker_state.running.load(.acquire)) return WorkerError.ShutdownRequested;
 
-    log.info("claimed run run_id={s} attempt={d}", .{ run_id, attempt });
+    log.info("claimed run run_id={s} request_id={s} attempt={d}", .{ run_id, request_id, attempt });
+    var claimed_detail: [128]u8 = undefined;
+    const claimed_detail_slice = std.fmt.bufPrint(
+        &claimed_detail,
+        "request_id={s} attempt={d}",
+        .{ request_id, attempt },
+    ) catch "run_claimed";
+    events.emit("run_claimed", run_id, claimed_detail_slice);
 
     executeRun(alloc, cfg, worker_state, prompts, conn, token_cache, .{
         .run_id = run_id,
+        .request_id = request_id,
         .workspace_id = workspace_id,
         .spec_id = spec_id,
         .tenant_id = tenant_id,
@@ -275,6 +288,13 @@ fn processNextRun(
             classified.retryable,
             @errorName(err),
         });
+        var failed_detail: [224]u8 = undefined;
+        const failed_detail_slice = std.fmt.bufPrint(
+            &failed_detail,
+            "request_id={s} class={s} retryable={} err={s}",
+            .{ request_id, @tagName(classified.class), classified.retryable, @errorName(err) },
+        ) catch "run_failed";
+        events.emit("run_failed", run_id, failed_detail_slice);
         _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, classified.reason_code, note) catch |tx_err| {
             log.warn("failure transition failed run_id={s}: {}", .{ run_id, tx_err });
         };
@@ -485,7 +505,7 @@ fn executeRun(
     metrics.addAgentTokens(echo_result.token_count);
     metrics.observeAgentDurationSeconds(echo_result.wall_seconds);
 
-    agents.emitNullclawRunEvent(ctx.run_id, ctx.attempt, .echo, echo_result);
+    agents.emitNullclawRunEvent(ctx.run_id, ctx.request_id, ctx.attempt, .echo, echo_result);
     try state.writeUsage(conn, ctx.run_id, ctx.attempt, .echo, echo_result.token_count, echo_result.wall_seconds);
 
     // Commit plan.json to feature branch
@@ -521,7 +541,7 @@ fn executeRun(
         metrics.addAgentTokens(scout_result.token_count);
         metrics.observeAgentDurationSeconds(scout_result.wall_seconds);
 
-        agents.emitNullclawRunEvent(ctx.run_id, attempt, .scout, scout_result);
+        agents.emitNullclawRunEvent(ctx.run_id, ctx.request_id, attempt, .scout, scout_result);
         total_tokens += scout_result.token_count;
         total_wall_seconds += scout_result.wall_seconds;
         try state.writeUsage(conn, ctx.run_id, attempt, .scout, scout_result.token_count, scout_result.wall_seconds);
@@ -552,7 +572,7 @@ fn executeRun(
         metrics.addAgentTokens(warden_result.token_count);
         metrics.observeAgentDurationSeconds(warden_result.wall_seconds);
 
-        agents.emitNullclawRunEvent(ctx.run_id, attempt, .warden, warden_result);
+        agents.emitNullclawRunEvent(ctx.run_id, ctx.request_id, attempt, .warden, warden_result);
         total_tokens += warden_result.token_count;
         total_wall_seconds += warden_result.wall_seconds;
         try state.writeUsage(conn, ctx.run_id, attempt, .warden, warden_result.token_count, warden_result.wall_seconds);
@@ -661,6 +681,13 @@ fn executeRun(
             ) catch |err| {
                 log.warn("run_summary.md alloc failed (non-fatal): {}", .{err});
                 log.info("run completed run_id={s} pr_url={s}", .{ ctx.run_id, pr_final });
+                var done_detail: [160]u8 = undefined;
+                const done_detail_slice = std.fmt.bufPrint(
+                    &done_detail,
+                    "request_id={s} state=done total_wall_seconds={d}",
+                    .{ ctx.request_id, total_wall_seconds },
+                ) catch "run_done";
+                events.emit("run_done", ctx.run_id, done_detail_slice);
                 metrics.observeRunTotalWallSeconds(total_wall_seconds);
                 metrics.incRunsCompleted();
                 return;
@@ -673,6 +700,13 @@ fn executeRun(
             };
 
             log.info("run completed run_id={s} pr_url={s}", .{ ctx.run_id, pr_final });
+            var done_detail: [160]u8 = undefined;
+            const done_detail_slice = std.fmt.bufPrint(
+                &done_detail,
+                "request_id={s} state=done total_wall_seconds={d}",
+                .{ ctx.request_id, total_wall_seconds },
+            ) catch "run_done";
+            events.emit("run_done", ctx.run_id, done_detail_slice);
             metrics.observeRunTotalWallSeconds(total_wall_seconds);
             metrics.incRunsCompleted();
             return;
@@ -711,6 +745,13 @@ fn executeRun(
     _ = try state.transition(conn, ctx.run_id, .NOTIFIED_BLOCKED, .orchestrator, .NOTIFICATION_SENT, null);
 
     log.warn("run blocked (retries exhausted) run_id={s}", .{ctx.run_id});
+    var blocked_detail: [176]u8 = undefined;
+    const blocked_detail_slice = std.fmt.bufPrint(
+        &blocked_detail,
+        "request_id={s} state=blocked reason=retries_exhausted total_wall_seconds={d}",
+        .{ ctx.request_id, total_wall_seconds },
+    ) catch "run_blocked";
+    events.emit("run_blocked", ctx.run_id, blocked_detail_slice);
     metrics.observeRunTotalWallSeconds(total_wall_seconds);
     metrics.incRunsBlocked();
 }

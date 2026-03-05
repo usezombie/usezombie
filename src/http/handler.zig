@@ -310,10 +310,10 @@ pub fn handleStartRun(ctx: *Context, r: zap.Request) void {
     var insert = conn.query(
         \\INSERT INTO runs
         \\  (run_id, workspace_id, spec_id, tenant_id, state, attempt, mode,
-        \\   requested_by, idempotency_key, branch, created_at, updated_at)
-        \\SELECT $1, $2, $3, tenant_id, 'SPEC_QUEUED', 1, $4, $5, $6, $7, $8, $8
+        \\   requested_by, idempotency_key, request_id, branch, created_at, updated_at)
+        \\SELECT $1, $2, $3, tenant_id, 'SPEC_QUEUED', 1, $4, $5, $6, $7, $8, $9, $9
         \\FROM workspaces WHERE workspace_id = $2
-    , .{ run_id, req.workspace_id, req.spec_id, req.mode, req.requested_by, req.idempotency_key, branch, now_ms }) catch {
+    , .{ run_id, req.workspace_id, req.spec_id, req.mode, req.requested_by, req.idempotency_key, req_id, branch, now_ms }) catch {
         errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to create run", req_id);
         return;
     };
@@ -359,7 +359,7 @@ pub fn handleGetRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
     // Fetch run
     var run_result = conn.query(
         \\SELECT run_id, workspace_id, spec_id, state, attempt, mode,
-        \\       requested_by, branch, pr_url, created_at, updated_at
+        \\       requested_by, branch, pr_url, request_id, created_at, updated_at
         \\FROM runs WHERE run_id = $1
     , .{run_id}) catch {
         errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Database error", req_id);
@@ -381,8 +381,9 @@ pub fn handleGetRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
     const requested_by = row.get([]u8, 6) catch "?";
     const branch = row.get([]u8, 7) catch "?";
     const pr_url = row.get(?[]u8, 8) catch null;
-    const created_at = row.get(i64, 9) catch 0;
-    const updated_at = row.get(i64, 10) catch 0;
+    const run_request_id = row.get(?[]u8, 9) catch null;
+    const created_at = row.get(i64, 10) catch 0;
+    const updated_at = row.get(i64, 11) catch 0;
 
     run_result.drain() catch |err| log.warn("run query drain failed run_id={s}: {}", .{ run_id, err });
 
@@ -477,6 +478,7 @@ pub fn handleGetRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
         .requested_by = requested_by,
         .branch = branch,
         .pr_url = pr_url,
+        .run_request_id = run_request_id,
         .created_at = created_at,
         .updated_at = updated_at,
         .transitions = transitions.items,
@@ -556,8 +558,8 @@ pub fn handleRetryRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
     // Re-queue: transition back to SPEC_QUEUED
     const now_ms = std.time.milliTimestamp();
     var r2 = conn.query(
-        "UPDATE runs SET state = 'SPEC_QUEUED', updated_at = $1 WHERE run_id = $2",
-        .{ now_ms, run_id },
+        "UPDATE runs SET state = 'SPEC_QUEUED', request_id = $1, updated_at = $2 WHERE run_id = $3",
+        .{ req_id, now_ms, run_id },
     ) catch {
         errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Database error", req_id);
         return;
