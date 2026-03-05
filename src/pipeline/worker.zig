@@ -194,7 +194,7 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
 
                 const max_delay_ms = std.math.mul(u64, cfg.poll_interval_ms, 8) catch cfg.poll_interval_ms;
                 const delay_ms = backoff.expBackoffJitter(consecutive_errors - 1, cfg.poll_interval_ms, max_delay_ms);
-                std.Thread.sleep(delay_ms * std.time.ns_per_ms);
+                sleepWhileRunning(worker_state, delay_ms);
             }
             continue;
         };
@@ -203,8 +203,8 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
         if (!worker_state.running.load(.acquire)) break;
 
         switch (outcome) {
-            .idle => std.Thread.sleep(cfg.poll_interval_ms * std.time.ns_per_ms),
-            .worked => std.Thread.sleep(@min(cfg.poll_interval_ms, 200) * std.time.ns_per_ms),
+            .idle => sleepWhileRunning(worker_state, cfg.poll_interval_ms),
+            .worked => sleepWhileRunning(worker_state, @min(cfg.poll_interval_ms, 200)),
         }
     }
 
@@ -569,12 +569,13 @@ fn tryRecoverPrUrl(
         .installation_id = installation_id,
     };
     defer if (token_retry_ctx.last_error_detail) |d| run_alloc.free(d);
-    const github_token = try reliable.callWithDetail([]u8, &token_retry_ctx, opGetInstallationToken, tokenDetail, .{
-        .max_retries = 2,
-        .base_delay_ms = 500,
-        .max_delay_ms = 5_000,
-        .operation_name = "github_installation_token",
-    });
+    const github_token = try reliable.callWithDetail(
+        []u8,
+        &token_retry_ctx,
+        opGetInstallationToken,
+        tokenDetail,
+        retryOptionsForRun(worker_state, deadline_ms, 2, 500, 5_000, "github_installation_token"),
+    );
     defer run_alloc.free(github_token);
 
     var detail: ?[]u8 = null;
@@ -644,24 +645,14 @@ fn executeRun(
         .cache_root = cfg.cache_root,
         .workspace_id = ctx.workspace_id,
         .repo_url = ctx.repo_url,
-    }, opEnsureBareClone, .{
-        .max_retries = 2,
-        .base_delay_ms = 500,
-        .max_delay_ms = 5_000,
-        .operation_name = "git_ensure_bare_clone",
-    });
+    }, opEnsureBareClone, retryOptionsForRun(worker_state, deadline_ms, 2, 500, 5_000, "git_ensure_bare_clone"));
 
     var wt = try reliable.call(git.WorktreeHandle, WorktreeRetryCtx{
         .alloc = run_alloc,
         .bare_path = bare_path,
         .run_id = ctx.run_id,
         .base_branch = ctx.default_branch,
-    }, opCreateWorktree, .{
-        .max_retries = 2,
-        .base_delay_ms = 500,
-        .max_delay_ms = 5_000,
-        .operation_name = "git_create_worktree",
-    });
+    }, opCreateWorktree, retryOptionsForRun(worker_state, deadline_ms, 2, 500, 5_000, "git_create_worktree"));
     defer {
         git.removeWorktree(run_alloc, bare_path, wt.path);
         wt.deinit();
@@ -693,12 +684,7 @@ fn executeRun(
             .spec_content = spec_content,
             .memory_context = memory_context,
         },
-    }, opRunStage, .{
-        .max_retries = 1,
-        .base_delay_ms = 1_000,
-        .max_delay_ms = 8_000,
-        .operation_name = plan_stage.role_id,
-    });
+    }, opRunStage, retryOptionsForRun(worker_state, deadline_ms, 1, 1_000, 8_000, plan_stage.role_id));
     metrics.incAgentEchoCalls();
     metrics.addAgentTokens(plan_result.token_count);
     metrics.observeAgentDurationSeconds(plan_result.wall_seconds);
@@ -720,6 +706,8 @@ fn executeRun(
         conn,
         ctx,
         &wt,
+        worker_state,
+        deadline_ms,
         plan_path,
         plan_result.content,
         plan_stage.commit_message,
@@ -767,12 +755,7 @@ fn executeRun(
                     .defects_content = defects,
                     .implementation_summary = latest_build_output,
                 },
-            }, opRunStage, .{
-                .max_retries = 1,
-                .base_delay_ms = 1_000,
-                .max_delay_ms = 8_000,
-                .operation_name = stage.role_id,
-            });
+            }, opRunStage, retryOptionsForRun(worker_state, deadline_ms, 1, 1_000, 8_000, stage.role_id));
 
             switch (binding.actor) {
                 .echo => metrics.incAgentEchoCalls(),
@@ -797,7 +780,7 @@ fn executeRun(
             try state.writeUsage(conn, ctx.run_id, attempt, binding.actor, result.token_count, result.wall_seconds);
 
             const stage_path = try std.fmt.allocPrint(run_alloc, "docs/runs/{s}/{s}", .{ ctx.run_id, stage.artifact_name });
-            try commitArtifact(run_alloc, conn, ctx, &wt, stage_path, result.content, stage.commit_message, binding.actor, attempt);
+            try commitArtifact(run_alloc, conn, ctx, &wt, worker_state, deadline_ms, stage_path, result.content, stage.commit_message, binding.actor, attempt);
             latest_build_output = result.content;
         }
 
@@ -818,12 +801,7 @@ fn executeRun(
                 .plan_content = plan_result.content,
                 .implementation_summary = latest_build_output,
             },
-        }, opRunStage, .{
-            .max_retries = 1,
-            .base_delay_ms = 1_000,
-            .max_delay_ms = 8_000,
-            .operation_name = gate_stage.role_id,
-        });
+        }, opRunStage, retryOptionsForRun(worker_state, deadline_ms, 1, 1_000, 8_000, gate_stage.role_id));
         if (gate_binding.actor == .warden) metrics.incAgentWardenCalls();
         metrics.addAgentTokens(gate_result.token_count);
         metrics.observeAgentDurationSeconds(gate_result.wall_seconds);
@@ -842,7 +820,7 @@ fn executeRun(
         try state.writeUsage(conn, ctx.run_id, attempt, gate_binding.actor, gate_result.token_count, gate_result.wall_seconds);
 
         const gate_path = try std.fmt.allocPrint(run_alloc, "docs/runs/{s}/{s}", .{ ctx.run_id, gate_stage.artifact_name });
-        try commitArtifact(run_alloc, conn, ctx, &wt, gate_path, gate_result.content, gate_stage.commit_message, gate_binding.actor, attempt);
+        try commitArtifact(run_alloc, conn, ctx, &wt, worker_state, deadline_ms, gate_path, gate_result.content, gate_stage.commit_message, gate_binding.actor, attempt);
 
         const observations = try agents.extractObservations(run_alloc, gate_result.content);
         if (observations.len > 0) {
@@ -868,12 +846,13 @@ fn executeRun(
                     .installation_id = installation_id,
                 };
                 defer if (token_retry_ctx.last_error_detail) |d| run_alloc.free(d);
-                const github_token = try reliable.callWithDetail([]u8, &token_retry_ctx, opGetInstallationToken, tokenDetail, .{
-                    .max_retries = 2,
-                    .base_delay_ms = 500,
-                    .max_delay_ms = 5_000,
-                    .operation_name = "github_installation_token",
-                });
+                const github_token = try reliable.callWithDetail(
+                    []u8,
+                    &token_retry_ctx,
+                    opGetInstallationToken,
+                    tokenDetail,
+                    retryOptionsForRun(worker_state, deadline_ms, 2, 500, 5_000, "github_installation_token"),
+                );
                 defer run_alloc.free(github_token);
 
                 const push_side_effect_key = try sideEffectKeyPush(run_alloc, branch);
@@ -886,12 +865,7 @@ fn executeRun(
                         .wt_path = wt.path,
                         .branch = branch,
                         .github_token = github_token,
-                    }, opPushBranch, .{
-                        .max_retries = 2,
-                        .base_delay_ms = 1_000,
-                        .max_delay_ms = 10_000,
-                        .operation_name = "github_push",
-                    });
+                    }, opPushBranch, retryOptionsForRun(worker_state, deadline_ms, 2, 1_000, 10_000, "github_push"));
                     try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key, branch);
                 } else {
                     const already_pushed = try git.remoteBranchExists(run_alloc, wt.path, branch, github_token);
@@ -923,12 +897,13 @@ fn executeRun(
                         .github_token = github_token,
                     };
                     try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_pr_create", 1.0, worker_state, deadline_ms);
-                    const created_pr = try reliable.callWithDetail([]u8, &pr_retry_ctx, opCreatePr, prDetail, .{
-                        .max_retries = 2,
-                        .base_delay_ms = 1_000,
-                        .max_delay_ms = 10_000,
-                        .operation_name = "github_pr_create",
-                    });
+                    const created_pr = try reliable.callWithDetail(
+                        []u8,
+                        &pr_retry_ctx,
+                        opCreatePr,
+                        prDetail,
+                        retryOptionsForRun(worker_state, deadline_ms, 2, 1_000, 10_000, "github_pr_create"),
+                    );
                     pr_url = created_pr;
                     try state.markSideEffectDone(conn, ctx.run_id, pr_side_effect_key, created_pr);
                 }
@@ -990,7 +965,7 @@ fn executeRun(
 
             const summary_path = try std.fmt.allocPrint(run_alloc, "docs/runs/{s}/run_summary.md", .{ctx.run_id});
 
-            commitArtifact(run_alloc, conn, ctx, &wt, summary_path, summary_content, "orchestrator: add run_summary.md", .orchestrator, attempt) catch |err| {
+            commitArtifact(run_alloc, conn, ctx, &wt, worker_state, deadline_ms, summary_path, summary_content, "orchestrator: add run_summary.md", .orchestrator, attempt) catch |err| {
                 obs_log.logWarnErr(.worker, err, "run_summary.md commit failed (non-fatal) run_id={s}", .{ctx.run_id});
             };
 
@@ -1018,7 +993,7 @@ fn executeRun(
             "docs/runs/{s}/attempt_{d}_defects.md",
             .{ ctx.run_id, attempt },
         );
-        try commitArtifact(run_alloc, conn, ctx, &wt, defects_path, gate_result.content, "warden: add defects", .warden, attempt);
+        try commitArtifact(run_alloc, conn, ctx, &wt, worker_state, deadline_ms, defects_path, gate_result.content, "warden: add defects", .warden, attempt);
 
         defects = try run_alloc.dupe(u8, gate_result.content);
 
@@ -1060,12 +1035,41 @@ fn ensureRunActive(worker_state: *WorkerState, deadline_ms: i64) WorkerError!voi
     try ensureBeforeDeadline(deadline_ms);
 }
 
+fn retryOptionsForRun(
+    worker_state: *WorkerState,
+    deadline_ms: i64,
+    max_retries: u32,
+    base_delay_ms: u64,
+    max_delay_ms: u64,
+    operation_name: ?[]const u8,
+) reliable.RetryOptions {
+    return .{
+        .max_retries = max_retries,
+        .base_delay_ms = base_delay_ms,
+        .max_delay_ms = max_delay_ms,
+        .operation_name = operation_name,
+        .cancel_flag = &worker_state.running,
+        .deadline_ms = deadline_ms,
+        .cancel_error = WorkerError.ShutdownRequested,
+        .deadline_error = WorkerError.RunDeadlineExceeded,
+    };
+}
+
 fn sleepCooperative(total_ms: u64, worker_state: *WorkerState, deadline_ms: i64) WorkerError!void {
     var remaining = total_ms;
     while (true) {
         try ensureRunActive(worker_state, deadline_ms);
         if (remaining == 0) return;
 
+        const slice_ms: u64 = @min(remaining, 100);
+        std.Thread.sleep(slice_ms * std.time.ns_per_ms);
+        remaining -= slice_ms;
+    }
+}
+
+fn sleepWhileRunning(worker_state: *WorkerState, total_ms: u64) void {
+    var remaining = total_ms;
+    while (remaining > 0 and worker_state.running.load(.acquire)) {
         const slice_ms: u64 = @min(remaining, 100);
         std.Thread.sleep(slice_ms * std.time.ns_per_ms);
         remaining -= slice_ms;
@@ -1079,6 +1083,8 @@ fn commitArtifact(
     conn: *pg.Conn,
     ctx: RunContext,
     wt: *git.WorktreeHandle,
+    worker_state: *WorkerState,
+    deadline_ms: i64,
     rel_path: []const u8,
     content: []const u8,
     msg: []const u8,
@@ -1092,12 +1098,7 @@ fn commitArtifact(
         .rel_path = rel_path,
         .content = content,
         .msg = msg,
-    }, opCommitArtifact, .{
-        .max_retries = 1,
-        .base_delay_ms = 300,
-        .max_delay_ms = 2_000,
-        .operation_name = "git_commit_artifact",
-    });
+    }, opCommitArtifact, retryOptionsForRun(worker_state, deadline_ms, 1, 300, 2_000, "git_commit_artifact"));
 
     // Register in artifacts table
     const checksum = sha256Hex(content);
@@ -1207,4 +1208,10 @@ test "integration: ensureRunActive returns deadline exceeded when past deadline"
         WorkerError.RunDeadlineExceeded,
         ensureRunActive(&ws, std.time.milliTimestamp() - 1),
     );
+}
+
+test "integration: sleepWhileRunning returns immediately when stopped" {
+    var ws = WorkerState.init();
+    ws.running.store(false, .release);
+    sleepWhileRunning(&ws, 500);
 }
