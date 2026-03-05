@@ -53,28 +53,185 @@ const Config = struct {
     use_tls: bool = false,
 };
 
+const PlainTransport = struct {
+    stream: std.net.Stream,
+    stream_reader: std.net.Stream.Reader,
+    stream_writer: std.net.Stream.Writer,
+    read_buffer: []u8,
+    write_buffer: []u8,
+
+    fn init(alloc: std.mem.Allocator, stream: std.net.Stream) !PlainTransport {
+        const read_buffer = try alloc.alloc(u8, 16 * 1024);
+        errdefer alloc.free(read_buffer);
+        const write_buffer = try alloc.alloc(u8, 16 * 1024);
+        errdefer alloc.free(write_buffer);
+
+        return .{
+            .stream = stream,
+            .stream_reader = stream.reader(read_buffer),
+            .stream_writer = stream.writer(write_buffer),
+            .read_buffer = read_buffer,
+            .write_buffer = write_buffer,
+        };
+    }
+
+    fn deinit(self: *PlainTransport, alloc: std.mem.Allocator) void {
+        self.stream.close();
+        alloc.free(self.read_buffer);
+        alloc.free(self.write_buffer);
+    }
+
+    fn reader(self: *PlainTransport) *std.Io.Reader {
+        return self.stream_reader.interface();
+    }
+
+    fn writer(self: *PlainTransport) *std.Io.Writer {
+        return &self.stream_writer.interface;
+    }
+};
+
+const TlsTransport = struct {
+    stream: std.net.Stream,
+    stream_reader: *std.net.Stream.Reader,
+    stream_writer: *std.net.Stream.Writer,
+    tls_client: std.crypto.tls.Client,
+    socket_read_buffer: []u8,
+    socket_write_buffer: []u8,
+    tls_read_buffer: []u8,
+    tls_write_buffer: []u8,
+    ca_bundle: std.crypto.Certificate.Bundle,
+
+    fn initInPlace(self: *TlsTransport, alloc: std.mem.Allocator, stream: std.net.Stream, host: []const u8) !void {
+        var ca_bundle: std.crypto.Certificate.Bundle = .{};
+        errdefer ca_bundle.deinit(alloc);
+
+        const ca_file = std.process.getEnvVarOwned(alloc, "REDIS_TLS_CA_CERT_FILE") catch null;
+        defer if (ca_file) |v| alloc.free(v);
+
+        if (ca_file) |path| {
+            if (!std.fs.path.isAbsolute(path)) return error.RedisTlsCaFileMustBeAbsolute;
+            try ca_bundle.addCertsFromFilePathAbsolute(alloc, path);
+        } else {
+            try ca_bundle.rescan(alloc);
+        }
+
+        const socket_read_buffer = try alloc.alloc(u8, std.crypto.tls.Client.min_buffer_len);
+        errdefer alloc.free(socket_read_buffer);
+        const socket_write_buffer = try alloc.alloc(u8, std.crypto.tls.Client.min_buffer_len);
+        errdefer alloc.free(socket_write_buffer);
+        const tls_read_buffer = try alloc.alloc(u8, std.crypto.tls.Client.min_buffer_len);
+        errdefer alloc.free(tls_read_buffer);
+        const tls_write_buffer = try alloc.alloc(u8, std.crypto.tls.Client.min_buffer_len * 8);
+        errdefer alloc.free(tls_write_buffer);
+        const stream_reader = try alloc.create(std.net.Stream.Reader);
+        errdefer alloc.destroy(stream_reader);
+        const stream_writer = try alloc.create(std.net.Stream.Writer);
+        errdefer alloc.destroy(stream_writer);
+        stream_reader.* = stream.reader(socket_read_buffer);
+        stream_writer.* = stream.writer(tls_write_buffer);
+
+        self.* = .{
+            .stream = stream,
+            .stream_reader = stream_reader,
+            .stream_writer = stream_writer,
+            .tls_client = undefined,
+            .socket_read_buffer = socket_read_buffer,
+            .socket_write_buffer = socket_write_buffer,
+            .tls_read_buffer = tls_read_buffer,
+            .tls_write_buffer = tls_write_buffer,
+            .ca_bundle = ca_bundle,
+        };
+
+        self.tls_client = try std.crypto.tls.Client.init(
+            self.stream_reader.interface(),
+            &self.stream_writer.interface,
+            .{
+                .host = .{ .explicit = host },
+                .ca = .{ .bundle = self.ca_bundle },
+                .read_buffer = self.tls_read_buffer,
+                .write_buffer = self.socket_write_buffer,
+                .allow_truncation_attacks = false,
+            },
+        );
+    }
+
+    fn deinit(self: *TlsTransport, alloc: std.mem.Allocator) void {
+        self.stream.close();
+        self.ca_bundle.deinit(alloc);
+        alloc.destroy(self.stream_reader);
+        alloc.destroy(self.stream_writer);
+        alloc.free(self.socket_read_buffer);
+        alloc.free(self.socket_write_buffer);
+        alloc.free(self.tls_read_buffer);
+        alloc.free(self.tls_write_buffer);
+    }
+
+    fn reader(self: *TlsTransport) *std.Io.Reader {
+        return &self.tls_client.reader;
+    }
+
+    fn writer(self: *TlsTransport) *std.Io.Writer {
+        return &self.tls_client.writer;
+    }
+};
+
+const Transport = union(enum) {
+    plain: PlainTransport,
+    tls: TlsTransport,
+
+    fn deinit(self: *Transport, alloc: std.mem.Allocator) void {
+        switch (self.*) {
+            .plain => |*p| p.deinit(alloc),
+            .tls => |*t| t.deinit(alloc),
+        }
+    }
+
+    fn reader(self: *Transport) *std.Io.Reader {
+        return switch (self.*) {
+            .plain => |*p| p.reader(),
+            .tls => |*t| t.reader(),
+        };
+    }
+
+    fn writer(self: *Transport) *std.Io.Writer {
+        return switch (self.*) {
+            .plain => |*p| p.writer(),
+            .tls => |*t| t.writer(),
+        };
+    }
+};
+
 pub const Client = struct {
     alloc: std.mem.Allocator,
-    stream: std.net.Stream,
+    transport: Transport,
     lock: std.Thread.Mutex = .{},
 
     pub fn connectFromEnv(alloc: std.mem.Allocator, role: RedisRole) !Client {
         const url_owned = try resolveRedisUrl(alloc, role);
         defer alloc.free(url_owned);
+        return connectFromUrl(alloc, url_owned);
+    }
 
-        const cfg = try parseRedisUrl(alloc, url_owned);
+    fn connectFromUrl(alloc: std.mem.Allocator, url: []const u8) !Client {
+        const cfg = try parseRedisUrl(alloc, url);
         defer {
             alloc.free(cfg.host);
             if (cfg.username) |v| alloc.free(v);
             if (cfg.password) |v| alloc.free(v);
         }
-        if (cfg.use_tls) return error.RedisTlsNotYetSupported;
 
         const stream = try std.net.tcpConnectToHost(alloc, cfg.host, cfg.port);
         var client = Client{
             .alloc = alloc,
-            .stream = stream,
+            .transport = undefined,
         };
+        if (cfg.use_tls) {
+            client.transport = .{ .tls = undefined };
+            try client.transport.tls.initInPlace(alloc, stream, cfg.host);
+        } else {
+            client.transport = .{ .plain = try PlainTransport.init(alloc, stream) };
+        }
+        errdefer client.deinit();
 
         if (cfg.password) |pwd| {
             if (cfg.username) |usr| {
@@ -92,7 +249,7 @@ pub const Client = struct {
     }
 
     pub fn deinit(self: *Client) void {
-        self.stream.close();
+        self.transport.deinit(self.alloc);
     }
 
     pub fn ping(self: *Client) !void {
@@ -219,16 +376,23 @@ pub const Client = struct {
     }
 
     fn commandUnlocked(self: *Client, argv: []const []const u8) !RespValue {
-        var writer = self.stream.writer();
+        const writer = self.transport.writer();
         try writer.print("*{d}\r\n", .{argv.len});
         for (argv) |arg| {
             try writer.print("${d}\r\n", .{arg.len});
             try writer.writeAll(arg);
             try writer.writeAll("\r\n");
         }
+        if (self.transport == .tls) {
+            try self.transport.tls.stream_writer.interface.flush();
+        }
+        try writer.flush();
+        if (self.transport == .tls) {
+            try self.transport.tls.stream_writer.interface.flush();
+        }
 
-        var reader = self.stream.reader();
-        const value = try readRespValue(self.alloc, &reader);
+        const reader = self.transport.reader();
+        const value = try readRespValue(self.alloc, reader);
         if (value == .err) return error.RedisCommandError;
         return value;
     }
@@ -367,8 +531,8 @@ fn parseRedisUrl(alloc: std.mem.Allocator, url: []const u8) !Config {
     return cfg;
 }
 
-fn readRespValue(alloc: std.mem.Allocator, reader: anytype) !RespValue {
-    const prefix = try reader.readByte();
+fn readRespValue(alloc: std.mem.Allocator, reader: *std.Io.Reader) !RespValue {
+    const prefix = try reader.takeByte();
     return switch (prefix) {
         '+' => RespValue{ .simple = try readRespLine(alloc, reader) },
         '-' => RespValue{ .err = try readRespLine(alloc, reader) },
@@ -387,10 +551,9 @@ fn readRespValue(alloc: std.mem.Allocator, reader: anytype) !RespValue {
             const usize_len: usize = @intCast(len);
             const out = try alloc.alloc(u8, usize_len);
             errdefer alloc.free(out);
-            try reader.readNoEof(out);
-            var crlf: [2]u8 = undefined;
-            try reader.readNoEof(&crlf);
-            if (!std.mem.eql(u8, &crlf, "\r\n")) return error.RedisProtocolError;
+            try reader.readSliceAll(out);
+            const crlf = try reader.takeArray(2);
+            if (!std.mem.eql(u8, crlf, "\r\n")) return error.RedisProtocolError;
             break :blk RespValue{ .bulk = out };
         },
         '*' => blk: {
@@ -415,14 +578,14 @@ fn readRespValue(alloc: std.mem.Allocator, reader: anytype) !RespValue {
     };
 }
 
-fn readRespLine(alloc: std.mem.Allocator, reader: anytype) ![]u8 {
+fn readRespLine(alloc: std.mem.Allocator, reader: *std.Io.Reader) ![]u8 {
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(alloc);
 
     while (true) {
-        const b = try reader.readByte();
+        const b = try reader.takeByte();
         if (b == '\r') {
-            const next = try reader.readByte();
+            const next = try reader.takeByte();
             if (next != '\n') return error.RedisProtocolError;
             break;
         }
@@ -470,4 +633,27 @@ test "parseRedisUrl handles redis URL variants" {
         if (tls.password) |v| alloc.free(v);
     }
     try std.testing.expect(tls.use_tls);
+}
+
+test "parseRedisUrl supports rediss default port" {
+    const alloc = std.testing.allocator;
+
+    const tls = try parseRedisUrl(alloc, "rediss://localhost");
+    defer alloc.free(tls.host);
+    try std.testing.expectEqualStrings("localhost", tls.host);
+    try std.testing.expectEqual(@as(u16, 6379), tls.port);
+    try std.testing.expect(tls.use_tls);
+}
+
+test "integration: rediss ping via REDIS_TLS_TEST_URL" {
+    const alloc = std.testing.allocator;
+    const tls_url = std.process.getEnvVarOwned(alloc, "REDIS_TLS_TEST_URL") catch
+        return error.SkipZigTest;
+    defer alloc.free(tls_url);
+
+    if (!std.mem.startsWith(u8, tls_url, "rediss://")) return error.SkipZigTest;
+
+    var client = try Client.connectFromUrl(alloc, tls_url);
+    defer client.deinit();
+    try client.ping();
 }
