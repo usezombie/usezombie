@@ -74,6 +74,33 @@ fn databaseHealthy(ctx: *Context) bool {
     return (ping.next() catch null) != null;
 }
 
+const QueueHealth = struct {
+    queued_count: i64,
+    oldest_queued_age_ms: ?i64,
+};
+
+fn queueHealth(ctx: *Context) ?QueueHealth {
+    var conn = ctx.pool.acquire() catch return null;
+    defer ctx.pool.release(conn);
+
+    var q = conn.query(
+        \\SELECT COUNT(*)::BIGINT, MIN(created_at)::BIGINT
+        \\FROM runs
+        \\WHERE state = 'SPEC_QUEUED'
+    , .{}) catch return null;
+    defer q.deinit();
+
+    const row = (q.next() catch null) orelse return null;
+    const queued_count = row.get(i64, 0) catch return null;
+    const oldest_created_ms = row.get(?i64, 1) catch return null;
+    const now_ms = std.time.milliTimestamp();
+    const oldest_age_ms = if (oldest_created_ms) |ts| now_ms - ts else null;
+    return .{
+        .queued_count = queued_count,
+        .oldest_queued_age_ms = oldest_age_ms,
+    };
+}
+
 pub fn handleHealthz(ctx: *Context, r: zap.Request) void {
     const db_ok = databaseHealthy(ctx);
     if (!db_ok) {
@@ -95,11 +122,14 @@ pub fn handleHealthz(ctx: *Context, r: zap.Request) void {
 pub fn handleReadyz(ctx: *Context, r: zap.Request) void {
     const db_ok = databaseHealthy(ctx);
     const worker_ok = ctx.worker_state.running.load(.acquire);
+    const qh = if (db_ok) queueHealth(ctx) else null;
     if (!db_ok or !worker_ok) {
         writeJson(r, .service_unavailable, .{
             .ready = false,
             .database = db_ok,
             .worker = worker_ok,
+            .queue_depth = if (qh) |v| v.queued_count else null,
+            .oldest_queued_age_ms = if (qh) |v| v.oldest_queued_age_ms else null,
         });
         return;
     }
@@ -108,6 +138,8 @@ pub fn handleReadyz(ctx: *Context, r: zap.Request) void {
         .ready = true,
         .database = true,
         .worker = true,
+        .queue_depth = if (qh) |v| v.queued_count else @as(i64, 0),
+        .oldest_queued_age_ms = if (qh) |v| v.oldest_queued_age_ms else null,
     });
 }
 
