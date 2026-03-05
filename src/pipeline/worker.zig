@@ -22,6 +22,8 @@ const side_effect_keys = @import("worker_side_effect_keys.zig");
 const worker_runtime = @import("worker_runtime.zig");
 const worker_paths = @import("worker_paths.zig");
 const worker_rate_limiter = @import("worker_rate_limiter.zig");
+const worker_execute_run = @import("worker_execute_run.zig");
+const worker_pr_flow = @import("worker_pr_flow.zig");
 const metrics = @import("../observability/metrics.zig");
 const events = @import("../events/bus.zig");
 const queue_consts = @import("../queue/constants.zig");
@@ -602,37 +604,11 @@ fn opCommitArtifact(ctx: CommitRetryCtx, _: u32) !void {
     return git.commitFile(ctx.alloc, ctx.wt_path, ctx.rel_path, ctx.content, ctx.msg, "UseZombie Bot", "bot@usezombie.dev");
 }
 
-const StageTransition = union(enum) {
-    stage_index: usize,
-    done,
-    retry,
-    blocked,
-};
-
 fn resolveBinding(cfg: WorkerConfig, role_id: []const u8, skill_id: []const u8) ?agents.RoleBinding {
     if (cfg.skill_registry) |registry| {
         if (agents.resolveRoleWithRegistry(registry, role_id, skill_id)) |binding| return binding;
     }
     return agents.resolveRole(role_id, skill_id);
-}
-
-fn resolveStageTransition(profile: *const topology.Profile, current_index: usize, passed: bool) !StageTransition {
-    const stage = profile.stages[current_index];
-    const explicit_target = if (passed) stage.on_pass else stage.on_fail;
-
-    if (explicit_target) |target| {
-        if (std.ascii.eqlIgnoreCase(target, topology.TRANSITION_DONE)) return .done;
-        if (std.ascii.eqlIgnoreCase(target, topology.TRANSITION_RETRY)) return .retry;
-        if (std.ascii.eqlIgnoreCase(target, topology.TRANSITION_BLOCKED)) return .blocked;
-        if (profile.indexOfStage(target)) |index| return .{ .stage_index = index };
-        return WorkerError.InvalidPipelineProfile;
-    }
-
-    if (passed) {
-        if (current_index + 1 < profile.stages.len) return .{ .stage_index = current_index + 1 };
-        return .done;
-    }
-    return .retry;
 }
 
 fn executeRun(
@@ -750,7 +726,7 @@ fn executeRun(
         var verification_started = false;
         var final_stage_output: []const u8 = plan_result.content;
         var final_stage_actor: types.Actor = .orchestrator;
-        var terminal = StageTransition.retry;
+        var terminal = worker_execute_run.StageTransition.retry;
 
         while (true) {
             const stage = profile.stages[current_stage_index];
@@ -820,7 +796,7 @@ fn executeRun(
                 }
             }
 
-            terminal = try resolveStageTransition(profile, current_stage_index, passed);
+            terminal = try worker_execute_run.resolveStageTransition(profile, current_stage_index, passed);
             switch (terminal) {
                 .stage_index => |next_index| {
                     current_stage_index = next_index;
@@ -864,12 +840,19 @@ fn executeRun(
                     if (push_claimed) {
                         try worker_runtime.ensureRunActive(&worker_state.running, deadline_ms);
                         try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_push", 1.0, &worker_state.running, deadline_ms);
-                        try reliable.call(void, PushRetryCtx{
+                        reliable.call(void, PushRetryCtx{
                             .alloc = run_alloc,
                             .wt_path = wt.path,
                             .branch = branch,
                             .github_token = github_token,
-                        }, opPushBranch, worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 2, 1_000, 10_000, "github_push"));
+                        }, opPushBranch, worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 2, 1_000, 10_000, "github_push")) catch |push_err| {
+                            switch (worker_pr_flow.onPushFailure()) {
+                                .lookup_remote_branch => {
+                                    const already_pushed = try git.remoteBranchExists(run_alloc, wt.path, branch, github_token);
+                                    if (!already_pushed) return push_err;
+                                },
+                            }
+                        };
                         try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key.value, branch);
                     } else {
                         const already_pushed = try git.remoteBranchExists(run_alloc, wt.path, branch, github_token);
@@ -903,13 +886,26 @@ fn executeRun(
                             .github_token = github_token,
                         };
                         try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_pr_create", 1.0, &worker_state.running, deadline_ms);
-                        const created_pr = try reliable.callWithDetail(
+                        const created_pr = reliable.callWithDetail(
                             []u8,
                             &pr_retry_ctx,
                             opCreatePr,
                             prDetail,
                             worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 2, 1_000, 10_000, "github_pr_create"),
-                        );
+                        ) catch |pr_err| blk: {
+                            switch (worker_pr_flow.onPrCreateFailure(pr_err, pr_retry_ctx.last_error_detail)) {
+                                .lookup_existing_pr => {
+                                    const recovered = try git.findOpenPullRequestByHead(run_alloc, ctx.repo_url, branch, github_token, null);
+                                    if (recovered) |url| break :blk url;
+                                    if (worker_pr_flow.indicatesClosedOrDeleted(pr_retry_ctx.last_error_detail)) {
+                                        return git.GitError.PrInvalidRequest;
+                                    }
+                                    return pr_err;
+                                },
+                                .retry => return pr_err,
+                                .fail => return pr_err,
+                            }
+                        };
                         pr_url = created_pr;
                         try state.markSideEffectDone(conn, ctx.run_id, pr_side_effect_key.value, created_pr);
                     }
@@ -1193,8 +1189,8 @@ test "integration: stage transition graph executes pass branch to done" {
     defer profile.deinit();
 
     const verify_idx = profile.indexOfStage(topology.STAGE_VERIFY) orelse return error.TestExpectedEqual;
-    const transition = try resolveStageTransition(&profile, verify_idx, true);
-    try std.testing.expectEqual(StageTransition.done, transition);
+    const transition = try worker_execute_run.resolveStageTransition(&profile, verify_idx, true);
+    try std.testing.expectEqual(worker_execute_run.StageTransition.done, transition);
 }
 
 test "integration: stage transition graph executes fail branch to retry" {
@@ -1202,8 +1198,8 @@ test "integration: stage transition graph executes fail branch to retry" {
     defer profile.deinit();
 
     const verify_idx = profile.indexOfStage(topology.STAGE_VERIFY) orelse return error.TestExpectedEqual;
-    const transition = try resolveStageTransition(&profile, verify_idx, false);
-    try std.testing.expectEqual(StageTransition.retry, transition);
+    const transition = try worker_execute_run.resolveStageTransition(&profile, verify_idx, false);
+    try std.testing.expectEqual(worker_execute_run.StageTransition.retry, transition);
 }
 
 test "worker state in-flight run counter tracks begin/end safely" {
