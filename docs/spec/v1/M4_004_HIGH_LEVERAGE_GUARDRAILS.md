@@ -4,7 +4,7 @@
 **Milestone:** M4
 **Workstream:** 004
 **Date:** Mar 05, 2026
-**Status:** PENDING
+**Status:** IN_PROGRESS
 **Priority:** P0 — Must complete before CLI freeze
 **Depends on:** M3_001 (closure baseline), M3_004 (Redis streams), M3_006 (Clerk auth)
 
@@ -12,7 +12,7 @@
 
 ## 1.0 Scope Mapping (M3_001 Deferred Dimensions)
 
-**Status:** PENDING
+**Status:** IN_PROGRESS
 
 This workstream contains the must-have reliability and safety guardrails deferred when closing M3_001.
 
@@ -26,19 +26,19 @@ This workstream contains the must-have reliability and safety guardrails deferre
 - 1.7 PENDING D10 Error classification harmonization (worker + API)
 - 1.8 PENDING D11 Secure execution boundary hardening
 - 1.9 PENDING D12 Graceful shutdown and stale runtime cleanup
-- 1.10 PENDING D13 Exactly-once transactional correctness closure
-- 1.11 PENDING D14 Side-effect idempotency ledger completion
+- 1.10 DONE D13 Exactly-once transactional correctness closure (run creation upsert + idempotent replay path)
+- 1.11 DONE D14 Side-effect idempotency ledger completion (`run_side_effects` + PR side-effect claim/done tracking)
 - 1.12 PENDING D15 Cooperative cancellation for long-running calls
 - 1.13 PENDING D16 Thread-safety and allocator guardrails
 - 1.14 PENDING D17 Migration safety policy (`serve` gating + robust migration handling)
 - 1.15 PENDING D18 Readiness depth hardening
-- 1.16 PENDING D21 Coverage measurement and test-depth gates
+- 1.16 DONE D21 Coverage measurement and test-depth gates (test inventory thresholds + integration filter gate)
 
 ---
 
 ## 2.0 Execution Tracks
 
-**Status:** PENDING
+**Status:** IN_PROGRESS
 
 ### 2.1 Reliability Track
 
@@ -51,21 +51,21 @@ This workstream contains the must-have reliability and safety guardrails deferre
 
 **Dimensions:**
 - 2.2.1 PENDING Close execution-boundary gaps (path, hooks, env exposure)
-- 2.2.2 PENDING Complete exactly-once + idempotency protections for all side effects
+- 2.2.2 IN_PROGRESS Complete exactly-once + idempotency protections for all side effects (PR path done, remaining side effects pending)
 - 2.2.3 PENDING Enforce shutdown, cancellation, and thread/allocator correctness invariants
 
 ### 2.3 Verification Track
 
 **Dimensions:**
-- 2.3.1 PENDING Add coverage instrumentation and minimum thresholds
-- 2.3.2 PENDING Expand unit tests for pure logic modules
-- 2.3.3 PENDING Add integration tests for claim/transition/idempotency flows
+- 2.3.1 IN_PROGRESS Add coverage instrumentation and minimum thresholds (test-depth thresholds live; line-coverage threshold pending)
+- 2.3.2 DONE Expand unit tests for pure logic modules
+- 2.3.3 DONE Add integration tests for claim/transition/idempotency flows
 
 ---
 
 ## 3.0 Acceptance Criteria
 
-**Status:** PENDING
+**Status:** IN_PROGRESS
 
 - [ ] 3.1 All D2/D3/D5/D6/D7/D9/D10 guardrails have verified implementation notes and passing tests
 - [ ] 3.2 All D11–D18 safety-critical items are resolved with explicit evidence in tests/runbooks
