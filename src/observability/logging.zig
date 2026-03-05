@@ -19,3 +19,19 @@ pub fn logWarnErr(
 ) void {
     std.log.scoped(scope).warn(fmt ++ " err={s}", args ++ .{@errorName(err)});
 }
+
+test "logging helpers accept scoped error context" {
+    logErr(.observability, error.TestError, "logErr smoke test boundary={s}", .{"unit"});
+    logWarnErr(.observability, error.TestError, "logWarnErr smoke test boundary={s}", .{"unit"});
+}
+
+test "integration: logging helpers operate from catch paths" {
+    const maybeFail = struct {
+        fn run() !void {
+            return error.ExpectedFailure;
+        }
+    };
+    maybeFail.run() catch |err| {
+        logWarnErr(.observability, err, "catch-path logging smoke test stage={s}", .{"integration"});
+    };
+}

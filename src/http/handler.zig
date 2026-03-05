@@ -374,7 +374,7 @@ pub fn handleStartRun(ctx: *Context, r: zap.Request) void {
     if (was_inserted) {
         // Record policy_decision event — sensitive action, M1 permissive mode (always allow)
         policy.recordPolicyEvent(conn, req.workspace_id, final_run_id, .sensitive, .allow, "m1.start_run", req.requested_by) catch |err| {
-            log.warn("policy event insert failed (non-fatal): {}", .{err});
+            obs_log.logWarnErr(.http, err, "policy event insert failed (non-fatal) run_id={s}", .{final_run_id});
         };
 
         log.info("run created run_id={s} workspace_id={s} spec_id={s}", .{
@@ -618,7 +618,7 @@ pub fn handleRetryRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
 
     // Record policy_decision event before state change — sensitive action
     policy.recordPolicyEvent(conn, workspace_id_for_policy, run_id, .sensitive, .allow, "m1.retry_run", "api") catch |err| {
-        log.warn("policy event insert failed (non-fatal): {}", .{err});
+        obs_log.logWarnErr(.http, err, "policy event insert failed (non-fatal) run_id={s}", .{run_id});
     };
 
     // Re-queue: transition back to SPEC_QUEUED
@@ -697,7 +697,7 @@ pub fn handlePauseWorkspace(ctx: *Context, r: zap.Request, workspace_id: []const
 
     // Record policy_decision event before state change — sensitive action
     policy.recordPolicyEvent(conn, workspace_id, null, .sensitive, .allow, "m1.pause_workspace", "api") catch |err| {
-        log.warn("policy event insert failed (non-fatal): {}", .{err});
+        obs_log.logWarnErr(.http, err, "policy event insert failed (non-fatal) workspace_id={s}", .{workspace_id});
     };
 
     const now_ms = std.time.milliTimestamp();

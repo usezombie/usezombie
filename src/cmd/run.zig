@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const db = @import("../db/pool.zig");
+const obs_log = @import("../observability/logging.zig");
 const common = @import("common.zig");
 
 const log = std.log.scoped(.zombied);
@@ -29,7 +30,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
     defer pool.deinit();
 
     common.runCanonicalMigrations(pool) catch |err| {
-        log.warn("one-shot migration run skipped due to error: {}", .{err});
+        obs_log.logWarnErr(.zombied, err, "one-shot migration run skipped", .{});
     };
 
     log.info("spec loaded ({d} bytes) — pipeline runs via `zombied serve`", .{spec_content.len});

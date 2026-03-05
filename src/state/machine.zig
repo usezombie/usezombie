@@ -6,6 +6,8 @@ const std = @import("std");
 const pg = @import("pg");
 const types = @import("../types.zig");
 const events = @import("../events/bus.zig");
+const metrics = @import("../observability/metrics.zig");
+const obs_log = @import("../observability/logging.zig");
 const log = std.log.scoped(.state);
 
 pub const TransitionError = error{
@@ -14,6 +16,112 @@ pub const TransitionError = error{
     RunAlreadyTerminal,
     IdempotencyConflict,
 };
+
+const OutboxStatus = enum {
+    pending,
+    delivered,
+    dead_letter,
+};
+
+fn outboxStatusLabel(status: OutboxStatus) []const u8 {
+    return switch (status) {
+        .pending => "pending",
+        .delivered => "delivered",
+        .dead_letter => "dead_letter",
+    };
+}
+
+fn shouldReconcileSideEffectsForState(to: types.RunState) bool {
+    return switch (to) {
+        .SPEC_QUEUED, .BLOCKED, .NOTIFIED_BLOCKED, .DONE => true,
+        else => false,
+    };
+}
+
+fn deadLetterReasonForState(to: types.RunState) []const u8 {
+    return switch (to) {
+        .SPEC_QUEUED => "reconciled_on_requeue",
+        .BLOCKED => "reconciled_on_blocked",
+        .NOTIFIED_BLOCKED => "reconciled_on_notified_blocked",
+        .DONE => "reconciled_on_done",
+        else => "reconciled",
+    };
+}
+
+fn upsertSideEffectOutbox(
+    conn: *pg.Conn,
+    run_id: []const u8,
+    effect_key: []const u8,
+    status: OutboxStatus,
+    last_event: []const u8,
+    payload: ?[]const u8,
+    reconciled_state: ?[]const u8,
+    now_ms: i64,
+) !void {
+    var q = try conn.query(
+        \\INSERT INTO run_side_effect_outbox
+        \\  (run_id, effect_key, status, last_event, payload, reconciled_state, created_at, updated_at)
+        \\VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+        \\ON CONFLICT (run_id, effect_key) DO UPDATE
+        \\SET status = EXCLUDED.status,
+        \\    last_event = EXCLUDED.last_event,
+        \\    payload = COALESCE(EXCLUDED.payload, run_side_effect_outbox.payload),
+        \\    reconciled_state = EXCLUDED.reconciled_state,
+        \\    updated_at = EXCLUDED.updated_at
+    , .{
+        run_id,
+        effect_key,
+        outboxStatusLabel(status),
+        last_event,
+        payload,
+        reconciled_state,
+        now_ms,
+    });
+    q.deinit();
+}
+
+pub fn reconcileSideEffectsForRunState(
+    conn: *pg.Conn,
+    run_id: []const u8,
+    to: types.RunState,
+) !u32 {
+    if (!shouldReconcileSideEffectsForState(to)) return 0;
+
+    const now_ms = std.time.milliTimestamp();
+    const reason = deadLetterReasonForState(to);
+
+    var dead = try conn.query(
+        \\UPDATE run_side_effects
+        \\SET status = 'dead_letter',
+        \\    details = CASE
+        \\        WHEN details IS NULL OR details = '' THEN $3
+        \\        ELSE details || ' | ' || $3
+        \\    END,
+        \\    updated_at = $2
+        \\WHERE run_id = $1 AND status = 'claimed'
+        \\RETURNING effect_key
+    , .{ run_id, now_ms, reason });
+    defer dead.deinit();
+
+    var dead_lettered: u32 = 0;
+    while (try dead.next()) |row| {
+        const effect_key = try row.get([]u8, 0);
+        try upsertSideEffectOutbox(
+            conn,
+            run_id,
+            effect_key,
+            .dead_letter,
+            "reconciled_dead_letter",
+            reason,
+            to.label(),
+            now_ms,
+        );
+        metrics.incOutboxDeadLetter();
+        dead_lettered += 1;
+    }
+
+    return dead_lettered;
+}
 
 /// Allowed transitions (from → to). Encodes the state machine contract.
 const ALLOWED = [_][2]types.RunState{
@@ -126,6 +234,14 @@ pub fn transition(
         };
     }
 
+    const dead_lettered = reconcileSideEffectsForRunState(conn, run_id, to) catch |err| blk: {
+        obs_log.logWarnErr(.state, err, "side-effect reconciliation failed run_id={s} to={s}", .{
+            run_id,
+            to.label(),
+        });
+        break :blk @as(u32, 0);
+    };
+
     var request_id: []const u8 = "-";
     {
         var rq = conn.query("SELECT request_id FROM runs WHERE run_id = $1", .{run_id}) catch null;
@@ -149,8 +265,8 @@ pub fn transition(
     var detail_buf: [160]u8 = undefined;
     const detail = std.fmt.bufPrint(
         &detail_buf,
-        "request_id={s} from={s} to={s} actor={s} reason={s}",
-        .{ request_id, current.state.label(), to.label(), actor.label(), reason_code.label() },
+        "request_id={s} from={s} to={s} actor={s} reason={s} dead_lettered={d}",
+        .{ request_id, current.state.label(), to.label(), actor.label(), reason_code.label(), dead_lettered },
     ) catch "state_transition";
     events.emit("state_transition", run_id, detail);
 
@@ -236,15 +352,36 @@ pub fn claimSideEffect(
     details: ?[]const u8,
 ) !bool {
     const now_ms = std.time.milliTimestamp();
-    var r = try conn.query(
+    var insert_claim = try conn.query(
         \\INSERT INTO run_side_effects
         \\  (run_id, effect_key, status, details, created_at, updated_at)
         \\VALUES ($1, $2, 'claimed', $3, $4, $4)
         \\ON CONFLICT (run_id, effect_key) DO NOTHING
         \\RETURNING id
     , .{ run_id, effect_key, details, now_ms });
-    defer r.deinit();
-    return (try r.next()) != null;
+    defer insert_claim.deinit();
+    if ((try insert_claim.next()) != null) {
+        try upsertSideEffectOutbox(conn, run_id, effect_key, .pending, "claimed", details, null, now_ms);
+        metrics.incOutboxEnqueued();
+        return true;
+    }
+
+    var reclaim = try conn.query(
+        \\UPDATE run_side_effects
+        \\SET status = 'claimed',
+        \\    details = COALESCE($3, details),
+        \\    updated_at = $4
+        \\WHERE run_id = $1 AND effect_key = $2 AND status = 'dead_letter'
+        \\RETURNING id
+    , .{ run_id, effect_key, details, now_ms });
+    defer reclaim.deinit();
+    if ((try reclaim.next()) != null) {
+        try upsertSideEffectOutbox(conn, run_id, effect_key, .pending, "reclaimed", details, null, now_ms);
+        metrics.incOutboxEnqueued();
+        return true;
+    }
+
+    return false;
 }
 
 pub fn markSideEffectDone(
@@ -257,9 +394,14 @@ pub fn markSideEffectDone(
     var r = try conn.query(
         \\UPDATE run_side_effects
         \\SET status = 'done', details = COALESCE($3, details), updated_at = $4
-        \\WHERE run_id = $1 AND effect_key = $2
+        \\WHERE run_id = $1 AND effect_key = $2 AND status != 'done'
+        \\RETURNING id
     , .{ run_id, effect_key, details, now_ms });
-    r.deinit();
+    defer r.deinit();
+    if ((try r.next()) != null) {
+        try upsertSideEffectOutbox(conn, run_id, effect_key, .delivered, "done", details, null, now_ms);
+        metrics.incOutboxDelivered();
+    }
 }
 
 test "isAllowed covers all configured transitions" {
@@ -287,4 +429,20 @@ test "isAllowed covers all configured transitions" {
     // Invalid transitions must be rejected
     try std.testing.expect(!isAllowed(.DONE, .SPEC_QUEUED));
     try std.testing.expect(!isAllowed(.SPEC_QUEUED, .DONE));
+}
+
+test "reconciliation trigger states include blocked terminal and requeue edges" {
+    try std.testing.expect(shouldReconcileSideEffectsForState(.SPEC_QUEUED));
+    try std.testing.expect(shouldReconcileSideEffectsForState(.BLOCKED));
+    try std.testing.expect(shouldReconcileSideEffectsForState(.NOTIFIED_BLOCKED));
+    try std.testing.expect(shouldReconcileSideEffectsForState(.DONE));
+    try std.testing.expect(!shouldReconcileSideEffectsForState(.PATCH_IN_PROGRESS));
+    try std.testing.expect(!shouldReconcileSideEffectsForState(.PR_OPENED));
+}
+
+test "integration: dead-letter reconciliation reasons are stable" {
+    try std.testing.expectEqualStrings("reconciled_on_requeue", deadLetterReasonForState(.SPEC_QUEUED));
+    try std.testing.expectEqualStrings("reconciled_on_blocked", deadLetterReasonForState(.BLOCKED));
+    try std.testing.expectEqualStrings("reconciled_on_notified_blocked", deadLetterReasonForState(.NOTIFIED_BLOCKED));
+    try std.testing.expectEqualStrings("reconciled_on_done", deadLetterReasonForState(.DONE));
 }
