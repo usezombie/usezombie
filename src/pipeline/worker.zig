@@ -417,12 +417,33 @@ fn isSafeRelativeSpecPath(relative_spec_path: []const u8) bool {
     return true;
 }
 
-fn sideEffectKeyPush(buf: []u8, branch: []const u8) ![]const u8 {
-    return std.fmt.bufPrint(buf, "git:push:{s}", .{branch});
+const SideEffectKey = struct {
+    value: []const u8,
+    owned: ?[]u8 = null,
+
+    fn deinit(self: SideEffectKey, alloc: std.mem.Allocator) void {
+        if (self.owned) |k| alloc.free(k);
+    }
+};
+
+fn sideEffectKeyPush(alloc: std.mem.Allocator, buf: []u8, branch: []const u8) !SideEffectKey {
+    const value = std.fmt.bufPrint(buf, "git:push:{s}", .{branch}) catch |err| blk: {
+        if (err != error.NoSpaceLeft) return err;
+        const owned = try std.fmt.allocPrint(alloc, "git:push:{s}", .{branch});
+        break :blk owned;
+    };
+    const owned = if (@intFromPtr(value.ptr) == @intFromPtr(buf.ptr)) null else value;
+    return .{ .value = value, .owned = owned };
 }
 
-fn sideEffectKeyPrCreate(buf: []u8, branch: []const u8) ![]const u8 {
-    return std.fmt.bufPrint(buf, "pr:create:{s}", .{branch});
+fn sideEffectKeyPrCreate(alloc: std.mem.Allocator, buf: []u8, branch: []const u8) !SideEffectKey {
+    const value = std.fmt.bufPrint(buf, "pr:create:{s}", .{branch}) catch |err| blk: {
+        if (err != error.NoSpaceLeft) return err;
+        const owned = try std.fmt.allocPrint(alloc, "pr:create:{s}", .{branch});
+        break :blk owned;
+    };
+    const owned = if (@intFromPtr(value.ptr) == @intFromPtr(buf.ptr)) null else value;
+    return .{ .value = value, .owned = owned };
 }
 
 fn resolveSpecPath(
@@ -637,8 +658,9 @@ fn tryRecoverPrUrl(
     );
     if (existing) |pr_url| {
         var side_effect_key_buf: [192]u8 = undefined;
-        const side_effect_key = try sideEffectKeyPrCreate(&side_effect_key_buf, branch);
-        try state.markSideEffectDone(conn, ctx.run_id, side_effect_key, pr_url);
+        const side_effect_key = try sideEffectKeyPrCreate(run_alloc, &side_effect_key_buf, branch);
+        defer side_effect_key.deinit(run_alloc);
+        try state.markSideEffectDone(conn, ctx.run_id, side_effect_key.value, pr_url);
         return pr_url;
     }
     return null;
@@ -903,8 +925,9 @@ fn executeRun(
                 defer run_alloc.free(github_token);
 
                 var push_side_effect_key_buf: [192]u8 = undefined;
-                const push_side_effect_key = try sideEffectKeyPush(&push_side_effect_key_buf, branch);
-                const push_claimed = try state.claimSideEffect(conn, ctx.run_id, push_side_effect_key, branch);
+                const push_side_effect_key = try sideEffectKeyPush(run_alloc, &push_side_effect_key_buf, branch);
+                defer push_side_effect_key.deinit(run_alloc);
+                const push_claimed = try state.claimSideEffect(conn, ctx.run_id, push_side_effect_key.value, branch);
                 if (push_claimed) {
                     try ensureRunActive(worker_state, deadline_ms);
                     try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_push", 1.0, worker_state, deadline_ms);
@@ -914,16 +937,17 @@ fn executeRun(
                         .branch = branch,
                         .github_token = github_token,
                     }, opPushBranch, retryOptionsForRun(worker_state, deadline_ms, 2, 1_000, 10_000, "github_push"));
-                    try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key, branch);
+                    try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key.value, branch);
                 } else {
                     const already_pushed = try git.remoteBranchExists(run_alloc, wt.path, branch, github_token);
                     if (!already_pushed) return WorkerError.SideEffectClaimedNoResult;
-                    try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key, branch);
+                    try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key.value, branch);
                 }
 
                 var pr_side_effect_key_buf: [192]u8 = undefined;
-                const pr_side_effect_key = try sideEffectKeyPrCreate(&pr_side_effect_key_buf, branch);
-                const pr_claimed = try state.claimSideEffect(conn, ctx.run_id, pr_side_effect_key, branch);
+                const pr_side_effect_key = try sideEffectKeyPrCreate(run_alloc, &pr_side_effect_key_buf, branch);
+                defer pr_side_effect_key.deinit(run_alloc);
+                const pr_claimed = try state.claimSideEffect(conn, ctx.run_id, pr_side_effect_key.value, branch);
                 if (!pr_claimed) {
                     pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
                     if (pr_url == null) {
@@ -954,7 +978,7 @@ fn executeRun(
                         retryOptionsForRun(worker_state, deadline_ms, 2, 1_000, 10_000, "github_pr_create"),
                     );
                     pr_url = created_pr;
-                    try state.markSideEffectDone(conn, ctx.run_id, pr_side_effect_key, created_pr);
+                    try state.markSideEffectDone(conn, ctx.run_id, pr_side_effect_key.value, created_pr);
                 }
             }
 
@@ -1231,14 +1255,31 @@ test "integration: rate limiter scopes by tenant and provider" {
 
 test "integration: side effect key format for pr create is stable" {
     var buf: [128]u8 = undefined;
-    const key = try sideEffectKeyPrCreate(&buf, "zombie/run-r_abc");
-    try std.testing.expectEqualStrings("pr:create:zombie/run-r_abc", key);
+    const key = try sideEffectKeyPrCreate(std.testing.allocator, &buf, "zombie/run-r_abc");
+    defer key.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("pr:create:zombie/run-r_abc", key.value);
 }
 
 test "integration: side effect key format for push is stable" {
     var buf: [128]u8 = undefined;
-    const key = try sideEffectKeyPush(&buf, "zombie/run-r_abc");
-    try std.testing.expectEqualStrings("git:push:zombie/run-r_abc", key);
+    const key = try sideEffectKeyPush(std.testing.allocator, &buf, "zombie/run-r_abc");
+    defer key.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("git:push:zombie/run-r_abc", key.value);
+}
+
+test "integration: side effect key helpers fall back to heap for long branches" {
+    const long_branch = "zombie/run-abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz";
+    var tiny: [16]u8 = undefined;
+
+    const push_key = try sideEffectKeyPush(std.testing.allocator, &tiny, long_branch);
+    defer push_key.deinit(std.testing.allocator);
+    try std.testing.expect(std.mem.eql(u8, push_key.value, "git:push:zombie/run-abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"));
+    try std.testing.expect(push_key.owned != null);
+
+    const pr_key = try sideEffectKeyPrCreate(std.testing.allocator, &tiny, long_branch);
+    defer pr_key.deinit(std.testing.allocator);
+    try std.testing.expect(std.mem.eql(u8, pr_key.value, "pr:create:zombie/run-abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"));
+    try std.testing.expect(pr_key.owned != null);
 }
 
 test "sleepCooperative returns shutdown when worker stops" {
