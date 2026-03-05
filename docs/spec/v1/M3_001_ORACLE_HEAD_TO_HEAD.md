@@ -24,7 +24,7 @@
 |---|-----------|----------|------------------|----------------------------|
 | 1 | Memory leaks | **Medium** | Good defer hygiene; subprocess lifecycle gaps | ResourceBundle pattern, errdefer at boundaries |
 | 2 | Allocation best practices | **Medium** | Single GPA for worker; many manual frees | Per-run ArenaAllocator; bounded buffers |
-| 3 | Async / API performance | **High** | Sequential single-thread worker | Multi-worker + concurrent dispatch |
+| 3 | Async / API performance | **High** | Configurable multi-worker threads via `WORKER_CONCURRENCY`; deeper async/provider concurrency still missing | Multi-worker + concurrent dispatch |
 | 4 | Event bus / actor dispatch | **Medium** | Ad-hoc log lines only | Ring-buffer MPSC bus (`bus.zig`) |
 | 5 | Reliability & retry | **Critical** | `reliable_call` wrappers now cover Scout/Warden + token/push/PR (with PR detail plumbing); no outbox/circuit-breaker yet | `reliable.zig` + outbox + dead-letter |
 | 6 | Rate limiting | **High** | Tenant token-bucket limiter added in worker; provider-level policy still missing | Token bucket per tenant/provider |
@@ -39,7 +39,7 @@
 |---|---|---|
 | 1 | ⚠️ Partial | Child process teardown patterns are still mixed; no unified ResourceBundle abstraction |
 | 2 | ⚠️ Partial | Per-run arena added in worker, but allocator/thread model not fully normalized |
-| 3 | ❌ Open | Still single-worker sequential execution |
+| 3 | ⚠️ Partial | Worker concurrency is now configurable with multiple threads; provider/tool dispatch is still blocking/sequential per run |
 | 4 | ❌ Open | No event bus implementation yet |
 | 5 | ⚠️ Partial | `reliable_call` now wraps Scout/Warden and GitHub token/push/PR paths (with PR response detail plumbing); outbox/dead-letter and circuit breaker are still missing |
 | 6 | ⚠️ Partial | Tenant token-bucket throttling now gates Echo/Scout/Warden calls; provider-level quotas and distributed state are still missing |
@@ -135,7 +135,7 @@ fn executeRun(...) !void {
 ---
 
 ## 3. Async / API performance — concurrent dispatch
-**Status (Mar 05, 2026): ❌ Open**
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### What nullclaw does well
 - Concurrent tool/provider dispatch with cancellation boundaries
@@ -145,8 +145,8 @@ fn executeRun(...) !void {
 
 | File | Line | Issue |
 |------|------|-------|
-| `src/pipeline/worker.zig` | 4–5 | Explicitly sequential: "one spec at a time for M1" |
-| `src/pipeline/worker.zig` | 70–75 | Fixed-sleep poll loop, single thread |
+| `src/pipeline/worker.zig` | 4–5 | Per-worker execution remains sequential ("one spec at a time for M1") |
+| `src/main.zig` | 198–236 | `WORKER_CONCURRENCY` adds parallel worker threads, but no dynamic autoscaling/backpressure policy exists yet |
 | `src/pipeline/agents.zig` | 130, 202, 276 | Blocking `agent.runSingle()` calls |
 | `src/git/ops.zig` | 28–52, 206–212 | Blocking subprocess + curl calls |
 
@@ -161,6 +161,11 @@ for (threads, 0..) |*t, _| {
 ```
 
 `FOR UPDATE SKIP LOCKED` is already in place, so concurrent workers are safe immediately.
+
+### Oracle review: remaining scope after this fix
+- Move from thread-level parallelism to non-blocking/provider-aware call dispatch where needed.
+- Add queue-depth/backpressure metrics to tune `WORKER_CONCURRENCY` safely in production.
+- Add fairness controls to prevent noisy-tenant starvation under high parallel load.
 
 ---
 
