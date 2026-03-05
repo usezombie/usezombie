@@ -195,6 +195,10 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
     defer if (max_attempts_str) |s| alloc.free(s);
     const max_attempts: u32 = if (max_attempts_str) |s| std.fmt.parseInt(u32, s, 10) catch 3 else 3;
 
+    const worker_concurrency_str = std.process.getEnvVarOwned(alloc, "WORKER_CONCURRENCY") catch null;
+    defer if (worker_concurrency_str) |s| alloc.free(s);
+    const worker_concurrency: u32 = if (worker_concurrency_str) |s| std.fmt.parseInt(u32, s, 10) catch 1 else 1;
+
     const rate_capacity_str = std.process.getEnvVarOwned(alloc, "RATE_LIMIT_CAPACITY") catch null;
     defer if (rate_capacity_str) |s| alloc.free(s);
     const rate_limit_capacity: u32 = if (rate_capacity_str) |s| std.fmt.parseInt(u32, s, 10) catch 30 else 30;
@@ -231,10 +235,24 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
     shutdown_requested.store(false, .release);
     installSignalHandlers();
 
-    const worker_thread = try std.Thread.spawn(.{}, worker.workerLoop, .{ wcfg, &wstate });
+    const worker_count: usize = @max(@as(usize, @intCast(worker_concurrency)), 1);
+    var worker_threads = try alloc.alloc(std.Thread, worker_count);
+    defer alloc.free(worker_threads);
+    var spawned_workers: usize = 0;
+    errdefer {
+        wstate.running.store(false, .release);
+        while (spawned_workers > 0) {
+            spawned_workers -= 1;
+            worker_threads[spawned_workers].join();
+        }
+    }
+    for (worker_threads) |*t| {
+        t.* = try std.Thread.spawn(.{}, worker.workerLoop, .{ wcfg, &wstate });
+        spawned_workers += 1;
+    }
     const signal_thread = try std.Thread.spawn(.{}, signalWatcher, .{&wstate});
 
-    log.info("HTTP server starting port={d}", .{port});
+    log.info("HTTP server starting port={d} worker_concurrency={d}", .{ port, worker_count });
     http_server.serve(&ctx, .{ .port = port }) catch |err| {
         log.err("http server exited with error: {}", .{err});
     };
@@ -242,7 +260,7 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
     // Server exited. Ensure worker and watcher terminate and join both.
     wstate.running.store(false, .release);
     shutdown_requested.store(true, .release);
-    worker_thread.join();
+    for (worker_threads) |*t| t.join();
     signal_thread.join();
 }
 
