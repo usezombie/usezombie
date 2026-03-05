@@ -29,7 +29,7 @@
 | 5 | Reliability & retry | **Critical** | `reliable_call` wrappers now cover Scout/Warden + token/push/PR (with PR detail plumbing); no outbox/circuit-breaker yet | `reliable.zig` + outbox + dead-letter |
 | 6 | Rate limiting | **High** | None | Token bucket per tenant/provider |
 | 7 | Backoff | **Critical** | Jittered exponential backoff added in worker loop and retry path; PR HTTP `Retry-After` is now consumed, other paths still incomplete | Exponential + jitter + Retry-After parsing |
-| 8 | Logging (.env / agent-friendly) | **Medium** | Compile-time level; unstructured text | Runtime `LOG_LEVEL`; key=value structured logs |
+| 8 | Logging (.env / agent-friendly) | **Medium** | Runtime `LOG_LEVEL` supported; logs still unstructured text | Runtime `LOG_LEVEL`; key=value structured logs |
 | 9 | Logging on errors | **High** | Many `catch {}`; generic error names | Classification + context + correlation IDs |
 | 10 | Error code classification | **Critical** | `error_classify.zig` wired in worker with explicit `AUTH_FAILED`/`RATE_LIMITED` reason codes; API-layer mapping still coarse | `error_classify.zig`: rate_limited / context_exhausted / auth / server_error |
 
@@ -44,7 +44,7 @@
 | 5 | ⚠️ Partial | `reliable_call` now wraps Scout/Warden and GitHub token/push/PR paths (with PR response detail plumbing); outbox/dead-letter and circuit breaker are still missing |
 | 6 | ❌ Open | No token bucket or tenant-level throttling |
 | 7 | ⚠️ Partial | Worker loop and run retry now use exponential+jitter backoff; PR HTTP `Retry-After` is plumbed, but provider/API responses are not yet end-to-end |
-| 8 | ❌ Open | No runtime `LOG_LEVEL` or structured key/value logging |
+| 8 | ⚠️ Partial | Runtime `LOG_LEVEL` is implemented; structured key/value logging and observer wiring are still missing |
 | 9 | ⚠️ Partial | Some error paths improved, but consistent classification/context is missing |
 | 10 | ⚠️ Partial | `error_classify` drives worker failure mapping with explicit auth/quota reason codes; richer provider payload parsing and HTTP/API harmonization are still missing |
 | 11 | ⚠️ Partial | Path canonicalization + hook disable done; env scrubbing/sandbox hardening still pending |
