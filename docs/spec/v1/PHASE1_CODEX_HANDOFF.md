@@ -142,6 +142,14 @@ Create `ArenaAllocator` at start of `executeRun()`, `defer arena.deinit()`. Pass
 - Added `ServeConfig.load()` to centralize serve-mode env parsing and validation (`PORT`, `API_KEY`, `ENCRYPTION_MASTER_KEY`, GitHub app env, worker/rate-limit knobs).
 - `cmdServe` now consumes this typed config object instead of duplicating env parsing logic inline.
 
+### ⚠️ PARTIAL: 1.13 Structured logging + observer backend wiring (Dimension 8)
+
+**File:** `src/main.zig` + `src/pipeline/agents.zig`
+
+- `src/main.zig`: logger now emits structured key/value lines (`ts_ms`, `level`, `scope`, JSON-safe `msg`) under runtime `LOG_LEVEL`.
+- `src/pipeline/agents.zig`: NullClaw observer is now env-selectable via `NULLCLAW_OBSERVER=log|noop|verbose` (default `log`) instead of hardcoded `NoopObserver`.
+- Remaining: correlation ID propagation across all layers and durable sink policy (`MultiObserver`/collector).
+
 ---
 
 ## ✅ DONE: Step 1 (parallel) — M3_000 Secrets + Schema Separation
@@ -475,6 +483,7 @@ CLERK_PUBLISHABLE_KEY=
 
 # Agent runtime
 NULLCLAW_API_KEY=                            # Default LLM key (or BYOK per workspace)
+NULLCLAW_OBSERVER=log                        # log|noop|verbose (default: log)
 AGENT_CONFIG_DIR=/app/config
 DEFAULT_MAX_ATTEMPTS=3
 WORKER_CONCURRENCY=1

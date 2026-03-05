@@ -56,22 +56,24 @@ fn zombiedLog(
 ) void {
     if (!shouldLog(level)) return;
 
-    const prefix = comptime switch (level) {
-        .err => "ERR",
-        .warn => "WRN",
-        .info => "INF",
-        .debug => "DBG",
+    const level_str = comptime switch (level) {
+        .err => "err",
+        .warn => "warn",
+        .info => "info",
+        .debug => "debug",
     };
-    const scope_str = comptime if (scope == .default) "" else "[" ++ @tagName(scope) ++ "] ";
+    const scope_str = comptime if (scope == .default) "default" else @tagName(scope);
     const ts = std.time.milliTimestamp();
     var msg_buf: [4096]u8 = undefined;
     const msg = std.fmt.bufPrint(&msg_buf, fmt, args) catch return;
-    var line_buf: [256]u8 = undefined;
-    const header = std.fmt.bufPrint(&line_buf, "{d} {s} {s}", .{ ts, prefix, scope_str }) catch return;
+    var line_buf: [8192]u8 = undefined;
+    const line = std.fmt.bufPrint(
+        &line_buf,
+        "ts_ms={d} level={s} scope={s} msg={f}\n",
+        .{ ts, level_str, scope_str, std.json.fmt(msg, .{}) },
+    ) catch return;
     const stderr = std.fs.File.stderr();
-    _ = stderr.write(header) catch {};
-    _ = stderr.write(msg) catch {};
-    _ = stderr.write("\n") catch {};
+    _ = stderr.write(line) catch {};
 }
 
 fn onSignal(sig: i32) callconv(.c) void {

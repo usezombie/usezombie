@@ -29,7 +29,7 @@
 | 5 | Reliability & retry | **Critical** | `reliable_call` wrappers now cover Scout/Warden + token/push/PR (with PR detail plumbing); no outbox/circuit-breaker yet | `reliable.zig` + outbox + dead-letter |
 | 6 | Rate limiting | **High** | Tenant token-bucket limiter added in worker; provider-level policy still missing | Token bucket per tenant/provider |
 | 7 | Backoff | **Critical** | Jittered exponential backoff added in worker loop and retry path; PR HTTP `Retry-After` is now consumed, other paths still incomplete | Exponential + jitter + Retry-After parsing |
-| 8 | Logging (.env / agent-friendly) | **Medium** | Runtime `LOG_LEVEL` supported; logs still unstructured text | Runtime `LOG_LEVEL`; key=value structured logs |
+| 8 | Logging (.env / agent-friendly) | **Medium** | Runtime `LOG_LEVEL` + structured key/value logger are active; NullClaw observer backend is now env-selectable (default `log`) | Runtime `LOG_LEVEL`; key=value structured logs |
 | 9 | Logging on errors | **High** | Critical silent catches reduced; richer classification/context remains incomplete | Classification + context + correlation IDs |
 | 10 | Error code classification | **Critical** | `error_classify.zig` wired in worker with explicit `AUTH_FAILED`/`RATE_LIMITED` reason codes; API-layer mapping still coarse | `error_classify.zig`: rate_limited / context_exhausted / auth / server_error |
 
@@ -44,7 +44,7 @@
 | 5 | ⚠️ Partial | `reliable_call` now wraps Scout/Warden and GitHub token/push/PR paths (with PR response detail plumbing); outbox/dead-letter and circuit breaker are still missing |
 | 6 | ⚠️ Partial | Tenant token-bucket throttling now gates Echo/Scout/Warden calls; provider-level quotas and distributed state are still missing |
 | 7 | ⚠️ Partial | Worker loop and run retry now use exponential+jitter backoff; PR HTTP `Retry-After` is plumbed, but provider/API responses are not yet end-to-end |
-| 8 | ⚠️ Partial | Runtime `LOG_LEVEL` is implemented; structured key/value logging and observer wiring are still missing |
+| 8 | ⚠️ Partial | Structured key/value logger and LogObserver wiring are in place; correlation IDs and durable log sink strategy are still missing |
 | 9 | ⚠️ Partial | Critical silent catches on worker/http paths are reduced, but full classification/context consistency is still missing |
 | 10 | ⚠️ Partial | `error_classify` drives worker failure mapping with explicit auth/quota reason codes; richer provider payload parsing and HTTP/API harmonization are still missing |
 | 11 | ⚠️ Partial | Path canonicalization + hook disable done; env scrubbing/sandbox hardening still pending |
@@ -330,41 +330,23 @@ Apply in:
 ---
 
 ## 8. Logging — .env level control, agent-friendly structured logs
-**Status (Mar 05, 2026): ❌ Open**
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### What nullclaw does well
 - `observability.zig`: `Observer` vtable interface with Noop / Log / Verbose / File / Multi / Otel backends
 - Runtime-configurable verbosity
 - Consistent key=value structured logging with context fields
 
-### usezombie gaps
+### usezombie fixes applied
 
-| File | Line | Issue |
-|------|------|-------|
-| `src/main.zig` | 19–23 | Log level is compile-time only (`.Debug` vs `.info`) |
-| `src/main.zig` | 25–48 | Custom logger: unstructured text, no JSON option |
-| `src/pipeline/agents.zig` | 109–111, 177–179, 246–248 | Uses `NoopObserver` — disables nullclaw's observability hooks entirely |
+| File | Scope | Fix |
+|------|-------|-----|
+| `src/main.zig` | Runtime logger output | `zombiedLog` now emits structured key/value lines (`ts_ms`, `level`, `scope`, JSON-safe `msg`) while still honoring `LOG_LEVEL` |
+| `src/pipeline/agents.zig` | NullClaw observer wiring | Replaced hardcoded `NoopObserver` with env-selectable backend (`NULLCLAW_OBSERVER=log|noop|verbose`), defaulting to `LogObserver` |
 
-### Recommendation
-
-**Runtime log level from env:**
-```zig
-var g_level: std.atomic.Value(u8) = .init(@intFromEnum(std.log.Level.info));
-
-pub fn init() void {
-    if (std.process.getEnvVarOwned(alloc, "LOG_LEVEL")) |s| {
-        defer alloc.free(s);
-        g_level.store(@intFromEnum(parseLevel(s)), .release);
-    }
-}
-```
-
-**Key=value structured format:**
-```
-1709510400000 INF [worker] event=transition run_id=r_abc123 from=SPEC_QUEUED to=RUN_PLANNED actor=echo
-```
-
-**Wire real observer:** Replace `NoopObserver` with `LogObserver` (or `MultiObserver` with `LogObserver` + `FileObserver`).
+### Remaining gaps
+- End-to-end correlation (`request_id`/`run_id`) is not yet propagated through every log/observer event.
+- Durable sink strategy (for example `MultiObserver` with file/OTel bridge) is not yet standardized.
 
 ---
 
@@ -508,7 +490,7 @@ Advanced path then adds:
 | 16 | Thread safety & Zig allocator pitfalls | **High** | Shared GPA across threads; leak detection ignored |
 | 17 | Schema migration safety | **High** | Naïve SQL split; non-transactional; silent failures |
 | 18 | Health check depth (readiness vs liveness) | **Medium–High** | `/healthz` always returns ok even with DB down |
-| 19 | Metrics / telemetry / tracing | **Medium** | NoopObserver and incomplete correlation propagation remain, though core counters are now exposed |
+| 19 | Metrics / telemetry / tracing | **Medium** | Core counters and default LogObserver wiring are in place, but correlation propagation and latency histograms are still missing |
 | 20 | Config validation & secret hygiene | **Medium–High** | Core fail-fast and API key rotation exist; encrypted-secret key versioning/rotation is still missing |
 
 ---
@@ -724,12 +706,12 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 |------|------|-------|
 | `src/http/server.zig` | 35–42 | `/metrics` endpoint exists and is Prometheus-scrapeable, but there is no auth/TLS boundary guidance yet |
 | `src/observability/metrics.zig` | 1–168 | Core counters/gauges are present, but no histogram/latency distribution and no trace correlation IDs |
-| `src/pipeline/agents.zig` | 109–111, 177–179, 246–248 | `NoopObserver` — nullclaw's observability hooks disabled |
+| `src/pipeline/agents.zig` | observer runtime selection | Observer is now enabled by default (`LogObserver`), but events are not yet correlated with request/run IDs across layers |
 | `src/pipeline/agents.zig` | 30–40 | Single log line for "nullclaw_run" events |
 | `src/http/handler.zig` | 49–54 | `request_id` generated but not propagated to worker/state transitions |
 
 ### Recommendation
-- Wire `LogObserver` or `MultiObserver` instead of `NoopObserver`
+- Keep `LogObserver` as default and extend to `MultiObserver` (file/collector sink) for durable telemetry export
 - Propagate `request_id` through the full run lifecycle
 - Expose `/metrics` endpoint with: runs_total, runs_completed, retries_total, agent_duration_seconds, queue_depth
 
