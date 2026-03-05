@@ -16,10 +16,12 @@ const secrets = @import("../secrets/crypto.zig");
 const backoff = @import("../reliability/backoff.zig");
 const err_classify = @import("../reliability/error_classify.zig");
 const reliable = @import("../reliability/reliable_call.zig");
-const rate_limit = @import("../reliability/rate_limit.zig");
 const topology = @import("topology.zig");
 const profile_resolver = @import("profile_resolver.zig");
 const side_effect_keys = @import("worker_side_effect_keys.zig");
+const worker_runtime = @import("worker_runtime.zig");
+const worker_paths = @import("worker_paths.zig");
+const worker_rate_limiter = @import("worker_rate_limiter.zig");
 const metrics = @import("../observability/metrics.zig");
 const events = @import("../events/bus.zig");
 const queue_consts = @import("../queue/constants.zig");
@@ -87,97 +89,10 @@ const RunContext = struct {
     attempt: u32,
 };
 
-const WorkerError = error{
-    ShutdownRequested,
-    RunDeadlineExceeded,
-    PathTraversal,
-    MissingGitHubInstallation,
-    InvalidPipelineRole,
-    InvalidPipelineProfile,
-    SideEffectClaimedNoResult,
-};
+const WorkerError = worker_runtime.WorkerError;
 
 const WorkerAllocator = std.heap.GeneralPurposeAllocator(.{});
-
-const TenantRateLimiter = struct {
-    alloc: std.mem.Allocator,
-    buckets: std.StringHashMap(rate_limit.TokenBucket),
-    capacity: u32,
-    refill_per_sec: f64,
-
-    fn init(alloc: std.mem.Allocator, capacity: u32, refill_per_sec: f64) TenantRateLimiter {
-        return .{
-            .alloc = alloc,
-            .buckets = std.StringHashMap(rate_limit.TokenBucket).init(alloc),
-            .capacity = capacity,
-            .refill_per_sec = refill_per_sec,
-        };
-    }
-
-    fn deinit(self: *TenantRateLimiter) void {
-        var it = self.buckets.iterator();
-        while (it.next()) |entry| self.alloc.free(entry.key_ptr.*);
-        self.buckets.deinit();
-    }
-
-    fn acquire(self: *TenantRateLimiter, tenant_id: []const u8, provider: []const u8, cost: f64) !void {
-        while (true) {
-            const now_ms = std.time.milliTimestamp();
-            const bucket = try self.getOrCreateBucket(tenant_id, provider, now_ms);
-            if (bucket.allow(now_ms, cost)) return;
-
-            const wait_ms = @max(bucket.waitMsUntil(now_ms, cost), 1);
-            metrics.addRateLimitWaitMs(wait_ms);
-            std.Thread.sleep(wait_ms * std.time.ns_per_ms);
-        }
-    }
-
-    fn acquireCancelable(
-        self: *TenantRateLimiter,
-        tenant_id: []const u8,
-        provider: []const u8,
-        cost: f64,
-        worker_state: *WorkerState,
-        deadline_ms: i64,
-    ) WorkerError!void {
-        while (true) {
-            try ensureRunActive(worker_state, deadline_ms);
-
-            const now_ms = std.time.milliTimestamp();
-            const bucket = try self.getOrCreateBucket(tenant_id, provider, now_ms);
-            if (bucket.allow(now_ms, cost)) return;
-
-            const wait_ms = @max(bucket.waitMsUntil(now_ms, cost), 1);
-            metrics.addRateLimitWaitMs(wait_ms);
-            try sleepCooperative(wait_ms, worker_state, deadline_ms);
-        }
-    }
-
-    fn getOrCreateBucket(
-        self: *TenantRateLimiter,
-        tenant_id: []const u8,
-        provider: []const u8,
-        now_ms: i64,
-    ) !*rate_limit.TokenBucket {
-        var key_buf: [256]u8 = undefined;
-        var heap_key: ?[]u8 = null;
-        const scoped_key = std.fmt.bufPrint(&key_buf, "{s}::{s}", .{ tenant_id, provider }) catch |err| blk: {
-            if (err != error.NoSpaceLeft) return err;
-            const allocated = try std.fmt.allocPrint(self.alloc, "{s}::{s}", .{ tenant_id, provider });
-            heap_key = allocated;
-            break :blk allocated;
-        };
-        defer if (heap_key) |k| self.alloc.free(k);
-
-        if (self.buckets.getPtr(scoped_key)) |bucket| return bucket;
-
-        const key_copy = try self.alloc.dupe(u8, scoped_key);
-        errdefer self.alloc.free(key_copy);
-
-        try self.buckets.put(key_copy, rate_limit.TokenBucket.init(self.capacity, self.refill_per_sec, now_ms));
-        return self.buckets.getPtr(key_copy).?;
-    }
-};
+const TenantRateLimiter = worker_rate_limiter.TenantRateLimiter;
 
 // ── Entry point ───────────────────────────────────────────────────────────
 
@@ -245,7 +160,7 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
                 consecutive_errors += 1;
                 const max_delay_ms = std.math.mul(u64, cfg.poll_interval_ms, 8) catch cfg.poll_interval_ms;
                 const delay_ms = backoff.expBackoffJitter(consecutive_errors - 1, cfg.poll_interval_ms, max_delay_ms);
-                sleepWhileRunning(worker_state, delay_ms);
+                worker_runtime.sleepWhileRunning(&worker_state.running, delay_ms);
                 continue;
             };
         }
@@ -257,7 +172,7 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
                 consecutive_errors += 1;
                 const max_delay_ms = std.math.mul(u64, cfg.poll_interval_ms, 8) catch cfg.poll_interval_ms;
                 const delay_ms = backoff.expBackoffJitter(consecutive_errors - 1, cfg.poll_interval_ms, max_delay_ms);
-                sleepWhileRunning(worker_state, delay_ms);
+                worker_runtime.sleepWhileRunning(&worker_state.running, delay_ms);
                 continue;
             };
         }
@@ -285,7 +200,7 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
 
                 const max_delay_ms = std.math.mul(u64, cfg.poll_interval_ms, 8) catch cfg.poll_interval_ms;
                 const delay_ms = backoff.expBackoffJitter(consecutive_errors - 1, cfg.poll_interval_ms, max_delay_ms);
-                sleepWhileRunning(worker_state, delay_ms);
+                worker_runtime.sleepWhileRunning(&worker_state.running, delay_ms);
             }
             continue;
         };
@@ -470,49 +385,6 @@ fn processNextRun(
     return;
 }
 
-fn isWithinPath(base: []const u8, candidate: []const u8) bool {
-    if (!std.mem.startsWith(u8, candidate, base)) return false;
-    if (candidate.len == base.len) return true;
-    return candidate[base.len] == std.fs.path.sep;
-}
-
-fn isSafeRelativeSpecPath(relative_spec_path: []const u8) bool {
-    if (relative_spec_path.len == 0) return false;
-    if (std.fs.path.isAbsolute(relative_spec_path)) return false;
-
-    var it = std.mem.splitScalar(u8, relative_spec_path, '/');
-    while (it.next()) |segment| {
-        if (segment.len == 0) return false;
-        if (std.mem.eql(u8, segment, ".") or std.mem.eql(u8, segment, "..")) return false;
-    }
-    return true;
-}
-
-fn resolveSpecPath(
-    alloc: std.mem.Allocator,
-    worktree_path: []const u8,
-    relative_spec_path: []const u8,
-) ![]const u8 {
-    if (!isSafeRelativeSpecPath(relative_spec_path)) {
-        return WorkerError.PathTraversal;
-    }
-
-    const joined = try std.fs.path.join(alloc, &.{ worktree_path, relative_spec_path });
-    defer alloc.free(joined);
-
-    const canonical_spec = try std.fs.realpathAlloc(alloc, joined);
-    errdefer alloc.free(canonical_spec);
-
-    const canonical_worktree = try std.fs.realpathAlloc(alloc, worktree_path);
-    defer alloc.free(canonical_worktree);
-
-    if (!isWithinPath(canonical_worktree, canonical_spec)) {
-        return WorkerError.PathTraversal;
-    }
-
-    return canonical_spec;
-}
-
 fn loadInstallationId(
     alloc: std.mem.Allocator,
     conn: *pg.Conn,
@@ -667,11 +539,11 @@ fn tryRecoverPrUrl(
     ctx: RunContext,
     branch: []const u8,
 ) !?[]u8 {
-    try ensureRunActive(worker_state, deadline_ms);
+    try worker_runtime.ensureRunActive(&worker_state.running, deadline_ms);
     const installation_id = loadInstallationId(run_alloc, conn, ctx.workspace_id) catch return null;
     defer run_alloc.free(installation_id);
 
-    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_installation_token", 1.0, worker_state, deadline_ms);
+    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_installation_token", 1.0, &worker_state.running, deadline_ms);
     var token_retry_ctx = TokenRetryCtx{
         .cache = token_cache,
         .alloc = run_alloc,
@@ -683,14 +555,14 @@ fn tryRecoverPrUrl(
         &token_retry_ctx,
         opGetInstallationToken,
         tokenDetail,
-        retryOptionsForRun(worker_state, deadline_ms, 2, 500, 5_000, "github_installation_token"),
+        worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 2, 500, 5_000, "github_installation_token"),
     );
     defer run_alloc.free(github_token);
 
     var detail: ?[]u8 = null;
     defer if (detail) |d| run_alloc.free(d);
 
-    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_pr_lookup", 1.0, worker_state, deadline_ms);
+    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_pr_lookup", 1.0, &worker_state.running, deadline_ms);
     const existing = try git.findOpenPullRequestByHead(
         run_alloc,
         ctx.repo_url,
@@ -775,7 +647,7 @@ fn executeRun(
     tenant_limiter: *TenantRateLimiter,
 ) !void {
     const deadline_ms = std.time.milliTimestamp() + @as(i64, @intCast(cfg.run_timeout_ms));
-    try ensureRunActive(worker_state, deadline_ms);
+    try worker_runtime.ensureRunActive(&worker_state.running, deadline_ms);
 
     var run_arena = std.heap.ArenaAllocator.init(alloc);
     defer run_arena.deinit();
@@ -789,14 +661,14 @@ fn executeRun(
         .cache_root = cfg.cache_root,
         .workspace_id = ctx.workspace_id,
         .repo_url = ctx.repo_url,
-    }, opEnsureBareClone, retryOptionsForRun(worker_state, deadline_ms, 2, 500, 5_000, "git_ensure_bare_clone"));
+    }, opEnsureBareClone, worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 2, 500, 5_000, "git_ensure_bare_clone"));
 
     var wt = try reliable.call(git.WorktreeHandle, WorktreeRetryCtx{
         .alloc = run_alloc,
         .bare_path = bare_path,
         .run_id = ctx.run_id,
         .base_branch = ctx.default_branch,
-    }, opCreateWorktree, retryOptionsForRun(worker_state, deadline_ms, 2, 500, 5_000, "git_create_worktree"));
+    }, opCreateWorktree, worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 2, 500, 5_000, "git_create_worktree"));
     defer {
         git.removeWorktree(run_alloc, bare_path, wt.path);
         wt.deinit();
@@ -805,7 +677,7 @@ fn executeRun(
     const branch = try std.fmt.allocPrint(run_alloc, "zombie/run-{s}", .{ctx.run_id});
 
     // ── Read spec from worktree (canonicalized path) ─────────────────────
-    const spec_abs = try resolveSpecPath(run_alloc, wt.path, ctx.spec_path);
+    const spec_abs = try worker_paths.resolveSpecPath(run_alloc, wt.path, ctx.spec_path);
     const spec_file = try std.fs.openFileAbsolute(spec_abs, .{});
     defer spec_file.close();
     const spec_content = try spec_file.readToEndAlloc(run_alloc, 512 * 1024);
@@ -817,8 +689,8 @@ fn executeRun(
     const plan_stage = profile.stages[0];
     const plan_binding = resolveBinding(cfg, plan_stage.role_id, plan_stage.skill_id) orelse return WorkerError.InvalidPipelineRole;
 
-    try ensureRunActive(worker_state, deadline_ms);
-    try tenant_limiter.acquireCancelable(ctx.tenant_id, plan_stage.skill_id, 1.0, worker_state, deadline_ms);
+    try worker_runtime.ensureRunActive(&worker_state.running, deadline_ms);
+    try tenant_limiter.acquireCancelable(ctx.tenant_id, plan_stage.skill_id, 1.0, &worker_state.running, deadline_ms);
     const plan_result = try reliable.call(agents.AgentResult, StageRetryCtx{
         .alloc = run_alloc,
         .binding = plan_binding,
@@ -828,7 +700,7 @@ fn executeRun(
             .spec_content = spec_content,
             .memory_context = memory_context,
         },
-    }, opRunStage, retryOptionsForRun(worker_state, deadline_ms, 1, 1_000, 8_000, plan_stage.skill_id));
+    }, opRunStage, worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 1, 1_000, 8_000, plan_stage.skill_id));
     metrics.incAgentEchoCalls();
     metrics.addAgentTokens(plan_result.token_count);
     metrics.observeAgentDurationSeconds(plan_result.wall_seconds);
@@ -868,7 +740,7 @@ fn executeRun(
     var total_wall_seconds: u64 = plan_result.wall_seconds;
 
     while (attempt <= cfg.max_attempts) : (attempt += 1) {
-        try ensureRunActive(worker_state, deadline_ms);
+        try worker_runtime.ensureRunActive(&worker_state.running, deadline_ms);
 
         // ── Execute stage graph from stage index 1 ───────────────────────
         _ = try state.transition(conn, ctx.run_id, .PATCH_IN_PROGRESS, .orchestrator, .PATCH_STARTED, null);
@@ -897,8 +769,8 @@ fn executeRun(
                 attempt,
             });
 
-            try tenant_limiter.acquireCancelable(ctx.tenant_id, stage.skill_id, 1.0, worker_state, deadline_ms);
-            try ensureRunActive(worker_state, deadline_ms);
+            try tenant_limiter.acquireCancelable(ctx.tenant_id, stage.skill_id, 1.0, &worker_state.running, deadline_ms);
+            try worker_runtime.ensureRunActive(&worker_state.running, deadline_ms);
             const stage_result = try reliable.call(agents.AgentResult, StageRetryCtx{
                 .alloc = run_alloc,
                 .binding = binding,
@@ -910,7 +782,7 @@ fn executeRun(
                     .defects_content = defects,
                     .implementation_summary = latest_build_output,
                 },
-            }, opRunStage, retryOptionsForRun(worker_state, deadline_ms, 1, 1_000, 8_000, stage.skill_id));
+            }, opRunStage, worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 1, 1_000, 8_000, stage.skill_id));
 
             switch (binding.actor) {
                 .echo => metrics.incAgentEchoCalls(),
@@ -965,11 +837,11 @@ fn executeRun(
 
                 var pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
                 if (pr_url == null) {
-                    try ensureRunActive(worker_state, deadline_ms);
+                    try worker_runtime.ensureRunActive(&worker_state.running, deadline_ms);
                     const installation_id = try loadInstallationId(run_alloc, conn, ctx.workspace_id);
                     defer run_alloc.free(installation_id);
 
-                    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_installation_token", 1.0, worker_state, deadline_ms);
+                    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_installation_token", 1.0, &worker_state.running, deadline_ms);
                     var token_retry_ctx = TokenRetryCtx{
                         .cache = token_cache,
                         .alloc = run_alloc,
@@ -981,7 +853,7 @@ fn executeRun(
                         &token_retry_ctx,
                         opGetInstallationToken,
                         tokenDetail,
-                        retryOptionsForRun(worker_state, deadline_ms, 2, 500, 5_000, "github_installation_token"),
+                        worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 2, 500, 5_000, "github_installation_token"),
                     );
                     defer run_alloc.free(github_token);
 
@@ -990,14 +862,14 @@ fn executeRun(
                     defer push_side_effect_key.deinit(run_alloc);
                     const push_claimed = try state.claimSideEffect(conn, ctx.run_id, push_side_effect_key.value, branch);
                     if (push_claimed) {
-                        try ensureRunActive(worker_state, deadline_ms);
-                        try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_push", 1.0, worker_state, deadline_ms);
+                        try worker_runtime.ensureRunActive(&worker_state.running, deadline_ms);
+                        try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_push", 1.0, &worker_state.running, deadline_ms);
                         try reliable.call(void, PushRetryCtx{
                             .alloc = run_alloc,
                             .wt_path = wt.path,
                             .branch = branch,
                             .github_token = github_token,
-                        }, opPushBranch, retryOptionsForRun(worker_state, deadline_ms, 2, 1_000, 10_000, "github_push"));
+                        }, opPushBranch, worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 2, 1_000, 10_000, "github_push"));
                         try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key.value, branch);
                     } else {
                         const already_pushed = try git.remoteBranchExists(run_alloc, wt.path, branch, github_token);
@@ -1018,7 +890,7 @@ fn executeRun(
                     }
 
                     if (pr_url == null) {
-                        try ensureRunActive(worker_state, deadline_ms);
+                        try worker_runtime.ensureRunActive(&worker_state.running, deadline_ms);
                         const pr_title = try std.fmt.allocPrint(run_alloc, "usezombie: {s}", .{ctx.spec_id});
 
                         var pr_retry_ctx = PrRetryCtx{
@@ -1030,13 +902,13 @@ fn executeRun(
                             .body = final_stage_output,
                             .github_token = github_token,
                         };
-                        try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_pr_create", 1.0, worker_state, deadline_ms);
+                        try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_pr_create", 1.0, &worker_state.running, deadline_ms);
                         const created_pr = try reliable.callWithDetail(
                             []u8,
                             &pr_retry_ctx,
                             opCreatePr,
                             prDetail,
-                            retryOptionsForRun(worker_state, deadline_ms, 2, 1_000, 10_000, "github_pr_create"),
+                            worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 2, 1_000, 10_000, "github_pr_create"),
                         );
                         pr_url = created_pr;
                         try state.markSideEffectDone(conn, ctx.run_id, pr_side_effect_key.value, created_pr);
@@ -1146,7 +1018,7 @@ fn executeRun(
                 const delay_ms = backoff.expBackoffJitter(retry_index, 1_000, 30_000);
                 metrics.incRunRetries();
                 metrics.addBackoffWaitMs(delay_ms);
-                try sleepCooperative(delay_ms, worker_state, deadline_ms);
+                try worker_runtime.sleepCooperative(delay_ms, &worker_state.running, deadline_ms);
 
                 log.info("retrying run_id={s} attempt={d}", .{ ctx.run_id, attempt + 1 });
             },
@@ -1168,56 +1040,6 @@ fn executeRun(
     events.emit("run_blocked", ctx.run_id, blocked_detail_slice);
     metrics.observeRunTotalWallSeconds(total_wall_seconds);
     metrics.incRunsBlocked();
-}
-
-fn ensureBeforeDeadline(deadline_ms: i64) WorkerError!void {
-    if (std.time.milliTimestamp() > deadline_ms) return WorkerError.RunDeadlineExceeded;
-}
-
-fn ensureRunActive(worker_state: *WorkerState, deadline_ms: i64) WorkerError!void {
-    if (!worker_state.running.load(.acquire)) return WorkerError.ShutdownRequested;
-    try ensureBeforeDeadline(deadline_ms);
-}
-
-fn retryOptionsForRun(
-    worker_state: *WorkerState,
-    deadline_ms: i64,
-    max_retries: u32,
-    base_delay_ms: u64,
-    max_delay_ms: u64,
-    operation_name: ?[]const u8,
-) reliable.RetryOptions {
-    return .{
-        .max_retries = max_retries,
-        .base_delay_ms = base_delay_ms,
-        .max_delay_ms = max_delay_ms,
-        .operation_name = operation_name,
-        .cancel_flag = &worker_state.running,
-        .deadline_ms = deadline_ms,
-        .cancel_error = WorkerError.ShutdownRequested,
-        .deadline_error = WorkerError.RunDeadlineExceeded,
-    };
-}
-
-fn sleepCooperative(total_ms: u64, worker_state: *WorkerState, deadline_ms: i64) WorkerError!void {
-    var remaining = total_ms;
-    while (true) {
-        try ensureRunActive(worker_state, deadline_ms);
-        if (remaining == 0) return;
-
-        const slice_ms: u64 = @min(remaining, 100);
-        std.Thread.sleep(slice_ms * std.time.ns_per_ms);
-        remaining -= slice_ms;
-    }
-}
-
-fn sleepWhileRunning(worker_state: *WorkerState, total_ms: u64) void {
-    var remaining = total_ms;
-    while (remaining > 0 and worker_state.running.load(.acquire)) {
-        const slice_ms: u64 = @min(remaining, 100);
-        std.Thread.sleep(slice_ms * std.time.ns_per_ms);
-        remaining -= slice_ms;
-    }
 }
 
 // ── Artifact helpers ─────────────────────────────────────────────────────
@@ -1242,7 +1064,7 @@ fn commitArtifact(
         .rel_path = rel_path,
         .content = content,
         .msg = msg,
-    }, opCommitArtifact, retryOptionsForRun(worker_state, deadline_ms, 1, 300, 2_000, "git_commit_artifact"));
+    }, opCommitArtifact, worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 1, 300, 2_000, "git_commit_artifact"));
 
     // Register in artifacts table
     const checksum = sha256Hex(content);
@@ -1357,46 +1179,6 @@ test "integration: worker profile fallback path returns null when no active bind
     try std.testing.expect(none == null);
 }
 
-test "isWithinPath respects directory boundaries" {
-    try std.testing.expect(isWithinPath("/tmp/wt", "/tmp/wt/docs/spec.md"));
-    try std.testing.expect(isWithinPath("/tmp/wt", "/tmp/wt"));
-    try std.testing.expect(!isWithinPath("/tmp/wt", "/tmp/wt-other/spec.md"));
-    try std.testing.expect(!isWithinPath("/tmp/wt", "/tmp/other/spec.md"));
-}
-
-test "isSafeRelativeSpecPath rejects absolute and traversal paths" {
-    try std.testing.expect(isSafeRelativeSpecPath("docs/spec.md"));
-    try std.testing.expect(isSafeRelativeSpecPath("nested/path/spec.md"));
-    try std.testing.expect(!isSafeRelativeSpecPath(""));
-    try std.testing.expect(!isSafeRelativeSpecPath("/etc/passwd"));
-    try std.testing.expect(!isSafeRelativeSpecPath("../spec.md"));
-    try std.testing.expect(!isSafeRelativeSpecPath("docs/../spec.md"));
-    try std.testing.expect(!isSafeRelativeSpecPath("docs//spec.md"));
-}
-
-test "integration: resolveSpecPath enforces relative path boundary" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    try tmp.dir.makePath("repo/docs");
-    {
-        var f = try tmp.dir.createFile("repo/docs/spec.md", .{});
-        defer f.close();
-        try f.writeAll("# spec");
-    }
-
-    const worktree_path = try tmp.dir.realpathAlloc(std.testing.allocator, "repo");
-    defer std.testing.allocator.free(worktree_path);
-
-    const resolved = try resolveSpecPath(std.testing.allocator, worktree_path, "docs/spec.md");
-    defer std.testing.allocator.free(resolved);
-    try std.testing.expect(std.mem.startsWith(u8, resolved, worktree_path));
-    try std.testing.expectError(
-        WorkerError.PathTraversal,
-        resolveSpecPath(std.testing.allocator, worktree_path, "../etc/passwd"),
-    );
-}
-
 test "integration: default topology roles resolve through registry" {
     var profile = try topology.defaultProfile(std.testing.allocator);
     defer profile.deinit();
@@ -1422,47 +1204,6 @@ test "integration: stage transition graph executes fail branch to retry" {
     const verify_idx = profile.indexOfStage(topology.STAGE_VERIFY) orelse return error.TestExpectedEqual;
     const transition = try resolveStageTransition(&profile, verify_idx, false);
     try std.testing.expectEqual(StageTransition.retry, transition);
-}
-
-test "integration: rate limiter scopes by tenant and provider" {
-    var limiter = TenantRateLimiter.init(std.testing.allocator, 1, 1.0);
-    defer limiter.deinit();
-
-    const now_ms = std.time.milliTimestamp();
-    const scout_bucket = try limiter.getOrCreateBucket("tenant-a", "agent_scout", now_ms);
-    const scout_bucket_again = try limiter.getOrCreateBucket("tenant-a", "agent_scout", now_ms);
-    const pr_bucket = try limiter.getOrCreateBucket("tenant-a", "github_pr_create", now_ms);
-
-    try std.testing.expect(scout_bucket == scout_bucket_again);
-    try std.testing.expect(scout_bucket != pr_bucket);
-
-    try std.testing.expect(scout_bucket.allow(now_ms, 1.0));
-    try std.testing.expect(!scout_bucket.allow(now_ms, 1.0));
-    try std.testing.expect(pr_bucket.allow(now_ms, 1.0));
-}
-
-test "sleepCooperative returns shutdown when worker stops" {
-    var ws = WorkerState.init();
-    ws.running.store(false, .release);
-    try std.testing.expectError(
-        WorkerError.ShutdownRequested,
-        sleepCooperative(1, &ws, std.time.milliTimestamp() + 10_000),
-    );
-}
-
-test "integration: ensureRunActive returns deadline exceeded when past deadline" {
-    var ws = WorkerState.init();
-    ws.running.store(true, .release);
-    try std.testing.expectError(
-        WorkerError.RunDeadlineExceeded,
-        ensureRunActive(&ws, std.time.milliTimestamp() - 1),
-    );
-}
-
-test "integration: sleepWhileRunning returns immediately when stopped" {
-    var ws = WorkerState.init();
-    ws.running.store(false, .release);
-    sleepWhileRunning(&ws, 500);
 }
 
 test "worker state in-flight run counter tracks begin/end safely" {
@@ -1493,23 +1234,6 @@ test "beginRunIfActive increments in-flight when running" {
     try std.testing.expectEqual(@as(u32, 1), ws.currentInFlightRuns());
     ws.endRun();
     try std.testing.expectEqual(@as(u32, 0), ws.currentInFlightRuns());
-}
-
-test "sleepCooperative returns deadline exceeded when deadline already passed" {
-    var ws = WorkerState.init();
-    try std.testing.expectError(
-        WorkerError.RunDeadlineExceeded,
-        sleepCooperative(10, &ws, std.time.milliTimestamp() - 1),
-    );
-}
-
-test "integration: sleepCooperative returns deadline exceeded during wait window" {
-    var ws = WorkerState.init();
-    const deadline_ms = std.time.milliTimestamp() + 10;
-    try std.testing.expectError(
-        WorkerError.RunDeadlineExceeded,
-        sleepCooperative(250, &ws, deadline_ms),
-    );
 }
 
 const CounterRaceCtx = struct {
@@ -1560,43 +1284,4 @@ test "integration: finalizeWorkerAllocator returns true when leaks are present" 
     _ = leaked;
 
     try std.testing.expect(finalizeWorkerAllocator(&gpa));
-}
-
-test "integration: tenant limiter deinit releases scoped keys under churn" {
-    var gpa = WorkerAllocator{};
-    defer {
-        const leaked = finalizeWorkerAllocator(&gpa);
-        std.testing.expect(!leaked) catch unreachable;
-    }
-
-    var limiter = TenantRateLimiter.init(gpa.allocator(), 2, 5.0);
-    defer limiter.deinit();
-
-    var i: usize = 0;
-    while (i < 1_000) : (i += 1) {
-        var tenant_buf: [32]u8 = undefined;
-        var provider_buf: [32]u8 = undefined;
-        const tenant = try std.fmt.bufPrint(&tenant_buf, "tenant-{d}", .{i % 50});
-        const provider = try std.fmt.bufPrint(&provider_buf, "provider-{d}", .{i % 20});
-        _ = try limiter.getOrCreateBucket(tenant, provider, std.time.milliTimestamp());
-    }
-}
-
-test "integration: tenant limiter long scoped keys use fallback path without leaks" {
-    var gpa = WorkerAllocator{};
-    defer {
-        const leaked = finalizeWorkerAllocator(&gpa);
-        std.testing.expect(!leaked) catch unreachable;
-    }
-
-    var limiter = TenantRateLimiter.init(gpa.allocator(), 2, 5.0);
-    defer limiter.deinit();
-
-    const tenant = "tenant-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
-    const provider = "provider-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy";
-
-    var i: usize = 0;
-    while (i < 200) : (i += 1) {
-        _ = try limiter.getOrCreateBucket(tenant, provider, std.time.milliTimestamp());
-    }
 }
