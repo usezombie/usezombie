@@ -14,6 +14,7 @@ pub const GitHubAuthError = error{
     AuthFailed,
     InvalidRequest,
     ServerError,
+    InvalidInstallationId,
 };
 
 pub const TokenCache = struct {
@@ -58,6 +59,7 @@ pub const TokenCache = struct {
         if (self.app_id.len == 0 or self.private_key_pem.len == 0 or installation_id.len == 0) {
             return GitHubAuthError.MissingConfig;
         }
+        if (!isSafeInstallationId(installation_id)) return GitHubAuthError.InvalidInstallationId;
 
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -111,6 +113,14 @@ fn normalizedPrivateKeyPem(alloc: std.mem.Allocator, pem: []const u8) ![]u8 {
     }
 
     return out.toOwnedSlice();
+}
+
+fn isSafeInstallationId(installation_id: []const u8) bool {
+    if (installation_id.len == 0 or installation_id.len > 20) return false;
+    for (installation_id) |c| {
+        if (!std.ascii.isDigit(c)) return false;
+    }
+    return true;
 }
 
 fn randomSuffix() u64 {
@@ -388,4 +398,20 @@ test "integration: sanitizedChildEnv does not leak auth env vars" {
     try std.testing.expect(env.get("GITHUB_TOKEN") == null);
     try std.testing.expect(env.get("GIT_ASKPASS") == null);
     try std.testing.expect(env.get("ENCRYPTION_MASTER_KEY") == null);
+}
+
+test "isSafeInstallationId accepts digits only" {
+    try std.testing.expect(isSafeInstallationId("12345"));
+    try std.testing.expect(!isSafeInstallationId(""));
+    try std.testing.expect(!isSafeInstallationId("abc"));
+    try std.testing.expect(!isSafeInstallationId("123-45"));
+}
+
+test "integration: getInstallationToken rejects invalid installation id" {
+    var cache = TokenCache.init(std.testing.allocator, "42", "pem");
+    defer cache.deinit();
+    try std.testing.expectError(
+        GitHubAuthError.InvalidInstallationId,
+        cache.getInstallationToken(std.testing.allocator, "../123"),
+    );
 }

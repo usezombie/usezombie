@@ -21,6 +21,7 @@ pub const GitError = error{
     PrServerError,
     InvalidIdentifier,
     InvalidGitRef,
+    InvalidRelativePath,
 };
 
 pub const WorktreeHandle = struct {
@@ -125,6 +126,17 @@ fn isSafeGitRef(ref: []const u8) bool {
     for (ref) |c| {
         if (c <= 0x20 or c == 0x7f) return false;
         if (c == '~' or c == '^' or c == ':' or c == '?' or c == '*' or c == '[' or c == '\\') return false;
+    }
+    return true;
+}
+
+fn isSafeRelativePath(path: []const u8) bool {
+    if (path.len == 0) return false;
+    if (std.fs.path.isAbsolute(path)) return false;
+
+    var it = std.mem.splitScalar(u8, path, '/');
+    while (it.next()) |segment| {
+        if (!isSafeIdentifierSegment(segment)) return false;
     }
     return true;
 }
@@ -268,6 +280,8 @@ pub fn commitFile(
     author_name: []const u8,
     author_email: []const u8,
 ) !void {
+    if (!isSafeRelativePath(rel_path)) return GitError.InvalidRelativePath;
+
     // Write file
     const abs_path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ wt_path, rel_path });
     defer alloc.free(abs_path);
@@ -400,6 +414,7 @@ pub fn createPullRequest(
     error_detail_out: ?*?[]u8,
 ) ![]const u8 {
     if (error_detail_out) |out| out.* = null;
+    if (!isSafeGitRef(branch) or !isSafeGitRef(base_branch)) return GitError.InvalidGitRef;
 
     // Parse owner/repo from URL
     // e.g. https://github.com/owner/repo.git → owner/repo
@@ -479,6 +494,7 @@ pub fn findOpenPullRequestByHead(
     error_detail_out: ?*?[]u8,
 ) !?[]const u8 {
     if (error_detail_out) |out| out.* = null;
+    if (!isSafeGitRef(branch)) return GitError.InvalidGitRef;
 
     const owner_repo = try parseGitHubOwnerRepo(alloc, repo_url);
     defer alloc.free(owner_repo);
@@ -647,5 +663,38 @@ fn parseGitHubOwnerRepo(alloc: std.mem.Allocator, repo_url: []const u8) ![]const
     else
         rest;
 
+    const slash = std.mem.indexOfScalar(u8, owner_repo, '/') orelse return GitError.InvalidGitHubUrl;
+    if (std.mem.lastIndexOfScalar(u8, owner_repo, '/') != slash) return GitError.InvalidGitHubUrl;
+
+    const owner = owner_repo[0..slash];
+    const repo = owner_repo[slash + 1 ..];
+    if (!isSafeIdentifierSegment(owner) or !isSafeIdentifierSegment(repo)) return GitError.InvalidGitHubUrl;
+
     return alloc.dupe(u8, owner_repo);
+}
+
+test "isSafeRelativePath rejects traversal-like relative paths" {
+    try std.testing.expect(isSafeRelativePath("docs/runs/a.md"));
+    try std.testing.expect(!isSafeRelativePath(""));
+    try std.testing.expect(!isSafeRelativePath("../docs/runs/a.md"));
+    try std.testing.expect(!isSafeRelativePath("/tmp/a.md"));
+    try std.testing.expect(!isSafeRelativePath("docs//a.md"));
+}
+
+test "parseGitHubOwnerRepo rejects malformed owner/repo path" {
+    try std.testing.expectError(
+        GitError.InvalidGitHubUrl,
+        parseGitHubOwnerRepo(std.testing.allocator, "https://github.com/owner/repo/extra.git"),
+    );
+    try std.testing.expectError(
+        GitError.InvalidGitHubUrl,
+        parseGitHubOwnerRepo(std.testing.allocator, "https://github.com/owner/../repo.git"),
+    );
+}
+
+test "integration: findOpenPullRequestByHead rejects invalid branch ref" {
+    try std.testing.expectError(
+        GitError.InvalidGitRef,
+        findOpenPullRequestByHead(std.testing.allocator, "https://github.com/org/repo.git", "../bad", "token", null),
+    );
 }
