@@ -1,0 +1,164 @@
+const std = @import("std");
+
+const db = @import("../db/pool.zig");
+const runtime_config = @import("../config/runtime.zig");
+const events_bus = @import("../events/bus.zig");
+const clerk_auth = @import("../auth/clerk.zig");
+const http_server = @import("../http/server.zig");
+const http_handler = @import("../http/handler.zig");
+const worker = @import("../pipeline/worker.zig");
+const common = @import("common.zig");
+
+const log = std.log.scoped(.zombied);
+
+var shutdown_requested = std.atomic.Value(bool).init(false);
+
+fn onSignal(sig: i32) callconv(.c) void {
+    _ = sig;
+    shutdown_requested.store(true, .release);
+}
+
+fn installSignalHandlers() void {
+    const action = std.posix.Sigaction{
+        .handler = .{ .handler = onSignal },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(std.posix.SIG.INT, &action, null);
+    std.posix.sigaction(std.posix.SIG.TERM, &action, null);
+}
+
+fn signalWatcher(wstate: *worker.WorkerState) void {
+    while (!shutdown_requested.load(.acquire)) {
+        std.Thread.sleep(100 * std.time.ns_per_ms);
+    }
+
+    wstate.running.store(false, .release);
+    http_server.stop();
+}
+
+pub fn run(alloc: std.mem.Allocator) !void {
+    log.info("starting zombied serve", .{});
+
+    var serve_cfg = runtime_config.ServeConfig.load(alloc) catch |err| {
+        switch (err) {
+            runtime_config.ValidationError.MissingApiKey,
+            runtime_config.ValidationError.InvalidApiKeyList,
+            runtime_config.ValidationError.MissingClerkJwksUrl,
+            runtime_config.ValidationError.MissingEncryptionMasterKey,
+            runtime_config.ValidationError.InvalidEncryptionMasterKey,
+            runtime_config.ValidationError.MissingGitHubAppId,
+            runtime_config.ValidationError.MissingGitHubAppPrivateKey,
+            runtime_config.ValidationError.InvalidPort,
+            runtime_config.ValidationError.InvalidMaxAttempts,
+            runtime_config.ValidationError.InvalidWorkerConcurrency,
+            runtime_config.ValidationError.InvalidRunTimeoutMs,
+            runtime_config.ValidationError.InvalidRateLimitCapacity,
+            runtime_config.ValidationError.InvalidRateLimitRefillPerSec,
+            runtime_config.ValidationError.InvalidReadyMaxQueueDepth,
+            runtime_config.ValidationError.InvalidReadyMaxQueueAgeMs,
+            => runtime_config.ServeConfig.printValidationError(err),
+            else => std.debug.print("fatal: failed to load runtime config: {}\n", .{err}),
+        }
+        std.process.exit(1);
+    };
+    defer serve_cfg.deinit();
+
+    const api_pool = db.initFromEnvForRole(alloc, .api) catch |err| {
+        std.debug.print("fatal: api database init failed: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer api_pool.deinit();
+
+    const worker_pool = db.initFromEnvForRole(alloc, .worker) catch |err| {
+        std.debug.print("fatal: worker database init failed: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer worker_pool.deinit();
+
+    common.runCanonicalMigrations(api_pool) catch |err| {
+        std.debug.print("fatal: schema migration failed: {}\n", .{err});
+        std.process.exit(1);
+    };
+
+    std.fs.makeDirAbsolute(serve_cfg.cache_root) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => log.warn("could not create cache root {s}: {}", .{ serve_cfg.cache_root, err }),
+    };
+
+    var wstate = worker.WorkerState.init();
+
+    var ctx = http_handler.Context{
+        .pool = api_pool,
+        .alloc = alloc,
+        .api_keys = serve_cfg.api_keys,
+        .clerk = null,
+        .worker_state = &wstate,
+        .ready_max_queue_depth = serve_cfg.ready_max_queue_depth,
+        .ready_max_queue_age_ms = serve_cfg.ready_max_queue_age_ms,
+    };
+
+    var clerk = if (serve_cfg.clerk_enabled) clerk_auth.Verifier.init(alloc, .{
+        .jwks_url = serve_cfg.clerk_jwks_url orelse "",
+        .issuer = serve_cfg.clerk_issuer,
+        .audience = serve_cfg.clerk_audience,
+    }) else null;
+    defer if (clerk) |*v| v.deinit();
+    if (clerk) |*v| ctx.clerk = v;
+
+    const wcfg = worker.WorkerConfig{
+        .pool = worker_pool,
+        .config_dir = serve_cfg.config_dir,
+        .cache_root = serve_cfg.cache_root,
+        .github_app_id = serve_cfg.github_app_id,
+        .github_app_private_key = serve_cfg.github_app_private_key,
+        .pipeline_profile_path = serve_cfg.pipeline_profile_path,
+        .max_attempts = serve_cfg.max_attempts,
+        .run_timeout_ms = serve_cfg.run_timeout_ms,
+        .rate_limit_capacity = serve_cfg.rate_limit_capacity,
+        .rate_limit_refill_per_sec = serve_cfg.rate_limit_refill_per_sec,
+    };
+
+    shutdown_requested.store(false, .release);
+    installSignalHandlers();
+
+    var event_bus = events_bus.Bus.init();
+    events_bus.install(&event_bus);
+    defer events_bus.uninstall();
+
+    const worker_count: usize = @max(@as(usize, @intCast(serve_cfg.worker_concurrency)), 1);
+    var worker_threads = try alloc.alloc(std.Thread, worker_count);
+    defer alloc.free(worker_threads);
+    var spawned_workers: usize = 0;
+    var signal_thread: ?std.Thread = null;
+    var event_thread: ?std.Thread = null;
+    errdefer {
+        wstate.running.store(false, .release);
+        shutdown_requested.store(true, .release);
+        event_bus.stop();
+        if (signal_thread) |*t| t.join();
+        if (event_thread) |*t| t.join();
+        while (spawned_workers > 0) {
+            spawned_workers -= 1;
+            worker_threads[spawned_workers].join();
+        }
+    }
+    for (worker_threads) |*t| {
+        t.* = try std.Thread.spawn(.{}, worker.workerLoop, .{ wcfg, &wstate });
+        spawned_workers += 1;
+    }
+    signal_thread = try std.Thread.spawn(.{}, signalWatcher, .{&wstate});
+    event_thread = try std.Thread.spawn(.{}, events_bus.runThread, .{&event_bus});
+
+    log.info("HTTP server starting port={d} worker_concurrency={d}", .{ serve_cfg.port, worker_count });
+    http_server.serve(&ctx, .{ .port = serve_cfg.port }) catch |err| {
+        log.err("http server exited with error: {}", .{err});
+    };
+
+    wstate.running.store(false, .release);
+    shutdown_requested.store(true, .release);
+    event_bus.stop();
+    for (worker_threads) |*t| t.join();
+    if (signal_thread) |*t| t.join();
+    if (event_thread) |*t| t.join();
+}
