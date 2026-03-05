@@ -17,7 +17,7 @@
 This workstream contains the must-have reliability and safety guardrails deferred when closing M3_001.
 
 **Dimensions:**
-- 1.1 IN_PROGRESS D2 Allocation normalization (per-run allocator model + reduced manual free churn; run-claim arena normalization + limiter key lookup stack-fast-path + side-effect key stack formatting + key-churn leak stress coverage landed)
+- 1.1 IN_PROGRESS D2 Allocation normalization (per-run allocator model + reduced manual free churn; run-claim arena normalization + limiter key lookup stack-fast-path + side-effect key stack-fast-path with heap fallback + key-churn leak stress coverage landed)
 - 1.2 PENDING D3 Async/API throughput model (beyond thread-level parallelism)
 - 1.3 DONE D5 Reliability wrappers + durable outbox/dead-letter baseline
 - 1.4 DONE D6 Rate-limit policy hardening (tenant + provider semantics)
