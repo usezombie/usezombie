@@ -10,6 +10,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const db = @import("db/pool.zig");
+const runtime_config = @import("config/runtime.zig");
 const http_server = @import("http/server.zig");
 const http_handler = @import("http/handler.zig");
 const worker = @import("pipeline/worker.zig");
@@ -155,12 +156,25 @@ fn runCanonicalMigrations(pool: *db.Pool) !void {
 fn cmdServe(alloc: std.mem.Allocator) !void {
     log.info("starting zombied serve", .{});
 
-    const port_str = std.process.getEnvVarOwned(alloc, "PORT") catch null;
-    defer if (port_str) |ps| alloc.free(ps);
-    const port: u16 = if (port_str) |ps| std.fmt.parseInt(u16, ps, 10) catch {
-        std.debug.print("fatal: invalid PORT value: {s}\n", .{ps});
+    var serve_cfg = runtime_config.ServeConfig.load(alloc) catch |err| {
+        switch (err) {
+            runtime_config.ValidationError.MissingApiKey,
+            runtime_config.ValidationError.InvalidApiKeyList,
+            runtime_config.ValidationError.MissingEncryptionMasterKey,
+            runtime_config.ValidationError.InvalidEncryptionMasterKey,
+            runtime_config.ValidationError.MissingGitHubAppId,
+            runtime_config.ValidationError.MissingGitHubAppPrivateKey,
+            runtime_config.ValidationError.InvalidPort,
+            runtime_config.ValidationError.InvalidMaxAttempts,
+            runtime_config.ValidationError.InvalidWorkerConcurrency,
+            runtime_config.ValidationError.InvalidRateLimitCapacity,
+            runtime_config.ValidationError.InvalidRateLimitRefillPerSec,
+            => runtime_config.ServeConfig.printValidationError(err),
+            else => std.debug.print("fatal: failed to load runtime config: {}\n", .{err}),
+        }
         std.process.exit(1);
-    } else 3000;
+    };
+    defer serve_cfg.deinit();
 
     const api_pool = db.initFromEnvForRole(alloc, .api) catch |err| {
         std.debug.print("fatal: api database init failed: {}\n", .{err});
@@ -179,91 +193,9 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
         std.process.exit(1);
     };
 
-    const api_keys = std.process.getEnvVarOwned(alloc, "API_KEY") catch {
-        std.debug.print("fatal: API_KEY not set\n", .{});
-        std.process.exit(1);
-    };
-    defer alloc.free(api_keys);
-    {
-        var it = std.mem.tokenizeScalar(u8, api_keys, ',');
-        var has_key = false;
-        while (it.next()) |candidate_raw| {
-            if (std.mem.trim(u8, candidate_raw, " \t").len > 0) {
-                has_key = true;
-                break;
-            }
-        }
-        if (!has_key) {
-            std.debug.print("fatal: API_KEY has no usable keys\n", .{});
-            std.process.exit(1);
-        }
-    }
-
-    const encryption_master_key = std.process.getEnvVarOwned(alloc, "ENCRYPTION_MASTER_KEY") catch {
-        std.debug.print("fatal: ENCRYPTION_MASTER_KEY not set\n", .{});
-        std.process.exit(1);
-    };
-    defer alloc.free(encryption_master_key);
-    if (encryption_master_key.len != 64 or !isHexString(encryption_master_key)) {
-        std.debug.print("fatal: ENCRYPTION_MASTER_KEY must be 64 hex chars\n", .{});
-        std.process.exit(1);
-    }
-
-    const cache_root = std.process.getEnvVarOwned(alloc, "GIT_CACHE_ROOT") catch
-        try alloc.dupe(u8, "/tmp/zombie-git-cache");
-    defer alloc.free(cache_root);
-
-    const github_app_id = std.process.getEnvVarOwned(alloc, "GITHUB_APP_ID") catch
-        try alloc.dupe(u8, "");
-    defer alloc.free(github_app_id);
-    if (github_app_id.len == 0) {
-        std.debug.print("fatal: GITHUB_APP_ID not set\n", .{});
-        std.process.exit(1);
-    }
-
-    const github_app_private_key = std.process.getEnvVarOwned(alloc, "GITHUB_APP_PRIVATE_KEY") catch
-        try alloc.dupe(u8, "");
-    defer alloc.free(github_app_private_key);
-    if (github_app_private_key.len == 0) {
-        std.debug.print("fatal: GITHUB_APP_PRIVATE_KEY not set\n", .{});
-        std.process.exit(1);
-    }
-
-    const config_dir = std.process.getEnvVarOwned(alloc, "AGENT_CONFIG_DIR") catch
-        try alloc.dupe(u8, "./config");
-    defer alloc.free(config_dir);
-
-    const max_attempts_str = std.process.getEnvVarOwned(alloc, "DEFAULT_MAX_ATTEMPTS") catch null;
-    defer if (max_attempts_str) |s| alloc.free(s);
-    const max_attempts: u32 = if (max_attempts_str) |s| std.fmt.parseInt(u32, s, 10) catch {
-        std.debug.print("fatal: invalid DEFAULT_MAX_ATTEMPTS value: {s}\n", .{s});
-        std.process.exit(1);
-    } else 3;
-
-    const worker_concurrency_str = std.process.getEnvVarOwned(alloc, "WORKER_CONCURRENCY") catch null;
-    defer if (worker_concurrency_str) |s| alloc.free(s);
-    const worker_concurrency: u32 = if (worker_concurrency_str) |s| std.fmt.parseInt(u32, s, 10) catch {
-        std.debug.print("fatal: invalid WORKER_CONCURRENCY value: {s}\n", .{s});
-        std.process.exit(1);
-    } else 1;
-
-    const rate_capacity_str = std.process.getEnvVarOwned(alloc, "RATE_LIMIT_CAPACITY") catch null;
-    defer if (rate_capacity_str) |s| alloc.free(s);
-    const rate_limit_capacity: u32 = if (rate_capacity_str) |s| std.fmt.parseInt(u32, s, 10) catch {
-        std.debug.print("fatal: invalid RATE_LIMIT_CAPACITY value: {s}\n", .{s});
-        std.process.exit(1);
-    } else 30;
-
-    const rate_refill_str = std.process.getEnvVarOwned(alloc, "RATE_LIMIT_REFILL_PER_SEC") catch null;
-    defer if (rate_refill_str) |s| alloc.free(s);
-    const rate_limit_refill_per_sec: f64 = if (rate_refill_str) |s| std.fmt.parseFloat(f64, s) catch {
-        std.debug.print("fatal: invalid RATE_LIMIT_REFILL_PER_SEC value: {s}\n", .{s});
-        std.process.exit(1);
-    } else 5.0;
-
-    std.fs.makeDirAbsolute(cache_root) catch |err| switch (err) {
+    std.fs.makeDirAbsolute(serve_cfg.cache_root) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => log.warn("could not create cache root {s}: {}", .{ cache_root, err }),
+        else => log.warn("could not create cache root {s}: {}", .{ serve_cfg.cache_root, err }),
     };
 
     var wstate = worker.WorkerState.init();
@@ -271,25 +203,25 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
     var ctx = http_handler.Context{
         .pool = api_pool,
         .alloc = alloc,
-        .api_keys = api_keys,
+        .api_keys = serve_cfg.api_keys,
         .worker_state = &wstate,
     };
 
     const wcfg = worker.WorkerConfig{
         .pool = worker_pool,
-        .config_dir = config_dir,
-        .cache_root = cache_root,
-        .github_app_id = github_app_id,
-        .github_app_private_key = github_app_private_key,
-        .max_attempts = max_attempts,
-        .rate_limit_capacity = rate_limit_capacity,
-        .rate_limit_refill_per_sec = rate_limit_refill_per_sec,
+        .config_dir = serve_cfg.config_dir,
+        .cache_root = serve_cfg.cache_root,
+        .github_app_id = serve_cfg.github_app_id,
+        .github_app_private_key = serve_cfg.github_app_private_key,
+        .max_attempts = serve_cfg.max_attempts,
+        .rate_limit_capacity = serve_cfg.rate_limit_capacity,
+        .rate_limit_refill_per_sec = serve_cfg.rate_limit_refill_per_sec,
     };
 
     shutdown_requested.store(false, .release);
     installSignalHandlers();
 
-    const worker_count: usize = @max(@as(usize, @intCast(worker_concurrency)), 1);
+    const worker_count: usize = @max(@as(usize, @intCast(serve_cfg.worker_concurrency)), 1);
     var worker_threads = try alloc.alloc(std.Thread, worker_count);
     defer alloc.free(worker_threads);
     var spawned_workers: usize = 0;
@@ -306,8 +238,8 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
     }
     const signal_thread = try std.Thread.spawn(.{}, signalWatcher, .{&wstate});
 
-    log.info("HTTP server starting port={d} worker_concurrency={d}", .{ port, worker_count });
-    http_server.serve(&ctx, .{ .port = port }) catch |err| {
+    log.info("HTTP server starting port={d} worker_concurrency={d}", .{ serve_cfg.port, worker_count });
+    http_server.serve(&ctx, .{ .port = serve_cfg.port }) catch |err| {
         log.err("http server exited with error: {}", .{err});
     };
 

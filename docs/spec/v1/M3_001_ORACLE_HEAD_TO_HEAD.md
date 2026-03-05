@@ -56,7 +56,7 @@
 | 17 | ⚠️ Partial | Versioned migrations + tx done; SQL splitting remains heuristic |
 | 18 | ⚠️ Partial | `/healthz` + `/readyz` improved, and `/readyz` now exposes queue depth + oldest age; richer readiness policy is still missing |
 | 19 | ⚠️ Partial | `/metrics` endpoint + core counters are available; observer wiring and correlation propagation are still missing |
-| 20 | ⚠️ Partial | Serve now fails fast on invalid critical config and supports API key rotation; secret versioning/rotation model is still missing |
+| 20 | ⚠️ Partial | Serve-time config is now centralized in `src/config/runtime.zig`, fail-fast on critical env is active, and API key rotation is supported; secret versioning/rotation model is still missing |
 | 21 | ⚠️ Partial | Unit/integration/e2e targets added; coverage measurement and deeper module tests still missing |
 | 22 | ✅ Fixed | Comment policy section exists and is aligned with current style |
 
@@ -749,7 +749,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 
 | File | Line | Issue |
 |------|------|-------|
-| `src/main.zig` | 151–241 | Fail-fast checks now cover `PORT`, GitHub app env, key format, and numeric config parsing, but readiness does not yet report config drift |
+| `src/config/runtime.zig` + `src/main.zig` | `ServeConfig.load` + `cmdServe` wiring | Runtime config validation is centralized and fail-fast, but readiness still does not expose config/dependency drift signals |
 | `src/http/handler.zig` | 58–74 | `API_KEY` now supports comma-separated rotation window, but key source is still static env and not vaulted per tenant |
 | `src/secrets/crypto.zig` | 21–32 | Master key loaded from env still has no key version prefix and no online rotation flow |
 
