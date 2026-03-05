@@ -198,6 +198,14 @@ const QueueHealth = struct {
     oldest_queued_age_ms: ?i64,
 };
 
+const ReadyInputs = struct {
+    db_ok: bool,
+    worker_ok: bool,
+    queue_dependency_ok: bool,
+    queue_depth_breached: bool,
+    queue_age_breached: bool,
+};
+
 fn queueHealth(ctx: *Context) ?QueueHealth {
     var conn = ctx.pool.acquire() catch return null;
     defer ctx.pool.release(conn);
@@ -218,6 +226,22 @@ fn queueHealth(ctx: *Context) ?QueueHealth {
         .queued_count = queued_count,
         .oldest_queued_age_ms = oldest_age_ms,
     };
+}
+
+fn queueDependencyHealthy(ctx: *Context) bool {
+    ctx.queue.readyCheck() catch |err| {
+        obs_log.logWarnErr(.http, err, "readyz: redis queue dependency check failed", .{});
+        return false;
+    };
+    return true;
+}
+
+fn readyDecision(inputs: ReadyInputs) bool {
+    return inputs.db_ok and
+        inputs.worker_ok and
+        inputs.queue_dependency_ok and
+        !inputs.queue_depth_breached and
+        !inputs.queue_age_breached;
 }
 
 pub fn handleHealthz(ctx: *Context, r: zap.Request) void {
@@ -241,6 +265,7 @@ pub fn handleHealthz(ctx: *Context, r: zap.Request) void {
 pub fn handleReadyz(ctx: *Context, r: zap.Request) void {
     const db_ok = databaseHealthy(ctx);
     const worker_ok = ctx.worker_state.running.load(.acquire);
+    const queue_dependency_ok = queueDependencyHealthy(ctx);
     const qh = if (db_ok) queueHealth(ctx) else null;
 
     var queue_depth_breached = false;
@@ -256,11 +281,18 @@ pub fn handleReadyz(ctx: *Context, r: zap.Request) void {
         }
     }
 
-    if (!db_ok or !worker_ok or queue_depth_breached or queue_age_breached) {
+    if (!readyDecision(.{
+        .db_ok = db_ok,
+        .worker_ok = worker_ok,
+        .queue_dependency_ok = queue_dependency_ok,
+        .queue_depth_breached = queue_depth_breached,
+        .queue_age_breached = queue_age_breached,
+    })) {
         writeJson(r, .service_unavailable, .{
             .ready = false,
             .database = db_ok,
             .worker = worker_ok,
+            .queue_dependency = queue_dependency_ok,
             .queue_depth = if (qh) |v| v.queued_count else null,
             .oldest_queued_age_ms = if (qh) |v| v.oldest_queued_age_ms else null,
             .queue_depth_breached = queue_depth_breached,
@@ -275,6 +307,7 @@ pub fn handleReadyz(ctx: *Context, r: zap.Request) void {
         .ready = true,
         .database = true,
         .worker = true,
+        .queue_dependency = true,
         .queue_depth = if (qh) |v| v.queued_count else @as(i64, 0),
         .oldest_queued_age_ms = if (qh) |v| v.oldest_queued_age_ms else null,
         .queue_depth_breached = false,
@@ -764,6 +797,36 @@ test "integration: endApiRequest decrements in-flight counter deterministically"
     try std.testing.expect(beginApiRequest(&ctx));
     endApiRequest(&ctx);
     try std.testing.expectEqual(@as(u32, 0), ctx.api_in_flight_requests.load(.acquire));
+}
+
+test "integration: ready decision fails closed when redis queue dependency is degraded" {
+    try std.testing.expect(!readyDecision(.{
+        .db_ok = true,
+        .worker_ok = true,
+        .queue_dependency_ok = false,
+        .queue_depth_breached = false,
+        .queue_age_breached = false,
+    }));
+}
+
+test "integration: ready decision fails during worker restart window" {
+    try std.testing.expect(!readyDecision(.{
+        .db_ok = true,
+        .worker_ok = false,
+        .queue_dependency_ok = true,
+        .queue_depth_breached = false,
+        .queue_age_breached = false,
+    }));
+}
+
+test "integration: ready decision passes when dependencies and guardrails are healthy" {
+    try std.testing.expect(readyDecision(.{
+        .db_ok = true,
+        .worker_ok = true,
+        .queue_dependency_ok = true,
+        .queue_depth_breached = false,
+        .queue_age_breached = false,
+    }));
 }
 
 fn openHandlerTestConn(alloc: std.mem.Allocator) !?struct { pool: *db.Pool, conn: *pg.Conn } {

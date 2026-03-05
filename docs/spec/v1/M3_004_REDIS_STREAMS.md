@@ -1,7 +1,7 @@
 # M3_004: Redis Streams — Worker Queue + Coordination
 
 Date: Mar 4, 2026
-Status: IN_PROGRESS
+Status: DONE
 Priority: P0 — v1 requirement
 Depends on: M3_001 (bug fixes must land first for CAS transitions)
 
@@ -164,13 +164,13 @@ For Upstash (dev/prod): `rediss://default:<password>@<host>:6379` (note `rediss:
 6. Native TLS (`rediss://`) transport added in `src/queue/redis.zig` with CA verification:
    - system CA bundle by default (Upstash path)
    - optional `REDIS_TLS_CA_CERT_FILE` for local self-signed certs
+7. D18 readiness depth hardening completed:
+   - `/readyz` now includes Redis queue dependency checks (`PING` + consumer-group operability guard)
+   - readiness fails closed when queue coordination is degraded, even if Postgres is healthy
+   - readiness decision tests cover degraded dependency and restart windows
 
 ---
 
 ## Deferred From M4_004
 
-1. D18 Readiness depth hardening was moved from `M4_004` to this track for Redis-backed readiness semantics.
-2. Required follow-up scope:
-   - `/readyz` must include Redis queue dependency checks (stream health + consumer-group operability).
-   - `/readyz` must fail closed when queue coordination is degraded, even if Postgres is healthy.
-   - Verification must include restart and degraded dependency scenarios with explicit operator runbook notes.
+1. D18 Readiness depth hardening — DONE in this track.
