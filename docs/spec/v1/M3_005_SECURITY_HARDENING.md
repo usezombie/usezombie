@@ -3,7 +3,15 @@
 Date: Mar 4, 2026
 Status: PENDING
 Priority: P0 — v1 requirement
-Depends on: M3_000 (secrets/schema separation), M3_004 (Redis integration)
+Depends on: M3_000 (secrets/schema separation), M3_004 completion for Redis ACL validation
+
+---
+
+## Execution Position Recommendation
+
+- Start immediately after M3_001/M3_000 for DB-role verification, TLS posture, and doctor checks.
+- Run Redis ACL implementation/verification once M3_004 stream transport is in place.
+- Treat this as split execution: `M3_005A` (can start now) and `M3_005B` (close after M3_004).
 
 ---
 

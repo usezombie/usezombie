@@ -2,9 +2,9 @@
 
 > **Generated**: 2026-03-04  
 > **Oracle model**: GPT-5.2 (via Amp oracle tool)  
-> **Purpose**: Comparative Zig code review across 10 reliability/operability dimensions.  
+> **Purpose**: Comparative Zig code review across 22 reliability/operability dimensions.  
 > **Status**: ✅ DONE (Mar 05, 2026)  
-> **Action**: This spec is a reference for agents planning M3+ work. No code changes in this thread.
+> **Action**: Milestone closed. Completed dimensions are recorded here; deferred dimensions are moved to M4 follow-on specs.
 
 ---
 
@@ -33,32 +33,32 @@
 | 9 | Logging on errors | **High** | Critical silent catches reduced; richer classification/context remains incomplete | Classification + context + correlation IDs |
 | 10 | Error code classification | **Critical** | `error_classify.zig` wired in worker with explicit `AUTH_FAILED`/`RATE_LIMITED` reason codes; API-layer mapping still coarse | `error_classify.zig`: rate_limited / context_exhausted / auth / server_error |
 
-### Oracle Verification Snapshot (Mar 05, 2026)
+### Milestone Closure Snapshot (Mar 05, 2026)
 
-| # | Status | Missing / remaining work |
-|---|---|---|
-| 1 | ✅ Fixed | `src/git/ops.zig` now uses a `CommandResources` lifecycle wrapper (`spawn`/timeout/read/deinit), and agent restricted tool builders are consolidated in `src/pipeline/agents.zig` |
-| 2 | ⚠️ Partial | Per-run arena added in worker, but allocator/thread model not fully normalized |
-| 3 | ⚠️ Partial | Worker concurrency is now configurable with multiple threads; provider/tool dispatch is still blocking/sequential per run |
-| 4 | ⚠️ Partial | `src/events/bus.zig` provides bounded queue + background sink; state/policy/agent events are now emitted through the bus, but no persistent replay/outbox exists |
-| 5 | ⚠️ Partial | `reliable_call` now wraps Scout/Warden and GitHub token/push/PR paths (with PR response detail plumbing); outbox/dead-letter and circuit breaker are still missing |
-| 6 | ⚠️ Partial | Tenant token-bucket throttling now gates Echo/Scout/Warden calls; provider-level quotas and distributed state are still missing |
-| 7 | ⚠️ Partial | Worker loop and run retry now use exponential+jitter backoff; PR HTTP `Retry-After` is plumbed, but provider/API responses are not yet end-to-end |
-| 8 | ⚠️ Partial | Structured key/value logger and LogObserver wiring are in place; correlation IDs and durable log sink strategy are still missing |
-| 9 | ⚠️ Partial | Shared error-context helper now covers key worker/http catch boundaries; full classification/context consistency is still missing |
-| 10 | ⚠️ Partial | `error_classify` drives worker failure mapping with explicit auth/quota reason codes; richer provider payload parsing and HTTP/API harmonization are still missing |
-| 11 | ⚠️ Partial | Path canonicalization + hook disable done; env scrubbing/sandbox hardening still pending |
-| 12 | ⚠️ Partial | Signal handling + join done; stale worktree startup cleanup still missing |
-| 13 | ⚠️ Partial | Claim transaction + CAS done; idempotency conflict flow still not fully race-safe at handler level |
-| 14 | ⚠️ Partial | PR dedupe and no-op commit handling done; no side-effect ledger |
-| 15 | ⚠️ Partial | Git/curl timeouts and per-run deadline gating are in place; direct agent-call cancellation tokening is still missing |
-| 16 | ⚠️ Partial | Main allocator is now thread-safe and worker concurrency is configurable; global leak-reporting/thread-safety guardrails still need tightening |
-| 17 | ⚠️ Partial | Versioned migrations + tx + dedicated `migrate` command are in place; SQL splitting remains heuristic and `serve` still auto-migrates |
-| 18 | ⚠️ Partial | `/healthz` + `/readyz` improved, and `/readyz` now supports queue depth/age thresholds; migration/dependency readiness gates are still missing |
-| 19 | ⚠️ Partial | `/metrics` now exposes core counters + duration histograms, observer wiring is enabled, and `request_id` is propagated through API/worker/state/policy lifecycle events; trace-level correlation is still missing |
-| 20 | ⚠️ Partial | Serve-time config is now centralized in `src/config/runtime.zig`, fail-fast on critical env is active, and API key rotation is supported; secret versioning/rotation model is still missing |
-| 21 | ⚠️ Partial | Unit/integration/e2e targets added; coverage measurement and deeper module tests still missing |
-| 22 | ✅ Fixed | Comment policy section exists and is aligned with current style |
+| # | Dimension | Status marker | Milestone disposition |
+|---|-----------|---------------|-----------------------|
+| 1 | Memory lifecycle cleanup | ✅ DONE | Completed in M3_001 |
+| 2 | Allocation best practices | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 3 | Async/API performance | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 4 | Event bus / actor dispatch | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_005_DEFERRED_EVENTS_OBSERVABILITY_CONFIG.md` |
+| 5 | Reliability & retry | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 6 | Rate limiting | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 7 | Backoff | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 8 | Structured logging backend | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_005_DEFERRED_EVENTS_OBSERVABILITY_CONFIG.md` |
+| 9 | Error-context logging | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 10 | Error classification | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 11 | Secure execution boundary | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 12 | Graceful shutdown | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 13 | Transactional correctness | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 14 | Side-effect idempotency | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 15 | Timeouts & cancellation | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 16 | Thread safety / allocator guards | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 17 | Schema migration safety | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 18 | Health/readiness depth | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 19 | Metrics / telemetry / tracing | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_005_DEFERRED_EVENTS_OBSERVABILITY_CONFIG.md` |
+| 20 | Config validation/secret hygiene | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_005_DEFERRED_EVENTS_OBSERVABILITY_CONFIG.md` |
+| 21 | Coverage and test depth | ⏭ DEFERRED | Deferred to `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md` |
+| 22 | Comment policy | ✅ DONE | Completed in M3_001 |
 
 ---
 
