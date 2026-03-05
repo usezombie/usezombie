@@ -4,7 +4,7 @@
 **Milestone:** M4
 **Workstream:** 003
 **Date:** Mar 05, 2026
-**Status:** DONE
+**Status:** SUPERSEDED (stale spec)
 **Priority:** P0 — start before CLI freeze
 **Depends on:** M3_001 reliability hardening baseline
 
@@ -52,14 +52,7 @@ Preserve default v1 behavior while enabling extension through config changes.
 
 ## Supersession Boundary
 
-`M4_003` is the runtime baseline only (profile-driven stage execution in worker/runtime).
-
-Harness control-plane ownership is in `M5_002`, including:
-- multi-tenant profile APIs and DB model
-- compile/validate/activate lifecycle
-- workspace policy/quotas and control-plane observability
-
-`M5_002` depends on this baseline and does not replace it.
+This document is stale and archived. Active control-plane commitments live in `M5_002`.
 
 ---
 
