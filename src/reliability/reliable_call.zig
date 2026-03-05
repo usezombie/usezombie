@@ -11,7 +11,31 @@ pub const RetryOptions = struct {
     base_delay_ms: u64 = 500,
     max_delay_ms: u64 = 30_000,
     operation_name: ?[]const u8 = null,
+    cancel_flag: ?*const std.atomic.Value(bool) = null,
+    deadline_ms: ?i64 = null,
+    cancel_error: anyerror = error.ShutdownRequested,
+    deadline_error: anyerror = error.RunDeadlineExceeded,
 };
+
+fn checkAbort(opts: RetryOptions) !void {
+    if (opts.cancel_flag) |flag| {
+        if (!flag.load(.acquire)) return opts.cancel_error;
+    }
+    if (opts.deadline_ms) |deadline| {
+        if (std.time.milliTimestamp() > deadline) return opts.deadline_error;
+    }
+}
+
+fn sleepCooperative(delay_ms: u64, opts: RetryOptions) !void {
+    var remaining = delay_ms;
+    while (true) {
+        try checkAbort(opts);
+        if (remaining == 0) return;
+        const slice_ms: u64 = @min(remaining, 100);
+        std.Thread.sleep(slice_ms * std.time.ns_per_ms);
+        remaining -= slice_ms;
+    }
+}
 
 pub fn call(
     comptime T: type,
@@ -36,6 +60,7 @@ pub fn callWithDetail(
     var attempt: u32 = 0;
 
     while (true) {
+        try checkAbort(opts);
         const result = operation(ctx, attempt) catch |err| {
             const classified = classifier.classify(err, detail_for_error(ctx, err));
             if (!classified.retryable or attempt >= opts.max_retries) {
@@ -61,7 +86,7 @@ pub fn callWithDetail(
                 @errorName(err),
             });
 
-            std.Thread.sleep(delay_ms * std.time.ns_per_ms);
+            try sleepCooperative(delay_ms, opts);
             attempt += 1;
             continue;
         };
@@ -140,4 +165,37 @@ test "integration: reliable call retries until max_retries then returns error" {
     }.op, .{ .max_retries = 2, .base_delay_ms = 1, .max_delay_ms = 2 }));
 
     try std.testing.expectEqual(@as(u32, 3), Ctx.calls);
+}
+
+test "reliable call aborts immediately when cancel flag is false" {
+    var running = std.atomic.Value(bool).init(false);
+    try std.testing.expectError(error.ShutdownRequested, call(i32, {}, struct {
+        fn op(_: @TypeOf({}), _: u32) !i32 {
+            return 1;
+        }
+    }.op, .{
+        .max_retries = 1,
+        .base_delay_ms = 1,
+        .max_delay_ms = 2,
+        .cancel_flag = &running,
+    }));
+}
+
+test "integration: reliable call aborts during retry backoff on deadline" {
+    const Ctx = struct {
+        var calls: u32 = 0;
+    };
+    Ctx.calls = 0;
+    try std.testing.expectError(error.RunDeadlineExceeded, call(i32, {}, struct {
+        fn op(_: @TypeOf({}), _: u32) !i32 {
+            Ctx.calls += 1;
+            return error.CommandTimedOut;
+        }
+    }.op, .{
+        .max_retries = 3,
+        .base_delay_ms = 200,
+        .max_delay_ms = 200,
+        .deadline_ms = std.time.milliTimestamp() + 10,
+    }));
+    try std.testing.expect(Ctx.calls >= 1);
 }
