@@ -4,9 +4,15 @@
 
 .PHONY: test test-unit test-integration test-e2e
 
+ZIG_GLOBAL_CACHE_DIR ?= $(CURDIR)/.tmp/zig-global-cache
+ZIG_LOCAL_CACHE_DIR ?= $(CURDIR)/.tmp/zig-local-cache
+
 test-unit:  ## Run unit tests
 	@echo "→ Running unit tests..."
-	@zig build test
+	@mkdir -p "$(ZIG_GLOBAL_CACHE_DIR)" "$(ZIG_LOCAL_CACHE_DIR)"
+	@ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
+	 ZIG_LOCAL_CACHE_DIR="$(ZIG_LOCAL_CACHE_DIR)" \
+	 zig build test
 
 test-integration:  ## Run integration checks against a running local service
 	@echo "→ Running integration checks..."
