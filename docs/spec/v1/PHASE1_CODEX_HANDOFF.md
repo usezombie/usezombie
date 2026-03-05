@@ -46,7 +46,7 @@ M3_007 (Website) ──── independent, parallel ─────────�
 
 ## ✅ DONE: Step 1 — M3_001 Critical Bug Fixes
 
-Reference: `docs/spec/v1/M3_001_ORACLE_HEAD_TO_HEAD.md` (dimensions 5, 7, 11-20)
+Reference: `docs/spec/v1/M3_001_ORACLE_HEAD_TO_HEAD.md` (dimensions 5, 7, 10, 11-20)
 
 ### ✅ DONE: 1.1 Transaction wrapping for run claiming
 
