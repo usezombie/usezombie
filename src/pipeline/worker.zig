@@ -15,6 +15,7 @@ const secrets = @import("../secrets/crypto.zig");
 const backoff = @import("../reliability/backoff.zig");
 const err_classify = @import("../reliability/error_classify.zig");
 const reliable = @import("../reliability/reliable_call.zig");
+const rate_limit = @import("../reliability/rate_limit.zig");
 const log = std.log.scoped(.worker);
 
 // ── Worker configuration ──────────────────────────────────────────────────
@@ -27,6 +28,8 @@ pub const WorkerConfig = struct {
     github_app_private_key: []const u8,
     max_attempts: u32 = 3,
     poll_interval_ms: u64 = 2_000,
+    rate_limit_capacity: u32 = 30,
+    rate_limit_refill_per_sec: f64 = 5.0,
 };
 
 // ── Worker state shared between HTTP and worker threads ──────────────────
@@ -63,6 +66,49 @@ const ProcessOutcome = enum {
     worked,
 };
 
+const TenantRateLimiter = struct {
+    alloc: std.mem.Allocator,
+    buckets: std.StringHashMap(rate_limit.TokenBucket),
+    capacity: u32,
+    refill_per_sec: f64,
+
+    fn init(alloc: std.mem.Allocator, capacity: u32, refill_per_sec: f64) TenantRateLimiter {
+        return .{
+            .alloc = alloc,
+            .buckets = std.StringHashMap(rate_limit.TokenBucket).init(alloc),
+            .capacity = capacity,
+            .refill_per_sec = refill_per_sec,
+        };
+    }
+
+    fn deinit(self: *TenantRateLimiter) void {
+        var it = self.buckets.iterator();
+        while (it.next()) |entry| self.alloc.free(entry.key_ptr.*);
+        self.buckets.deinit();
+    }
+
+    fn acquire(self: *TenantRateLimiter, tenant_id: []const u8, cost: f64) !void {
+        while (true) {
+            const now_ms = std.time.milliTimestamp();
+            const bucket = try self.getOrCreateBucket(tenant_id, now_ms);
+            if (bucket.allow(now_ms, cost)) return;
+
+            const wait_ms = @max(bucket.waitMsUntil(now_ms, cost), 1);
+            std.Thread.sleep(wait_ms * std.time.ns_per_ms);
+        }
+    }
+
+    fn getOrCreateBucket(self: *TenantRateLimiter, tenant_id: []const u8, now_ms: i64) !*rate_limit.TokenBucket {
+        if (self.buckets.getPtr(tenant_id)) |bucket| return bucket;
+
+        const key_copy = try self.alloc.dupe(u8, tenant_id);
+        errdefer self.alloc.free(key_copy);
+
+        try self.buckets.put(key_copy, rate_limit.TokenBucket.init(self.capacity, self.refill_per_sec, now_ms));
+        return self.buckets.getPtr(key_copy).?;
+    }
+};
+
 // ── Entry point ───────────────────────────────────────────────────────────
 
 pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
@@ -87,10 +133,12 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
 
     var token_cache = github_auth.TokenCache.init(alloc, cfg.github_app_id, cfg.github_app_private_key);
     defer token_cache.deinit();
+    var tenant_limiter = TenantRateLimiter.init(alloc, cfg.rate_limit_capacity, cfg.rate_limit_refill_per_sec);
+    defer tenant_limiter.deinit();
 
     var consecutive_errors: u32 = 0;
     while (worker_state.running.load(.acquire)) {
-        const outcome = processNextRun(alloc, cfg, worker_state, &prompts, &token_cache) catch |err| {
+        const outcome = processNextRun(alloc, cfg, worker_state, &prompts, &token_cache, &tenant_limiter) catch |err| {
             if (err != WorkerError.ShutdownRequested) {
                 log.err("run processing error: {}", .{err});
                 consecutive_errors += 1;
@@ -135,6 +183,7 @@ fn processNextRun(
     worker_state: *WorkerState,
     prompts: *const agents.PromptFiles,
     token_cache: *github_auth.TokenCache,
+    tenant_limiter: *TenantRateLimiter,
 ) !ProcessOutcome {
     var conn = try cfg.pool.acquire();
     defer cfg.pool.release(conn);
@@ -203,7 +252,7 @@ fn processNextRun(
         .default_branch = default_branch,
         .spec_path = spec_path,
         .attempt = attempt,
-    }) catch |err| {
+    }, tenant_limiter) catch |err| {
         if (err == WorkerError.ShutdownRequested) {
             _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, .AGENT_TIMEOUT, "shutdown requested") catch |tx_err| {
                 log.warn("shutdown transition failed run_id={s}: {}", .{ run_id, tx_err });
@@ -386,6 +435,7 @@ fn executeRun(
     conn: *pg.Conn,
     token_cache: *github_auth.TokenCache,
     ctx: RunContext,
+    tenant_limiter: *TenantRateLimiter,
 ) !void {
     var run_arena = std.heap.ArenaAllocator.init(alloc);
     defer run_arena.deinit();
@@ -419,6 +469,7 @@ fn executeRun(
     const memory_context = try memory.loadForEcho(run_alloc, conn, ctx.workspace_id, 20);
 
     // ── Phase 1: Echo (planning) ─────────────────────────────────────────
+    try tenant_limiter.acquire(ctx.tenant_id, 1.0);
     const echo_result = try agents.runEcho(
         run_alloc,
         wt.path,
@@ -447,6 +498,7 @@ fn executeRun(
 
         _ = try state.transition(conn, ctx.run_id, .PATCH_IN_PROGRESS, .orchestrator, .PATCH_STARTED, null);
 
+        try tenant_limiter.acquire(ctx.tenant_id, 1.0);
         const scout_result = try reliable.call(agents.AgentResult, ScoutRetryCtx{
             .alloc = run_alloc,
             .workspace_path = wt.path,
@@ -473,6 +525,7 @@ fn executeRun(
         // ── Phase 3: Warden (validation) ─────────────────────────────────
         _ = try state.transition(conn, ctx.run_id, .VERIFICATION_IN_PROGRESS, .orchestrator, .PATCH_STARTED, null);
 
+        try tenant_limiter.acquire(ctx.tenant_id, 1.0);
         const warden_result = try reliable.call(agents.AgentResult, WardenRetryCtx{
             .alloc = run_alloc,
             .workspace_path = wt.path,
