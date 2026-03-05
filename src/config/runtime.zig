@@ -15,6 +15,8 @@ pub const ValidationError = error{
     InvalidWorkerConcurrency,
     InvalidRateLimitCapacity,
     InvalidRateLimitRefillPerSec,
+    InvalidReadyMaxQueueDepth,
+    InvalidReadyMaxQueueAgeMs,
 };
 
 pub const ServeConfig = struct {
@@ -28,6 +30,8 @@ pub const ServeConfig = struct {
     worker_concurrency: u32,
     rate_limit_capacity: u32,
     rate_limit_refill_per_sec: f64,
+    ready_max_queue_depth: ?i64,
+    ready_max_queue_age_ms: ?i64,
     encryption_master_key: []u8,
 
     alloc: std.mem.Allocator,
@@ -38,11 +42,15 @@ pub const ServeConfig = struct {
         const worker_concurrency = try parseU32Env(alloc, "WORKER_CONCURRENCY", 1, ValidationError.InvalidWorkerConcurrency);
         const rate_limit_capacity = try parseU32Env(alloc, "RATE_LIMIT_CAPACITY", 30, ValidationError.InvalidRateLimitCapacity);
         const rate_limit_refill_per_sec = try parseF64Env(alloc, "RATE_LIMIT_REFILL_PER_SEC", 5.0, ValidationError.InvalidRateLimitRefillPerSec);
+        const ready_max_queue_depth = try parseOptionalI64Env(alloc, "READY_MAX_QUEUE_DEPTH", ValidationError.InvalidReadyMaxQueueDepth);
+        const ready_max_queue_age_ms = try parseOptionalI64Env(alloc, "READY_MAX_QUEUE_AGE_MS", ValidationError.InvalidReadyMaxQueueAgeMs);
 
         if (max_attempts == 0) return ValidationError.InvalidMaxAttempts;
         if (worker_concurrency == 0) return ValidationError.InvalidWorkerConcurrency;
         if (rate_limit_capacity == 0) return ValidationError.InvalidRateLimitCapacity;
         if (!(rate_limit_refill_per_sec > 0)) return ValidationError.InvalidRateLimitRefillPerSec;
+        if (ready_max_queue_depth) |v| if (v <= 0) return ValidationError.InvalidReadyMaxQueueDepth;
+        if (ready_max_queue_age_ms) |v| if (v <= 0) return ValidationError.InvalidReadyMaxQueueAgeMs;
 
         const api_keys = try requiredEnvOwned(alloc, "API_KEY", ValidationError.MissingApiKey);
         errdefer alloc.free(api_keys);
@@ -78,6 +86,8 @@ pub const ServeConfig = struct {
             .worker_concurrency = worker_concurrency,
             .rate_limit_capacity = rate_limit_capacity,
             .rate_limit_refill_per_sec = rate_limit_refill_per_sec,
+            .ready_max_queue_depth = ready_max_queue_depth,
+            .ready_max_queue_age_ms = ready_max_queue_age_ms,
             .encryption_master_key = encryption_master_key,
             .alloc = alloc,
         };
@@ -105,6 +115,8 @@ pub const ServeConfig = struct {
             ValidationError.InvalidWorkerConcurrency => std.debug.print("fatal: invalid WORKER_CONCURRENCY value\n", .{}),
             ValidationError.InvalidRateLimitCapacity => std.debug.print("fatal: invalid RATE_LIMIT_CAPACITY value\n", .{}),
             ValidationError.InvalidRateLimitRefillPerSec => std.debug.print("fatal: invalid RATE_LIMIT_REFILL_PER_SEC value\n", .{}),
+            ValidationError.InvalidReadyMaxQueueDepth => std.debug.print("fatal: invalid READY_MAX_QUEUE_DEPTH value\n", .{}),
+            ValidationError.InvalidReadyMaxQueueAgeMs => std.debug.print("fatal: invalid READY_MAX_QUEUE_AGE_MS value\n", .{}),
         }
     }
 };
@@ -133,6 +145,12 @@ fn parseF64Env(alloc: std.mem.Allocator, name: []const u8, default_value: f64, i
     const raw = std.process.getEnvVarOwned(alloc, name) catch return default_value;
     defer alloc.free(raw);
     return std.fmt.parseFloat(f64, raw) catch invalid_error;
+}
+
+fn parseOptionalI64Env(alloc: std.mem.Allocator, name: []const u8, invalid_error: ValidationError) !?i64 {
+    const raw = std.process.getEnvVarOwned(alloc, name) catch return null;
+    defer alloc.free(raw);
+    return std.fmt.parseInt(i64, raw, 10) catch invalid_error;
 }
 
 fn isHexString(s: []const u8) bool {

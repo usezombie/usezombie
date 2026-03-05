@@ -54,7 +54,7 @@
 | 15 | ⚠️ Partial | Git/curl timeouts done; agent-call cancellation/deadline still missing |
 | 16 | ⚠️ Partial | Main allocator is now thread-safe and worker concurrency is configurable; global leak-reporting/thread-safety guardrails still need tightening |
 | 17 | ⚠️ Partial | Versioned migrations + tx done; SQL splitting remains heuristic |
-| 18 | ⚠️ Partial | `/healthz` + `/readyz` improved, and `/readyz` now exposes queue depth + oldest age; richer readiness policy is still missing |
+| 18 | ⚠️ Partial | `/healthz` + `/readyz` improved, and `/readyz` now supports queue depth/age thresholds; migration/dependency readiness gates are still missing |
 | 19 | ⚠️ Partial | `/metrics` now exposes core counters + duration histograms, and observer wiring is enabled; correlation propagation is still missing |
 | 20 | ⚠️ Partial | Serve-time config is now centralized in `src/config/runtime.zig`, fail-fast on critical env is active, and API key rotation is supported; secret versioning/rotation model is still missing |
 | 21 | ⚠️ Partial | Unit/integration/e2e targets added; coverage measurement and deeper module tests still missing |
@@ -476,7 +476,7 @@ Advanced path then adds:
 | 15 | Timeouts & cancellation | **High** | git/curl/agent can hang indefinitely |
 | 16 | Thread safety & Zig allocator pitfalls | **High** | Shared GPA across threads; leak detection ignored |
 | 17 | Schema migration safety | **High** | Naïve SQL split; non-transactional; silent failures |
-| 18 | Health check depth (readiness vs liveness) | **Medium–High** | `/healthz` always returns ok even with DB down |
+| 18 | Health check depth (readiness vs liveness) | **Medium–High** | Readiness still lacks migration/dependency gates under degraded upstream conditions |
 | 19 | Metrics / telemetry / tracing | **Medium** | Core counters and duration histograms are in place with default LogObserver wiring, but correlation propagation is still missing |
 | 20 | Config validation & secret hygiene | **Medium–High** | Core fail-fast and API key rotation exist; encrypted-secret key versioning/rotation is still missing |
 
@@ -668,7 +668,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 
 | File | Line | Issue |
 |------|------|-------|
-| `src/http/handler.zig` | 95–137 | `/readyz` now includes queue depth and oldest queued age, but readiness does not yet enforce thresholds/SLO-aware gating |
+| `src/http/handler.zig` | 95–170 | `/readyz` now enforces optional SLO thresholds (`READY_MAX_QUEUE_DEPTH`, `READY_MAX_QUEUE_AGE_MS`), but migration/dependency readiness checks are not yet included |
 
 ### Recommendation
 - `/livez` — process alive (static, fast)
@@ -676,7 +676,6 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 - Include oldest-queued-run age for operational alerting
 
 ### Oracle review: remaining scope after this fix
-- Define readiness gating thresholds (for example queue age SLO breach) instead of pure informational queue metrics.
 - Add migration-state and dependency checks to readiness beyond DB reachability.
 - Surface queue health in `/metrics` for alert-driven operations.
 
@@ -748,7 +747,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 | **P1** | Structured logging + runtime `LOG_LEVEL` + real Observer | M (2–4h) | 8, 9 |
 | **P2** | Multi-worker concurrency (`WORKER_CONCURRENCY`) | M (2–4h) | 3 |
 | **P2** | Token bucket rate limiter | M (2–4h) | 6 |
-| **P2** | Health check depth (`/readyz` with DB + worker probe) | S (1–2h) | 18 |
+| **P2** | Health check depth hardening (migration/dependency readiness gates) | S (1–2h) | 18 |
 | **P3** | Schema migration safety (versioned, transactional, separate command) | M (3–4h) | 17 |
 | **P3** | Config validation fail-fast + multi-key rotation | S (1–2h) | 20 |
 | **P3** | Event bus + outbox/dead-letter table | L (1–2d) | 4, 5 |

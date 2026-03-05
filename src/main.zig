@@ -172,6 +172,8 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
             runtime_config.ValidationError.InvalidWorkerConcurrency,
             runtime_config.ValidationError.InvalidRateLimitCapacity,
             runtime_config.ValidationError.InvalidRateLimitRefillPerSec,
+            runtime_config.ValidationError.InvalidReadyMaxQueueDepth,
+            runtime_config.ValidationError.InvalidReadyMaxQueueAgeMs,
             => runtime_config.ServeConfig.printValidationError(err),
             else => std.debug.print("fatal: failed to load runtime config: {}\n", .{err}),
         }
@@ -208,6 +210,8 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
         .alloc = alloc,
         .api_keys = serve_cfg.api_keys,
         .worker_state = &wstate,
+        .ready_max_queue_depth = serve_cfg.ready_max_queue_depth,
+        .ready_max_queue_age_ms = serve_cfg.ready_max_queue_age_ms,
     };
 
     const wcfg = worker.WorkerConfig{

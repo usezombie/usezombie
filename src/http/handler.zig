@@ -18,6 +18,8 @@ pub const Context = struct {
     alloc: std.mem.Allocator,
     api_keys: []const u8, // comma-separated API key list from env
     worker_state: *const worker.WorkerState,
+    ready_max_queue_depth: ?i64,
+    ready_max_queue_age_ms: ?i64,
 };
 
 // ── JSON helpers ──────────────────────────────────────────────────────────
@@ -133,13 +135,31 @@ pub fn handleReadyz(ctx: *Context, r: zap.Request) void {
     const db_ok = databaseHealthy(ctx);
     const worker_ok = ctx.worker_state.running.load(.acquire);
     const qh = if (db_ok) queueHealth(ctx) else null;
-    if (!db_ok or !worker_ok) {
+
+    var queue_depth_breached = false;
+    var queue_age_breached = false;
+    if (qh) |v| {
+        if (ctx.ready_max_queue_depth) |limit| {
+            queue_depth_breached = v.queued_count > limit;
+        }
+        if (ctx.ready_max_queue_age_ms) |limit| {
+            if (v.oldest_queued_age_ms) |age| {
+                queue_age_breached = age > limit;
+            }
+        }
+    }
+
+    if (!db_ok or !worker_ok or queue_depth_breached or queue_age_breached) {
         writeJson(r, .service_unavailable, .{
             .ready = false,
             .database = db_ok,
             .worker = worker_ok,
             .queue_depth = if (qh) |v| v.queued_count else null,
             .oldest_queued_age_ms = if (qh) |v| v.oldest_queued_age_ms else null,
+            .queue_depth_breached = queue_depth_breached,
+            .queue_age_breached = queue_age_breached,
+            .queue_depth_limit = ctx.ready_max_queue_depth,
+            .queue_age_limit_ms = ctx.ready_max_queue_age_ms,
         });
         return;
     }
@@ -150,6 +170,10 @@ pub fn handleReadyz(ctx: *Context, r: zap.Request) void {
         .worker = true,
         .queue_depth = if (qh) |v| v.queued_count else @as(i64, 0),
         .oldest_queued_age_ms = if (qh) |v| v.oldest_queued_age_ms else null,
+        .queue_depth_breached = false,
+        .queue_age_breached = false,
+        .queue_depth_limit = ctx.ready_max_queue_depth,
+        .queue_age_limit_ms = ctx.ready_max_queue_age_ms,
     });
 }
 
