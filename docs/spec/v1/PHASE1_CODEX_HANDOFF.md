@@ -435,7 +435,7 @@ npx zombiectl runs list
 
 ```dotenv
 # Core
-API_KEY=local-dev-api-key                    # Local dev fallback only
+API_KEY=local-dev-api-key                    # Local dev fallback; supports comma-separated rotation window
 ENCRYPTION_MASTER_KEY=<64 hex chars>
 
 # Database (role-separated)
