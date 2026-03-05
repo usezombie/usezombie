@@ -144,6 +144,42 @@ pub fn classify(err: anyerror, detail: ?[]const u8) Classified {
         };
     }
 
+    if (std.mem.eql(u8, name, "PrRateLimited")) {
+        return .{
+            .class = .rate_limited,
+            .retryable = true,
+            .retry_after_ms = if (detail) |d| parseRetryAfterMs(d) else null,
+            .reason_code = .RATE_LIMITED,
+        };
+    }
+
+    if (std.mem.eql(u8, name, "PrAuthFailed")) {
+        return .{
+            .class = .auth,
+            .retryable = false,
+            .retry_after_ms = null,
+            .reason_code = .AUTH_FAILED,
+        };
+    }
+
+    if (std.mem.eql(u8, name, "PrInvalidRequest")) {
+        return .{
+            .class = .invalid_request,
+            .retryable = false,
+            .retry_after_ms = null,
+            .reason_code = .AGENT_CRASH,
+        };
+    }
+
+    if (std.mem.eql(u8, name, "PrServerError")) {
+        return .{
+            .class = .server_error,
+            .retryable = true,
+            .retry_after_ms = null,
+            .reason_code = .AGENT_TIMEOUT,
+        };
+    }
+
     if (std.mem.eql(u8, name, "CurlFailed") or
         std.mem.eql(u8, name, "FetchFailed") or
         std.mem.eql(u8, name, "PushFailed") or
@@ -213,4 +249,12 @@ test "classify config auth failures with auth reason code" {
     const c = classify(error.MissingConfig, null);
     try std.testing.expectEqual(ErrorClass.auth, c.class);
     try std.testing.expectEqual(types.ReasonCode.AUTH_FAILED, c.reason_code);
+}
+
+test "classify pr rate limit error with retry-after from detail" {
+    const c = classify(error.PrRateLimited, "HTTP/2 429\nRetry-After: 9\n");
+    try std.testing.expectEqual(ErrorClass.rate_limited, c.class);
+    try std.testing.expect(c.retryable);
+    try std.testing.expectEqual(@as(?u64, 9_000), c.retry_after_ms);
+    try std.testing.expectEqual(types.ReasonCode.RATE_LIMITED, c.reason_code);
 }

@@ -15,6 +15,10 @@ pub const GitError = error{
     MissingGitHubPat,
     CommandFailed,
     CommandTimedOut,
+    PrRateLimited,
+    PrAuthFailed,
+    PrInvalidRequest,
+    PrServerError,
 };
 
 pub const WorktreeHandle = struct {
@@ -265,7 +269,10 @@ pub fn createPullRequest(
     title: []const u8,
     body: []const u8,
     github_token: []const u8,
+    error_detail_out: ?*?[]u8,
 ) ![]const u8 {
+    if (error_detail_out) |out| out.* = null;
+
     // Parse owner/repo from URL
     // e.g. https://github.com/owner/repo.git → owner/repo
     const owner_repo = try parseGitHubOwnerRepo(alloc, repo_url);
@@ -293,7 +300,7 @@ pub fn createPullRequest(
         "curl",                                "-sS",
         "--connect-timeout",                   "10",
         "--max-time",                          "30",
-        "--fail-with-body",                    "-X",
+        "-i",                                  "-X",
         "POST",                                "-H",
         "Content-Type: application/json",      "-H",
         "Accept: application/vnd.github+json", "-H",
@@ -302,8 +309,28 @@ pub fn createPullRequest(
     }, null, 30_000) catch return GitError.PrFailed;
     defer alloc.free(result);
 
-    // Parse pr.html_url from response
-    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, result, .{});
+    const parsed_response = splitHttpResponse(result);
+    const status = parseHttpStatus(parsed_response.headers) orelse {
+        log.err("failed to parse PR creation HTTP status body={s}", .{parsed_response.body});
+        return GitError.PrFailed;
+    };
+
+    if (status >= 400) {
+        if (error_detail_out) |out| {
+            out.* = alloc.dupe(u8, result) catch null;
+        }
+        log.err("PR creation failed status={d} body={s}", .{ status, parsed_response.body });
+        return switch (status) {
+            429 => GitError.PrRateLimited,
+            401, 403 => GitError.PrAuthFailed,
+            400, 422 => GitError.PrInvalidRequest,
+            500...599 => GitError.PrServerError,
+            else => GitError.PrFailed,
+        };
+    }
+
+    // Parse pr.html_url from response body
+    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, parsed_response.body, .{});
     defer parsed.deinit();
 
     if (parsed.value.object.get("html_url")) |url_val| {
@@ -312,6 +339,58 @@ pub fn createPullRequest(
 
     log.err("PR creation response missing html_url: {s}", .{result});
     return GitError.PrFailed;
+}
+
+const HttpResponseParts = struct {
+    headers: []const u8,
+    body: []const u8,
+};
+
+fn splitHttpResponse(response: []const u8) HttpResponseParts {
+    if (std.mem.lastIndexOf(u8, response, "\r\n\r\n")) |sep| {
+        return .{
+            .headers = response[0..sep],
+            .body = response[sep + 4 ..],
+        };
+    }
+    if (std.mem.lastIndexOf(u8, response, "\n\n")) |sep| {
+        return .{
+            .headers = response[0..sep],
+            .body = response[sep + 2 ..],
+        };
+    }
+    return .{
+        .headers = "",
+        .body = response,
+    };
+}
+
+fn parseHttpStatus(headers: []const u8) ?u16 {
+    const idx = std.mem.lastIndexOf(u8, headers, "HTTP/") orelse return null;
+    const line = headers[idx..];
+    const line_end = std.mem.indexOfScalar(u8, line, '\n') orelse line.len;
+    const status_line = std.mem.trim(u8, line[0..line_end], " \r\n\t");
+
+    const first_space = std.mem.indexOfScalar(u8, status_line, ' ') orelse return null;
+    var rest = status_line[first_space + 1 ..];
+    rest = std.mem.trimLeft(u8, rest, " ");
+    if (rest.len < 3) return null;
+
+    return std.fmt.parseInt(u16, rest[0..3], 10) catch null;
+}
+
+test "parseHttpStatus handles standard status lines" {
+    const headers =
+        "HTTP/1.1 100 Continue\r\n\r\n" ++
+        "HTTP/2 429\r\nRetry-After: 7\r\n";
+    try std.testing.expectEqual(@as(?u16, 429), parseHttpStatus(headers));
+}
+
+test "splitHttpResponse separates headers and body" {
+    const raw = "HTTP/2 201\r\nContent-Type: application/json\r\n\r\n{\"html_url\":\"https://x\"}";
+    const parts = splitHttpResponse(raw);
+    try std.testing.expect(std.mem.containsAtLeast(u8, parts.headers, 1, "HTTP/2 201"));
+    try std.testing.expect(std.mem.eql(u8, parts.body, "{\"html_url\":\"https://x\"}"));
 }
 
 fn parseGitHubOwnerRepo(alloc: std.mem.Allocator, repo_url: []const u8) ![]const u8 {
