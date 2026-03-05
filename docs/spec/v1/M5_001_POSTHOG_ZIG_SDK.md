@@ -261,7 +261,7 @@ Once `posthog-zig` is stable (v0.1.0+), integrate into the usezombie control pla
 - [PostHog /decide/ API](https://posthog.com/docs/api/decide) — Feature flag evaluation endpoint.
 - [posthog-python](https://github.com/PostHog/posthog-python) — Reference implementation: queue + consumer thread + flush-on-shutdown pattern.
 - [posthog-rust](https://github.com/PostHog/posthog-rs) — Rust SDK: similar async batch architecture.
-- `docs/done/v1/DONE_M1_003_OBSERVABILITY_AND_POLICY.md` — Observability event taxonomy that posthog-zig events will complement.
+- `docs/done/v1/M1_003_OBSERVABILITY_AND_POLICY.md` — Observability event taxonomy that posthog-zig events will complement.
 
 ## Risks and Mitigations
 
