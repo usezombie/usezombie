@@ -77,6 +77,46 @@ fn buildConfig(
     return cfg;
 }
 
+const ObserverBackend = enum {
+    log,
+    noop,
+    verbose,
+};
+
+const ObserverRuntime = struct {
+    backend: ObserverBackend,
+    noop: observability.NoopObserver = .{},
+    log_observer: observability.LogObserver = .{},
+    verbose_observer: observability.VerboseObserver = .{},
+
+    fn init(alloc: std.mem.Allocator) ObserverRuntime {
+        return .{
+            .backend = configuredObserverBackend(alloc),
+        };
+    }
+
+    fn observer(self: *ObserverRuntime) observability.Observer {
+        return switch (self.backend) {
+            .log => self.log_observer.observer(),
+            .noop => self.noop.observer(),
+            .verbose => self.verbose_observer.observer(),
+        };
+    }
+};
+
+fn configuredObserverBackend(alloc: std.mem.Allocator) ObserverBackend {
+    const raw = std.process.getEnvVarOwned(alloc, "NULLCLAW_OBSERVER") catch return .log;
+    defer alloc.free(raw);
+    return parseObserverBackend(raw) orelse .log;
+}
+
+fn parseObserverBackend(raw: []const u8) ?ObserverBackend {
+    if (std.ascii.eqlIgnoreCase(raw, "log")) return .log;
+    if (std.ascii.eqlIgnoreCase(raw, "noop")) return .noop;
+    if (std.ascii.eqlIgnoreCase(raw, "verbose")) return .verbose;
+    return null;
+}
+
 // ── Echo — The Planner ────────────────────────────────────────────────────
 // Tools: file_read only (read-only mode, no shell, no writes)
 
@@ -106,8 +146,8 @@ pub fn runEcho(
     const mem_opt: ?memory_mod.Memory = if (mem_rt) |rt| rt.memory else null;
     tools_mod.bindMemoryTools(tools, mem_opt);
 
-    var noop = observability.NoopObserver{};
-    const obs = noop.observer();
+    var obs_runtime = ObserverRuntime.init(alloc);
+    const obs = obs_runtime.observer();
 
     var agent = try Agent.fromConfig(alloc, &cfg, provider_i, tools, mem_opt, obs);
     defer agent.deinit();
@@ -174,8 +214,8 @@ pub fn runScout(
     const mem_opt: ?memory_mod.Memory = if (mem_rt) |rt| rt.memory else null;
     tools_mod.bindMemoryTools(tools, mem_opt);
 
-    var noop = observability.NoopObserver{};
-    const obs = noop.observer();
+    var obs_runtime = ObserverRuntime.init(alloc);
+    const obs = obs_runtime.observer();
 
     var agent = try Agent.fromConfig(alloc, &cfg, provider_i, tools, mem_opt, obs);
     defer agent.deinit();
@@ -243,8 +283,8 @@ pub fn runWarden(
     const mem_opt: ?memory_mod.Memory = if (mem_rt) |rt| rt.memory else null;
     tools_mod.bindMemoryTools(tools, mem_opt);
 
-    var noop = observability.NoopObserver{};
-    const obs = noop.observer();
+    var obs_runtime = ObserverRuntime.init(alloc);
+    const obs = obs_runtime.observer();
 
     var agent = try Agent.fromConfig(alloc, &cfg, provider_i, tools, mem_opt, obs);
     defer agent.deinit();
@@ -394,4 +434,12 @@ pub fn extractObservations(alloc: std.mem.Allocator, content: []const u8) ![]con
     // Take until the next ## heading or end of file
     const end = std.mem.indexOf(u8, section, "\n## ") orelse section.len;
     return alloc.dupe(u8, std.mem.trim(u8, section[0..end], " \t\r\n"));
+}
+
+test "parseObserverBackend supports known values" {
+    try std.testing.expectEqual(@as(?ObserverBackend, .log), parseObserverBackend("log"));
+    try std.testing.expectEqual(@as(?ObserverBackend, .log), parseObserverBackend("LOG"));
+    try std.testing.expectEqual(@as(?ObserverBackend, .noop), parseObserverBackend("noop"));
+    try std.testing.expectEqual(@as(?ObserverBackend, .verbose), parseObserverBackend("verbose"));
+    try std.testing.expectEqual(@as(?ObserverBackend, null), parseObserverBackend("otel"));
 }
