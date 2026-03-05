@@ -9,9 +9,9 @@ const queue_redis = @import("../queue/redis.zig");
 const state = @import("../state/machine.zig");
 const policy = @import("../state/policy.zig");
 const worker = @import("../pipeline/worker.zig");
-const topology = @import("../pipeline/topology.zig");
 const secrets = @import("../secrets/crypto.zig");
-const harness = @import("../harness/control_plane.zig");
+const harness_handlers = @import("handlers/harness_control_plane.zig");
+const skill_secret_handlers = @import("handlers/skill_secrets.zig");
 const metrics = @import("../observability/metrics.zig");
 const obs_log = @import("../observability/logging.zig");
 const db = @import("../db/pool.zig");
@@ -69,83 +69,10 @@ fn requestId(alloc: std.mem.Allocator) []const u8 {
     return std.fmt.allocPrint(alloc, "req_{s}", .{hex[0..12]}) catch "req_unknown";
 }
 
-fn prefixedId(alloc: std.mem.Allocator, prefix: []const u8) []const u8 {
-    var id: [16]u8 = undefined;
-    std.crypto.random.bytes(&id);
-    const hex = std.fmt.bytesToHex(id, .lower);
-    return std.fmt.allocPrint(alloc, "{s}_{s}", .{ prefix, hex[0..12] }) catch "id_unknown";
-}
-
-fn normalizeProfileId(alloc: std.mem.Allocator, workspace_id: []const u8, provided: ?[]const u8) ![]u8 {
-    if (provided) |raw| {
-        if (raw.len == 0) return error.InvalidProfileId;
-        var out = std.ArrayList(u8).empty;
-        defer out.deinit(alloc);
-        for (raw) |c| {
-            if (std.ascii.isAlphanumeric(c) or c == '-' or c == '_') {
-                try out.append(alloc, std.ascii.toLower(c));
-            } else {
-                try out.append(alloc, '-');
-            }
-        }
-        return out.toOwnedSlice(alloc);
-    }
-    return std.fmt.allocPrint(alloc, "{s}-harness", .{workspace_id});
-}
-
-fn decodePathSegment(alloc: std.mem.Allocator, value: []const u8) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    defer out.deinit(alloc);
-
-    var i: usize = 0;
-    while (i < value.len) : (i += 1) {
-        if (value[i] == '%' and i + 2 < value.len) {
-            const hi = std.fmt.charToDigit(value[i + 1], 16) catch return error.InvalidPercentEncoding;
-            const lo = std.fmt.charToDigit(value[i + 2], 16) catch return error.InvalidPercentEncoding;
-            try out.append(alloc, @as(u8, @intCast(hi * 16 + lo)));
-            i += 2;
-            continue;
-        }
-        if (value[i] == '+') {
-            try out.append(alloc, ' ');
-            continue;
-        }
-        try out.append(alloc, value[i]);
-    }
-    return out.toOwnedSlice(alloc);
-}
-
-const SkillSecretRoute = struct {
-    workspace_id: []const u8,
-    skill_ref_encoded: []const u8,
-    key_name_encoded: []const u8,
-};
+pub const SkillSecretRoute = skill_secret_handlers.Route;
 
 pub fn parseSkillSecretRoute(path: []const u8) ?SkillSecretRoute {
-    const prefix = "/v1/workspaces/";
-    if (!std.mem.startsWith(u8, path, prefix)) return null;
-    const rem = path[prefix.len..];
-
-    const s1 = std.mem.indexOfScalar(u8, rem, '/') orelse return null;
-    const workspace_id = rem[0..s1];
-    if (workspace_id.len == 0) return null;
-    const rem2 = rem[s1 + 1 ..];
-    const skills_prefix = "skills/";
-    if (!std.mem.startsWith(u8, rem2, skills_prefix)) return null;
-    const rem3 = rem2[skills_prefix.len..];
-    const s2 = std.mem.indexOfScalar(u8, rem3, '/') orelse return null;
-    const skill_ref = rem3[0..s2];
-    if (skill_ref.len == 0) return null;
-    const rem4 = rem3[s2 + 1 ..];
-    const secrets_prefix = "secrets/";
-    if (!std.mem.startsWith(u8, rem4, secrets_prefix)) return null;
-    const key_name = rem4[secrets_prefix.len..];
-    if (key_name.len == 0 or std.mem.indexOfScalar(u8, key_name, '/') != null) return null;
-    return .{
-        .workspace_id = workspace_id,
-        .skill_ref_encoded = skill_ref,
-        .key_name_encoded = key_name,
-    };
+    return skill_secret_handlers.parseRoute(path);
 }
 
 const AuthMode = enum {
@@ -1272,11 +1199,7 @@ pub fn handlePutHarnessSource(ctx: *Context, r: zap.Request, workspace_id: []con
         return;
     };
 
-    const Req = struct {
-        profile_id: ?[]const u8 = null,
-        name: ?[]const u8 = null,
-        source_markdown: []const u8,
-    };
+    const Req = harness_handlers.PutSourceInput;
     const body = r.body orelse {
         errorResponse(r, .bad_request, "INVALID_REQUEST", "Request body required", req_id);
         return;
@@ -1287,81 +1210,30 @@ pub fn handlePutHarnessSource(ctx: *Context, r: zap.Request, workspace_id: []con
     };
     defer parsed.deinit();
 
-    if (parsed.value.source_markdown.len == 0) {
-        errorResponse(r, .bad_request, "INVALID_REQUEST", "source_markdown cannot be empty", req_id);
-        return;
-    }
-
     const conn = ctx.pool.acquire() catch {
         errorResponse(r, .service_unavailable, "INTERNAL_ERROR", "Database unavailable", req_id);
         return;
     };
     defer ctx.pool.release(conn);
-
     if (!authorizeWorkspace(conn, principal, workspace_id)) {
         errorResponse(r, .forbidden, "FORBIDDEN", "Workspace access denied", req_id);
         return;
     }
 
-    var ws = conn.query("SELECT tenant_id FROM workspaces WHERE workspace_id = $1", .{workspace_id}) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Database error", req_id);
+    const out = harness_handlers.putSource(conn, alloc, workspace_id, parsed.value) catch |err| {
+        switch (err) {
+            error.InvalidRequest => errorResponse(r, .bad_request, "INVALID_REQUEST", "Invalid harness source payload", req_id),
+            error.WorkspaceNotFound => errorResponse(r, .not_found, "WORKSPACE_NOT_FOUND", "Workspace not found", req_id),
+            else => errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to store harness source", req_id),
+        }
         return;
     };
-    defer ws.deinit();
-    const ws_row = ws.next() catch null orelse {
-        errorResponse(r, .not_found, "WORKSPACE_NOT_FOUND", "Workspace not found", req_id);
-        return;
-    };
-    const tenant_id = ws_row.get([]const u8, 0) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Database error", req_id);
-        return;
-    };
-
-    const profile_id = normalizeProfileId(alloc, workspace_id, parsed.value.profile_id) catch {
-        errorResponse(r, .bad_request, "INVALID_REQUEST", "Invalid profile_id", req_id);
-        return;
-    };
-    const profile_name = parsed.value.name orelse "Workspace Harness";
-    const now_ms = std.time.milliTimestamp();
-
-    var upsert_profile = conn.query(
-        \\INSERT INTO agent_profiles (profile_id, tenant_id, workspace_id, name, status, created_at, updated_at)
-        \\VALUES ($1, $2, $3, $4, 'DRAFT', $5, $5)
-        \\ON CONFLICT (profile_id) DO UPDATE
-        \\SET name = EXCLUDED.name,
-        \\    updated_at = EXCLUDED.updated_at
-    , .{ profile_id, tenant_id, workspace_id, profile_name, now_ms }) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to upsert profile", req_id);
-        return;
-    };
-    upsert_profile.deinit();
-
-    var vq = conn.query(
-        "SELECT COALESCE(MAX(version), 0)::INTEGER FROM agent_profile_versions WHERE profile_id = $1",
-        .{profile_id},
-    ) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to compute profile version", req_id);
-        return;
-    };
-    defer vq.deinit();
-    const next_version: i32 = if (vq.next() catch null) |row| (row.get(i32, 0) catch 0) + 1 else 1;
-    const profile_version_id = prefixedId(alloc, "pver");
-
-    var insert_version = conn.query(
-        \\INSERT INTO agent_profile_versions
-        \\  (profile_version_id, profile_id, version, source_markdown, compiled_profile_json, compile_engine, validation_report_json, is_valid, created_at, updated_at)
-        \\VALUES ($1, $2, $3, $4, NULL, 'deterministic-v1', '{"status":"pending"}', false, $5, $5)
-    , .{ profile_version_id, profile_id, next_version, parsed.value.source_markdown, now_ms }) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to save profile source", req_id);
-        return;
-    };
-    insert_version.deinit();
 
     writeJson(r, .ok, .{
         .workspace_id = workspace_id,
-        .profile_id = profile_id,
-        .profile_version_id = profile_version_id,
-        .version = next_version,
+        .profile_id = out.profile_id,
+        .profile_version_id = out.profile_version_id,
+        .version = out.version,
         .status = "DRAFT",
         .request_id = req_id,
     });
@@ -1380,10 +1252,7 @@ pub fn handleCompileHarness(ctx: *Context, r: zap.Request, workspace_id: []const
         return;
     };
 
-    const Req = struct {
-        profile_id: ?[]const u8 = null,
-        profile_version_id: ?[]const u8 = null,
-    };
+    const Req = harness_handlers.CompileInput;
     const body = r.body orelse {
         errorResponse(r, .bad_request, "INVALID_REQUEST", "Request body required", req_id);
         return;
@@ -1405,128 +1274,22 @@ pub fn handleCompileHarness(ctx: *Context, r: zap.Request, workspace_id: []const
         return;
     }
 
-    const selection_sql =
-        if (parsed.value.profile_version_id != null)
-            \\SELECT v.profile_version_id, v.profile_id, v.version, v.source_markdown
-            \\FROM agent_profile_versions v
-            \\JOIN agent_profiles p ON p.profile_id = v.profile_id
-            \\WHERE p.workspace_id = $1 AND v.profile_version_id = $2
-            \\LIMIT 1
-        else if (parsed.value.profile_id != null)
-            \\SELECT v.profile_version_id, v.profile_id, v.version, v.source_markdown
-            \\FROM agent_profile_versions v
-            \\JOIN agent_profiles p ON p.profile_id = v.profile_id
-            \\WHERE p.workspace_id = $1 AND v.profile_id = $2
-            \\ORDER BY v.version DESC
-            \\LIMIT 1
-        else
-            \\SELECT v.profile_version_id, v.profile_id, v.version, v.source_markdown
-            \\FROM agent_profile_versions v
-            \\JOIN agent_profiles p ON p.profile_id = v.profile_id
-            \\WHERE p.workspace_id = $1
-            \\ORDER BY v.created_at DESC
-            \\LIMIT 1
-        ;
-
-    const selector_arg = parsed.value.profile_version_id orelse parsed.value.profile_id orelse "";
-    var pick = if (parsed.value.profile_version_id == null and parsed.value.profile_id == null)
-        conn.query(selection_sql, .{workspace_id}) catch {
-            errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to load profile source", req_id);
-            return;
+    const out = harness_handlers.compileProfile(conn, alloc, workspace_id, parsed.value) catch |err| {
+        switch (err) {
+            error.ProfileNotFound => errorResponse(r, .not_found, "PROFILE_NOT_FOUND", "No harness profile source found for workspace", req_id),
+            error.CompileFailed => errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Harness compile failed", req_id),
+            else => errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to compile harness profile", req_id),
         }
-    else
-        conn.query(selection_sql, .{ workspace_id, selector_arg }) catch {
-            errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to load profile source", req_id);
-            return;
-        };
-    defer pick.deinit();
-
-    const row = pick.next() catch null orelse {
-        errorResponse(r, .not_found, "PROFILE_NOT_FOUND", "No harness profile source found for workspace", req_id);
         return;
     };
-    const profile_version_id = row.get([]const u8, 0) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to decode profile version", req_id);
-        return;
-    };
-    const profile_id = row.get([]const u8, 1) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to decode profile id", req_id);
-        return;
-    };
-    const version = row.get(i32, 2) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to decode profile version", req_id);
-        return;
-    };
-    const source_markdown = row.get([]const u8, 3) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to decode profile source", req_id);
-        return;
-    };
-
-    const compile_job_id = prefixedId(alloc, "cjob");
-    const now_ms = std.time.milliTimestamp();
-    var insert_job = conn.query(
-        \\INSERT INTO profile_compile_jobs
-        \\  (compile_job_id, workspace_id, requested_profile_id, requested_version, state, failure_reason, validation_report_json, created_at, updated_at)
-        \\VALUES ($1, $2, $3, $4, 'RUNNING', NULL, '{"status":"running"}', $5, $5)
-    , .{ compile_job_id, workspace_id, profile_id, version, now_ms }) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to create compile job", req_id);
-        return;
-    };
-    insert_job.deinit();
-
-    var outcome = harness.compileHarnessMarkdown(alloc, source_markdown) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Harness compile failed", req_id);
-        return;
-    };
-    defer outcome.deinit(alloc);
-
-    const finish_ts = std.time.milliTimestamp();
-    var update_profile = conn.query(
-        \\UPDATE agent_profile_versions
-        \\SET compiled_profile_json = $1,
-        \\    compile_engine = 'deterministic-v1',
-        \\    validation_report_json = $2,
-        \\    is_valid = $3,
-        \\    updated_at = $4
-        \\WHERE profile_version_id = $5
-    , .{
-        outcome.compiled_profile_json,
-        outcome.validation_report_json,
-        outcome.is_valid,
-        finish_ts,
-        profile_version_id,
-    }) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to persist compile output", req_id);
-        return;
-    };
-    update_profile.deinit();
-
-    var update_job = conn.query(
-        \\UPDATE profile_compile_jobs
-        \\SET state = $1,
-        \\    failure_reason = $2,
-        \\    validation_report_json = $3,
-        \\    updated_at = $4
-        \\WHERE compile_job_id = $5
-    , .{
-        if (outcome.is_valid) "SUCCEEDED" else "FAILED",
-        if (outcome.is_valid) null else "deterministic validation failed",
-        outcome.validation_report_json,
-        finish_ts,
-        compile_job_id,
-    }) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to update compile job", req_id);
-        return;
-    };
-    update_job.deinit();
 
     writeJson(r, .ok, .{
-        .compile_job_id = compile_job_id,
+        .compile_job_id = out.compile_job_id,
         .workspace_id = workspace_id,
-        .profile_id = profile_id,
-        .profile_version_id = profile_version_id,
-        .is_valid = outcome.is_valid,
-        .validation_report_json = outcome.validation_report_json,
+        .profile_id = out.profile_id,
+        .profile_version_id = out.profile_version_id,
+        .is_valid = out.is_valid,
+        .validation_report_json = out.validation_report_json,
         .request_id = req_id,
     });
 }
@@ -1544,10 +1307,7 @@ pub fn handleActivateHarness(ctx: *Context, r: zap.Request, workspace_id: []cons
         return;
     };
 
-    const Req = struct {
-        profile_version_id: []const u8,
-        activated_by: ?[]const u8 = null,
-    };
+    const Req = harness_handlers.ActivateInput;
     const body = r.body orelse {
         errorResponse(r, .bad_request, "INVALID_REQUEST", "Request body required", req_id);
         return;
@@ -1569,61 +1329,20 @@ pub fn handleActivateHarness(ctx: *Context, r: zap.Request, workspace_id: []cons
         return;
     }
 
-    var q = conn.query(
-        \\SELECT v.profile_id, v.is_valid
-        \\FROM agent_profile_versions v
-        \\JOIN agent_profiles p ON p.profile_id = v.profile_id
-        \\WHERE p.workspace_id = $1 AND v.profile_version_id = $2
-        \\LIMIT 1
-    , .{ workspace_id, parsed.value.profile_version_id }) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Database error", req_id);
+    const out = harness_handlers.activateProfile(conn, workspace_id, parsed.value) catch |err| {
+        switch (err) {
+            error.ProfileNotFound => errorResponse(r, .not_found, "PROFILE_NOT_FOUND", "Profile version not found", req_id),
+            error.ProfileInvalid => errorResponse(r, .conflict, "PROFILE_INVALID", "Invalid profile cannot be activated", req_id),
+            else => errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to activate profile", req_id),
+        }
         return;
     };
-    defer q.deinit();
-
-    const row = q.next() catch null orelse {
-        errorResponse(r, .not_found, "PROFILE_NOT_FOUND", "Profile version not found", req_id);
-        return;
-    };
-    const profile_id = row.get([]const u8, 0) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Database error", req_id);
-        return;
-    };
-    const is_valid = row.get(bool, 1) catch false;
-    if (!is_valid) {
-        errorResponse(r, .conflict, "PROFILE_INVALID", "Invalid profile cannot be activated", req_id);
-        return;
-    }
-
-    const now_ms = std.time.milliTimestamp();
-    const activated_by = parsed.value.activated_by orelse "api";
-    var upsert = conn.query(
-        \\INSERT INTO workspace_active_profile (workspace_id, profile_version_id, activated_by, activated_at)
-        \\VALUES ($1, $2, $3, $4)
-        \\ON CONFLICT (workspace_id) DO UPDATE
-        \\SET profile_version_id = EXCLUDED.profile_version_id,
-        \\    activated_by = EXCLUDED.activated_by,
-        \\    activated_at = EXCLUDED.activated_at
-    , .{ workspace_id, parsed.value.profile_version_id, activated_by, now_ms }) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to activate profile", req_id);
-        return;
-    };
-    upsert.deinit();
-
-    var mark_active = conn.query(
-        "UPDATE agent_profiles SET status = CASE WHEN profile_id = $1 THEN 'ACTIVE' ELSE status END, updated_at = $2 WHERE workspace_id = $3",
-        .{ profile_id, now_ms, workspace_id },
-    ) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to update profile status", req_id);
-        return;
-    };
-    mark_active.deinit();
 
     writeJson(r, .ok, .{
         .workspace_id = workspace_id,
-        .profile_version_id = parsed.value.profile_version_id,
-        .activated_by = activated_by,
-        .activated_at = now_ms,
+        .profile_version_id = out.profile_version_id,
+        .activated_by = out.activated_by,
+        .activated_at = out.activated_at,
         .request_id = req_id,
     });
 }
@@ -1652,61 +1371,24 @@ pub fn handleGetHarnessActive(ctx: *Context, r: zap.Request, workspace_id: []con
         return;
     }
 
-    var q = conn.query(
-        \\SELECT wap.profile_version_id, v.compiled_profile_json
-        \\FROM workspace_active_profile wap
-        \\JOIN agent_profile_versions v ON v.profile_version_id = wap.profile_version_id
-        \\WHERE wap.workspace_id = $1
-        \\LIMIT 1
-    , .{workspace_id}) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Database error", req_id);
+    const out = harness_handlers.getActiveProfile(conn, alloc, workspace_id) catch {
+        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to resolve active profile", req_id);
         return;
     };
-    defer q.deinit();
+    defer alloc.free(out.profile_json);
 
-    if (q.next() catch null) |row| {
-        const profile_version_id = row.get([]const u8, 0) catch "";
-        const compiled_json_opt = row.get(?[]const u8, 1) catch null;
-        if (compiled_json_opt) |compiled_json| {
-            const parsed_profile = std.json.parseFromSlice(std.json.Value, alloc, compiled_json, .{}) catch null;
-            if (parsed_profile) |pp| {
-                defer pp.deinit();
-                writeJson(r, .ok, .{
-                    .workspace_id = workspace_id,
-                    .source = "active",
-                    .profile_version_id = profile_version_id,
-                    .profile = pp.value,
-                    .request_id = req_id,
-                });
-                return;
-            }
-        }
-    }
-
-    var fallback = topology.defaultProfile(alloc) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to load fallback profile", req_id);
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, out.profile_json, .{}) catch {
+        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to render profile JSON", req_id);
         return;
     };
-    defer fallback.deinit();
-    const fallback_json = harness.stringifyTopologyProfile(alloc, &fallback) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to build fallback", req_id);
-        return;
-    };
-    defer alloc.free(fallback_json);
-    const parsed = std.json.parseFromSlice(std.json.Value, alloc, fallback_json, .{}) catch null;
-    if (parsed) |p| {
-        defer p.deinit();
-        writeJson(r, .ok, .{
-            .workspace_id = workspace_id,
-            .source = "default-v1",
-            .profile_version_id = null,
-            .profile = p.value,
-            .request_id = req_id,
-        });
-        return;
-    }
-
-    errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to render fallback profile", req_id);
+    defer parsed.deinit();
+    writeJson(r, .ok, .{
+        .workspace_id = workspace_id,
+        .source = out.source,
+        .profile_version_id = out.profile_version_id,
+        .profile = parsed.value,
+        .request_id = req_id,
+    });
 }
 
 // ── PUT|DELETE /v1/workspaces/{workspace_id}/skills/{skill_ref}/secrets/{key_name}
@@ -1728,11 +1410,7 @@ pub fn handlePutWorkspaceSkillSecret(
         return;
     };
 
-    const Req = struct {
-        value: []const u8,
-        scope: ?[]const u8 = null,
-        meta_json: ?[]const u8 = null,
-    };
+    const Req = skill_secret_handlers.PutInput;
     const body = r.body orelse {
         errorResponse(r, .bad_request, "INVALID_REQUEST", "Request body required", req_id);
         return;
@@ -1742,11 +1420,6 @@ pub fn handlePutWorkspaceSkillSecret(
         return;
     };
     defer parsed.deinit();
-    if (parsed.value.value.len == 0) {
-        errorResponse(r, .bad_request, "INVALID_REQUEST", "value cannot be empty", req_id);
-        return;
-    }
-
     const conn = ctx.pool.acquire() catch {
         errorResponse(r, .service_unavailable, "INTERNAL_ERROR", "Database unavailable", req_id);
         return;
@@ -1758,51 +1431,20 @@ pub fn handlePutWorkspaceSkillSecret(
         return;
     }
 
-    const skill_ref = decodePathSegment(alloc, skill_ref_encoded) catch {
-        errorResponse(r, .bad_request, "INVALID_REQUEST", "Invalid encoded skill_ref", req_id);
-        return;
-    };
-    const key_name = decodePathSegment(alloc, key_name_encoded) catch {
-        errorResponse(r, .bad_request, "INVALID_REQUEST", "Invalid encoded key_name", req_id);
-        return;
-    };
-    if (key_name.len == 0 or std.mem.indexOfAny(u8, key_name, " \t\r\n") != null) {
-        errorResponse(r, .bad_request, "INVALID_REQUEST", "Invalid key_name", req_id);
-        return;
-    }
-
-    const scope = if (parsed.value.scope) |raw| blk: {
-        if (std.ascii.eqlIgnoreCase(raw, "host")) break :blk secrets.SkillSecretScope.host;
-        if (std.ascii.eqlIgnoreCase(raw, "sandbox")) break :blk secrets.SkillSecretScope.sandbox;
-        errorResponse(r, .bad_request, "INVALID_REQUEST", "scope must be host or sandbox", req_id);
-        return;
-    } else secrets.SkillSecretScope.sandbox;
-
-    const kek = secrets.loadKek(alloc) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "ENCRYPTION_MASTER_KEY is missing", req_id);
-        return;
-    };
-
-    secrets.storeWorkspaceSkillSecret(
-        alloc,
-        conn,
-        workspace_id,
-        skill_ref,
-        key_name,
-        parsed.value.value,
-        scope,
-        parsed.value.meta_json orelse "{}",
-        kek,
-    ) catch {
-        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to store skill secret", req_id);
+    const out = skill_secret_handlers.put(conn, alloc, workspace_id, skill_ref_encoded, key_name_encoded, parsed.value) catch |err| {
+        switch (err) {
+            error.InvalidRequest => errorResponse(r, .bad_request, "INVALID_REQUEST", "Invalid skill secret payload", req_id),
+            error.MissingMasterKey => errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "ENCRYPTION_MASTER_KEY is missing", req_id),
+            else => errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to store skill secret", req_id),
+        }
         return;
     };
 
     writeJson(r, .ok, .{
         .workspace_id = workspace_id,
-        .skill_ref = skill_ref,
-        .key_name = key_name,
-        .scope = scope.label(),
+        .skill_ref = out.skill_ref,
+        .key_name = out.key_name,
+        .scope = out.scope.label(),
         .request_id = req_id,
     });
 }
@@ -1835,24 +1477,15 @@ pub fn handleDeleteWorkspaceSkillSecret(
         return;
     }
 
-    const skill_ref = decodePathSegment(alloc, skill_ref_encoded) catch {
-        errorResponse(r, .bad_request, "INVALID_REQUEST", "Invalid encoded skill_ref", req_id);
-        return;
-    };
-    const key_name = decodePathSegment(alloc, key_name_encoded) catch {
-        errorResponse(r, .bad_request, "INVALID_REQUEST", "Invalid encoded key_name", req_id);
-        return;
-    };
-
-    secrets.deleteWorkspaceSkillSecret(conn, workspace_id, skill_ref, key_name) catch {
+    const out = skill_secret_handlers.delete(conn, alloc, workspace_id, skill_ref_encoded, key_name_encoded) catch {
         errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to delete skill secret", req_id);
         return;
     };
 
     writeJson(r, .ok, .{
         .workspace_id = workspace_id,
-        .skill_ref = skill_ref,
-        .key_name = key_name,
+        .skill_ref = out.skill_ref,
+        .key_name = out.key_name,
         .deleted = true,
         .request_id = req_id,
     });
@@ -1961,7 +1594,7 @@ test "mapClerkVerifyError maps signature failures to unauthorized" {
 }
 
 test "parseSkillSecretRoute extracts workspace, skill_ref, and key_name" {
-    const route = parseSkillSecretRoute("/v1/workspaces/ws_123/skills/clawhub%3A%2F%2Fopenclaw%2Freviewer%401.2.0/secrets/API_KEY") orelse
+    const route = skill_secret_handlers.parseRoute("/v1/workspaces/ws_123/skills/clawhub%3A%2F%2Fopenclaw%2Freviewer%401.2.0/secrets/API_KEY") orelse
         return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("ws_123", route.workspace_id);
     try std.testing.expectEqualStrings("clawhub%3A%2F%2Fopenclaw%2Freviewer%401.2.0", route.skill_ref_encoded);
@@ -1969,7 +1602,7 @@ test "parseSkillSecretRoute extracts workspace, skill_ref, and key_name" {
 }
 
 test "decodePathSegment decodes percent-encoded path segments" {
-    const decoded = try decodePathSegment(std.testing.allocator, "clawhub%3A%2F%2Fopenclaw%2Freviewer%401.2.0");
+    const decoded = try skill_secret_handlers.decodePathSegment(std.testing.allocator, "clawhub%3A%2F%2Fopenclaw%2Freviewer%401.2.0");
     defer std.testing.allocator.free(decoded);
     try std.testing.expectEqualStrings("clawhub://openclaw/reviewer@1.2.0", decoded);
 }
