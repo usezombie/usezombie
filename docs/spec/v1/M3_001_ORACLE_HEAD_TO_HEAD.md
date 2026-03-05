@@ -30,7 +30,7 @@
 | 6 | Rate limiting | **High** | None | Token bucket per tenant/provider |
 | 7 | Backoff | **Critical** | Jittered exponential backoff added in worker loop and retry path; PR HTTP `Retry-After` is now consumed, other paths still incomplete | Exponential + jitter + Retry-After parsing |
 | 8 | Logging (.env / agent-friendly) | **Medium** | Runtime `LOG_LEVEL` supported; logs still unstructured text | Runtime `LOG_LEVEL`; key=value structured logs |
-| 9 | Logging on errors | **High** | Many `catch {}`; generic error names | Classification + context + correlation IDs |
+| 9 | Logging on errors | **High** | Critical silent catches reduced; richer classification/context remains incomplete | Classification + context + correlation IDs |
 | 10 | Error code classification | **Critical** | `error_classify.zig` wired in worker with explicit `AUTH_FAILED`/`RATE_LIMITED` reason codes; API-layer mapping still coarse | `error_classify.zig`: rate_limited / context_exhausted / auth / server_error |
 
 ### Oracle Verification Snapshot (Mar 05, 2026)
@@ -45,7 +45,7 @@
 | 6 | ❌ Open | No token bucket or tenant-level throttling |
 | 7 | ⚠️ Partial | Worker loop and run retry now use exponential+jitter backoff; PR HTTP `Retry-After` is plumbed, but provider/API responses are not yet end-to-end |
 | 8 | ⚠️ Partial | Runtime `LOG_LEVEL` is implemented; structured key/value logging and observer wiring are still missing |
-| 9 | ⚠️ Partial | Some error paths improved, but consistent classification/context is missing |
+| 9 | ⚠️ Partial | Critical silent catches on worker/http paths are reduced, but full classification/context consistency is still missing |
 | 10 | ⚠️ Partial | `error_classify` drives worker failure mapping with explicit auth/quota reason codes; richer provider payload parsing and HTTP/API harmonization are still missing |
 | 11 | ⚠️ Partial | Path canonicalization + hook disable done; env scrubbing/sandbox hardening still pending |
 | 12 | ⚠️ Partial | Signal handling + join done; stale worktree startup cleanup still missing |
