@@ -4,6 +4,24 @@ const db = @import("../db/pool.zig");
 const clerk_auth = @import("../auth/clerk.zig");
 const queue_redis = @import("../queue/redis.zig");
 
+fn redisUrlUsesTls(url: []const u8) bool {
+    return std.mem.startsWith(u8, url, "rediss://");
+}
+
+fn redisUsernameFromUrl(url: []const u8) ?[]const u8 {
+    const rest = if (std.mem.startsWith(u8, url, "redis://"))
+        url["redis://".len..]
+    else if (std.mem.startsWith(u8, url, "rediss://"))
+        url["rediss://".len..]
+    else
+        return null;
+    const at = std.mem.lastIndexOfScalar(u8, rest, '@') orelse return null;
+    const userpass = rest[0..at];
+    const colon = std.mem.indexOfScalar(u8, userpass, ':') orelse return null;
+    if (colon == 0) return null;
+    return userpass[0..colon];
+}
+
 pub fn run(alloc: std.mem.Allocator) !void {
     var ok = true;
     var stdout_buf: [8192]u8 = undefined;
@@ -11,6 +29,51 @@ pub fn run(alloc: std.mem.Allocator) !void {
     const stdout = &stdout_w.interface;
 
     try stdout.print("zombied doctor\n\n", .{});
+
+    const db_api_url = std.process.getEnvVarOwned(alloc, db.roleEnvVarName(.api)) catch null;
+    defer if (db_api_url) |v| alloc.free(v);
+    const db_worker_url = std.process.getEnvVarOwned(alloc, db.roleEnvVarName(.worker)) catch null;
+    defer if (db_worker_url) |v| alloc.free(v);
+    const redis_api_url = std.process.getEnvVarOwned(alloc, queue_redis.roleEnvVarName(.api)) catch null;
+    defer if (redis_api_url) |v| alloc.free(v);
+    const redis_worker_url = std.process.getEnvVarOwned(alloc, queue_redis.roleEnvVarName(.worker)) catch null;
+    defer if (redis_worker_url) |v| alloc.free(v);
+
+    role_env_check: {
+        if (db_api_url == null or db_worker_url == null) {
+            try stdout.print("  [FAIL] DATABASE_URL_API and DATABASE_URL_WORKER required (no shared fallback)\n", .{});
+            ok = false;
+            break :role_env_check;
+        }
+        if (std.mem.eql(u8, db_api_url.?, db_worker_url.?)) {
+            try stdout.print("  [FAIL] DATABASE_URL_API and DATABASE_URL_WORKER must differ\n", .{});
+            ok = false;
+            break :role_env_check;
+        }
+
+        if (redis_api_url == null or redis_worker_url == null) {
+            try stdout.print("  [FAIL] REDIS_URL_API and REDIS_URL_WORKER required (no shared fallback)\n", .{});
+            ok = false;
+            break :role_env_check;
+        }
+        if (std.mem.eql(u8, redis_api_url.?, redis_worker_url.?)) {
+            try stdout.print("  [FAIL] REDIS_URL_API and REDIS_URL_WORKER must differ\n", .{});
+            ok = false;
+            break :role_env_check;
+        }
+        if (!redisUrlUsesTls(redis_api_url.?)) {
+            try stdout.print("  [FAIL] REDIS_URL_API must use rediss://\n", .{});
+            ok = false;
+            break :role_env_check;
+        }
+        if (!redisUrlUsesTls(redis_worker_url.?)) {
+            try stdout.print("  [FAIL] REDIS_URL_WORKER must use rediss://\n", .{});
+            ok = false;
+            break :role_env_check;
+        }
+
+        try stdout.print("  [OK]   Role-separated DB/Redis URLs configured with Redis TLS\n", .{});
+    }
 
     db_check: {
         const pool = db.initFromEnvForRole(alloc, .api) catch {
@@ -34,32 +97,60 @@ pub fn run(alloc: std.mem.Allocator) !void {
 
     redis_api_check: {
         var client = queue_redis.Client.connectFromEnv(alloc, .api) catch {
-            try stdout.print("  [FAIL] REDIS_URL_API or REDIS_URL not set/invalid\n", .{});
+            try stdout.print("  [FAIL] REDIS_URL_API not set/invalid\n", .{});
             ok = false;
             break :redis_api_check;
         };
         defer client.deinit();
-        client.ping() catch {
-            try stdout.print("  [FAIL] Redis API connectivity (PING)\n", .{});
+        client.readyCheck() catch {
+            try stdout.print("  [FAIL] Redis API readiness (PING + XGROUP)\n", .{});
             ok = false;
             break :redis_api_check;
         };
-        try stdout.print("  [OK]   Redis API connectivity\n", .{});
+        const expected = if (redis_api_url) |u| redisUsernameFromUrl(u) else null;
+        if (expected) |user| {
+            const actual = client.aclWhoAmI() catch {
+                try stdout.print("  [FAIL] Redis API ACL identity probe failed (ACL WHOAMI)\n", .{});
+                ok = false;
+                break :redis_api_check;
+            };
+            defer alloc.free(actual);
+            if (!std.mem.eql(u8, actual, user)) {
+                try stdout.print("  [FAIL] Redis API ACL user mismatch expected={s} actual={s}\n", .{ user, actual });
+                ok = false;
+                break :redis_api_check;
+            }
+        }
+        try stdout.print("  [OK]   Redis API readiness + ACL identity\n", .{});
     }
 
     redis_worker_check: {
         var client = queue_redis.Client.connectFromEnv(alloc, .worker) catch {
-            try stdout.print("  [FAIL] REDIS_URL_WORKER or REDIS_URL not set/invalid\n", .{});
+            try stdout.print("  [FAIL] REDIS_URL_WORKER not set/invalid\n", .{});
             ok = false;
             break :redis_worker_check;
         };
         defer client.deinit();
-        client.ping() catch {
-            try stdout.print("  [FAIL] Redis worker connectivity (PING)\n", .{});
+        client.readyCheck() catch {
+            try stdout.print("  [FAIL] Redis worker readiness (PING + XGROUP)\n", .{});
             ok = false;
             break :redis_worker_check;
         };
-        try stdout.print("  [OK]   Redis worker connectivity\n", .{});
+        const expected = if (redis_worker_url) |u| redisUsernameFromUrl(u) else null;
+        if (expected) |user| {
+            const actual = client.aclWhoAmI() catch {
+                try stdout.print("  [FAIL] Redis worker ACL identity probe failed (ACL WHOAMI)\n", .{});
+                ok = false;
+                break :redis_worker_check;
+            };
+            defer alloc.free(actual);
+            if (!std.mem.eql(u8, actual, user)) {
+                try stdout.print("  [FAIL] Redis worker ACL user mismatch expected={s} actual={s}\n", .{ user, actual });
+                ok = false;
+                break :redis_worker_check;
+            }
+        }
+        try stdout.print("  [OK]   Redis worker readiness + ACL identity\n", .{});
     }
 
     {
@@ -184,4 +275,15 @@ pub fn run(alloc: std.mem.Allocator) !void {
     });
     try stdout.flush();
     if (!ok) std.process.exit(1);
+}
+
+test "redisUsernameFromUrl parses user for redis and rediss" {
+    try std.testing.expectEqualStrings("api_user", redisUsernameFromUrl("redis://api_user:pw@cache.local:6379").?);
+    try std.testing.expectEqualStrings("worker_user", redisUsernameFromUrl("rediss://worker_user:pw@cache.local:6379").?);
+    try std.testing.expect(redisUsernameFromUrl("rediss://cache.local:6379") == null);
+}
+
+test "redisUrlUsesTls enforces rediss scheme" {
+    try std.testing.expect(redisUrlUsesTls("rediss://api:pw@cache.local:6379"));
+    try std.testing.expect(!redisUrlUsesTls("redis://api:pw@cache.local:6379"));
 }

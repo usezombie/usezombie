@@ -1,7 +1,7 @@
 # M3_005: Security Hardening — Service-to-Service Access Control
 
 Date: Mar 4, 2026
-Status: PENDING
+Status: DONE
 Priority: P0 — v1 requirement
 Depends on: M3_000 (secrets/schema separation), M3_004 completion for Redis ACL validation
 

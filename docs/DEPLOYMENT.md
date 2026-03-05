@@ -213,6 +213,10 @@ Deploy in sequence.
    - If migration lock is busy, `serve` exits immediately (`migration in progress`) and should be restarted after lock holder completes.
    - If DB schema version is newer than binary's canonical migrations, `serve` exits (binary/schema mismatch).
 5. Verify `/healthz` and `/readyz` endpoints.
+6. Security hardening guardrail:
+   - `DATABASE_URL_API` and `DATABASE_URL_WORKER` must both be set and must differ.
+   - `REDIS_URL_API` and `REDIS_URL_WORKER` must both be set, must differ, and must use `rediss://`.
+   - Shared fallback URLs are rejected at startup (fail closed).
 
 ### Step 5: Worker (`zombied worker`)
 
