@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const pg = @import("pg");
+const db = @import("../db/pool.zig");
 const types = @import("../types.zig");
 const state = @import("../state/machine.zig");
 const agents = @import("agents.zig");
@@ -33,7 +34,7 @@ pub const WorkerConfig = struct {
     github_app_id: []const u8,
     github_app_private_key: []const u8,
     pipeline_profile_path: []const u8,
-    adapter_registry: ?*const agents.AdapterRegistry = null,
+    skill_registry: ?*const agents.SkillRegistry = null,
     max_attempts: u32 = 3,
     run_timeout_ms: u64 = 300_000,
     poll_interval_ms: u64 = 2_000,
@@ -203,12 +204,12 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
         alloc.free(prompts.warden);
     }
 
-    var profile = topology.loadProfile(alloc, cfg.pipeline_profile_path) catch |err| {
-        obs_log.logErr(.worker, err, "failed to load pipeline profile path={s}", .{cfg.pipeline_profile_path});
+    var profile = topology.defaultProfile(alloc) catch |err| {
+        obs_log.logErr(.worker, err, "failed to initialize default pipeline profile", .{});
         return;
     };
     defer profile.deinit();
-    log.info("pipeline profile loaded profile={s} stages={d}", .{ profile.profile_id, profile.stages.len });
+    log.info("default pipeline profile loaded profile={s} stages={d}", .{ profile.profile_id, profile.stages.len });
 
     var token_cache = github_auth.TokenCache.init(alloc, cfg.github_app_id, cfg.github_app_private_key);
     defer token_cache.deinit();
@@ -329,6 +330,26 @@ fn beginRunIfActive(worker_state: *WorkerState) WorkerError!void {
     worker_state.beginRun();
 }
 
+fn loadWorkspaceActiveProfile(
+    alloc: std.mem.Allocator,
+    conn: *pg.Conn,
+    workspace_id: []const u8,
+) !?topology.Profile {
+    var q = try conn.query(
+        \\SELECT v.compiled_profile_json
+        \\FROM workspace_active_profile wap
+        \\JOIN agent_profile_versions v ON v.profile_version_id = wap.profile_version_id
+        \\WHERE wap.workspace_id = $1 AND v.is_valid = TRUE
+        \\LIMIT 1
+    , .{workspace_id});
+    defer q.deinit();
+
+    const row = try q.next() orelse return null;
+    const compiled_opt = try row.get(?[]const u8, 0);
+    const compiled = compiled_opt orelse return null;
+    return topology.parseProfileJson(alloc, compiled);
+}
+
 fn processNextRun(
     alloc: std.mem.Allocator,
     cfg: WorkerConfig,
@@ -391,6 +412,20 @@ fn processNextRun(
     try commitTx(conn);
     tx_open = false;
 
+    var workspace_profile: ?topology.Profile = loadWorkspaceActiveProfile(alloc, conn, workspace_id) catch |err| blk: {
+        obs_log.logWarnErr(.worker, err, "active profile load failed; fallback to default workspace_id={s}", .{workspace_id});
+        break :blk null;
+    };
+    defer if (workspace_profile) |*p| p.deinit();
+
+    const effective_profile: *const topology.Profile = if (workspace_profile) |*p| p else profile;
+    const using_fallback = workspace_profile == null;
+    log.info("workspace profile resolved workspace_id={s} profile={s} fallback_default_v1={}", .{
+        workspace_id,
+        effective_profile.profile_id,
+        using_fallback,
+    });
+
     try beginRunIfActive(worker_state);
     defer worker_state.endRun();
 
@@ -403,7 +438,7 @@ fn processNextRun(
     ) catch "run_claimed";
     events.emit("run_claimed", run_id, claimed_detail_slice);
 
-    executeRun(alloc, cfg, worker_state, prompts, profile, conn, token_cache, .{
+    executeRun(alloc, cfg, worker_state, prompts, effective_profile, conn, token_cache, .{
         .run_id = run_id,
         .request_id = request_id,
         .workspace_id = workspace_id,
@@ -749,11 +784,11 @@ const StageTransition = union(enum) {
     blocked,
 };
 
-fn resolveBinding(cfg: WorkerConfig, role_id: []const u8, adapter_id: []const u8) ?agents.RoleBinding {
-    if (cfg.adapter_registry) |registry| {
-        if (agents.resolveRoleWithRegistry(registry, role_id, adapter_id)) |binding| return binding;
+fn resolveBinding(cfg: WorkerConfig, role_id: []const u8, skill_id: []const u8) ?agents.RoleBinding {
+    if (cfg.skill_registry) |registry| {
+        if (agents.resolveRoleWithRegistry(registry, role_id, skill_id)) |binding| return binding;
     }
-    return agents.resolveRole(role_id, adapter_id);
+    return agents.resolveRole(role_id, skill_id);
 }
 
 fn resolveStageTransition(profile: *const topology.Profile, current_index: usize, passed: bool) !StageTransition {
@@ -827,10 +862,10 @@ fn executeRun(
 
     // ── Stage 1: planning stage (echo role in default profile) ─────────
     const plan_stage = profile.stages[0];
-    const plan_binding = agents.lookupRole(plan_stage.role_id) orelse return WorkerError.InvalidPipelineRole;
+    const plan_binding = resolveBinding(cfg, plan_stage.role_id, plan_stage.skill_id) orelse return WorkerError.InvalidPipelineRole;
 
     try ensureRunActive(worker_state, deadline_ms);
-    try tenant_limiter.acquireCancelable(ctx.tenant_id, plan_stage.role_id, 1.0, worker_state, deadline_ms);
+    try tenant_limiter.acquireCancelable(ctx.tenant_id, plan_stage.skill_id, 1.0, worker_state, deadline_ms);
     const plan_result = try reliable.call(agents.AgentResult, StageRetryCtx{
         .alloc = run_alloc,
         .binding = plan_binding,
@@ -840,7 +875,7 @@ fn executeRun(
             .spec_content = spec_content,
             .memory_context = memory_context,
         },
-    }, opRunStage, retryOptionsForRun(worker_state, deadline_ms, 1, 1_000, 8_000, plan_stage.role_id));
+    }, opRunStage, retryOptionsForRun(worker_state, deadline_ms, 1, 1_000, 8_000, plan_stage.skill_id));
     metrics.incAgentEchoCalls();
     metrics.addAgentTokens(plan_result.token_count);
     metrics.observeAgentDurationSeconds(plan_result.wall_seconds);
@@ -894,7 +929,7 @@ fn executeRun(
 
         while (true) {
             const stage = profile.stages[current_stage_index];
-            const binding = resolveBinding(cfg, stage.role_id, stage.adapter_id) orelse return WorkerError.InvalidPipelineRole;
+            const binding = resolveBinding(cfg, stage.role_id, stage.skill_id) orelse return WorkerError.InvalidPipelineRole;
 
             if (stage.is_gate and !verification_started) {
                 _ = try state.transition(conn, ctx.run_id, .PATCH_READY, .scout, .PATCH_COMMITTED, null);
@@ -909,7 +944,7 @@ fn executeRun(
                 attempt,
             });
 
-            try tenant_limiter.acquireCancelable(ctx.tenant_id, stage.role_id, 1.0, worker_state, deadline_ms);
+            try tenant_limiter.acquireCancelable(ctx.tenant_id, stage.skill_id, 1.0, worker_state, deadline_ms);
             try ensureRunActive(worker_state, deadline_ms);
             const stage_result = try reliable.call(agents.AgentResult, StageRetryCtx{
                 .alloc = run_alloc,
@@ -922,7 +957,7 @@ fn executeRun(
                     .defects_content = defects,
                     .implementation_summary = latest_build_output,
                 },
-            }, opRunStage, retryOptionsForRun(worker_state, deadline_ms, 1, 1_000, 8_000, stage.adapter_id));
+            }, opRunStage, retryOptionsForRun(worker_state, deadline_ms, 1, 1_000, 8_000, stage.skill_id));
 
             switch (binding.actor) {
                 .echo => metrics.incAgentEchoCalls(),
@@ -1270,6 +1305,105 @@ fn sha256Hex(data: []const u8) [64]u8 {
     return std.fmt.bytesToHex(digest, .lower);
 }
 
+fn openWorkerTestConn(alloc: std.mem.Allocator) !?struct { pool: *db.Pool, conn: *pg.Conn } {
+    const url = std.process.getEnvVarOwned(alloc, "WORKER_DB_TEST_URL") catch
+        std.process.getEnvVarOwned(alloc, "DATABASE_URL") catch return null;
+    defer alloc.free(url);
+
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const opts = try db.parseUrl(arena.allocator(), url);
+    const pool = try pg.Pool.init(alloc, opts);
+    errdefer pool.deinit();
+    const conn = try pool.acquire();
+    return .{ .pool = pool, .conn = conn };
+}
+
+test "integration: workspace active profile is loaded for worker execution" {
+    const db_ctx = (try openWorkerTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.release(db_ctx.conn);
+    defer db_ctx.pool.deinit();
+
+    {
+        var q = try db_ctx.conn.query(
+            \\CREATE TEMP TABLE agent_profile_versions (
+            \\  profile_version_id TEXT PRIMARY KEY,
+            \\  compiled_profile_json TEXT,
+            \\  is_valid BOOLEAN NOT NULL
+            \\) ON COMMIT DROP
+        , .{});
+        q.deinit();
+    }
+    {
+        var q = try db_ctx.conn.query(
+            \\CREATE TEMP TABLE workspace_active_profile (
+            \\  workspace_id TEXT PRIMARY KEY,
+            \\  profile_version_id TEXT NOT NULL
+            \\) ON COMMIT DROP
+        , .{});
+        q.deinit();
+    }
+
+    const compiled =
+        \\{
+        \\  "profile_id": "acme-harness-v1",
+        \\  "stages": [
+        \\    {"stage_id":"plan","role":"planner","skill":"echo"},
+        \\    {"stage_id":"implement","role":"implementer","skill":"scout"},
+        \\    {"stage_id":"verify","role":"security","skill":"warden","gate":true,"on_pass":"done","on_fail":"retry"}
+        \\  ]
+        \\}
+    ;
+    {
+        var q = try db_ctx.conn.query(
+            "INSERT INTO agent_profile_versions (profile_version_id, compiled_profile_json, is_valid) VALUES ('pver_1', $1, TRUE)",
+            .{compiled},
+        );
+        q.deinit();
+    }
+    {
+        var q = try db_ctx.conn.query(
+            "INSERT INTO workspace_active_profile (workspace_id, profile_version_id) VALUES ('ws_1', 'pver_1')",
+            .{},
+        );
+        q.deinit();
+    }
+
+    var profile = (try loadWorkspaceActiveProfile(std.testing.allocator, db_ctx.conn, "ws_1")) orelse return error.TestUnexpectedResult;
+    defer profile.deinit();
+    try std.testing.expectEqualStrings("acme-harness-v1", profile.profile_id);
+    try std.testing.expectEqual(@as(usize, 3), profile.stages.len);
+}
+
+test "integration: worker profile fallback path returns null when no active binding" {
+    const db_ctx = (try openWorkerTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.release(db_ctx.conn);
+    defer db_ctx.pool.deinit();
+
+    {
+        var q = try db_ctx.conn.query(
+            \\CREATE TEMP TABLE agent_profile_versions (
+            \\  profile_version_id TEXT PRIMARY KEY,
+            \\  compiled_profile_json TEXT,
+            \\  is_valid BOOLEAN NOT NULL
+            \\) ON COMMIT DROP
+        , .{});
+        q.deinit();
+    }
+    {
+        var q = try db_ctx.conn.query(
+            \\CREATE TEMP TABLE workspace_active_profile (
+            \\  workspace_id TEXT PRIMARY KEY,
+            \\  profile_version_id TEXT NOT NULL
+            \\) ON COMMIT DROP
+        , .{});
+        q.deinit();
+    }
+
+    const none = try loadWorkspaceActiveProfile(std.testing.allocator, db_ctx.conn, "ws_missing");
+    try std.testing.expect(none == null);
+}
+
 test "isWithinPath respects directory boundaries" {
     try std.testing.expect(isWithinPath("/tmp/wt", "/tmp/wt/docs/spec.md"));
     try std.testing.expect(isWithinPath("/tmp/wt", "/tmp/wt"));
@@ -1315,7 +1449,7 @@ test "integration: default topology roles resolve through registry" {
     defer profile.deinit();
 
     for (profile.stages) |stage| {
-        try std.testing.expect(resolveBinding(.{}, stage.role_id, stage.adapter_id) != null);
+        try std.testing.expect(resolveBinding(.{}, stage.role_id, stage.skill_id) != null);
     }
 }
 

@@ -19,6 +19,41 @@ pub const SecretError = error{
     NotFound,
 };
 
+pub const SkillSecretScope = enum {
+    host,
+    sandbox,
+
+    pub fn label(self: SkillSecretScope) []const u8 {
+        return switch (self) {
+            .host => "host",
+            .sandbox => "sandbox",
+        };
+    }
+};
+
+pub const EnvPair = struct {
+    name: []u8,
+    value: []u8,
+};
+
+pub const SecretInjectionPlan = struct {
+    host_env: []EnvPair,
+    sandbox_env: []EnvPair,
+
+    pub fn deinit(self: SecretInjectionPlan, alloc: std.mem.Allocator) void {
+        for (self.host_env) |entry| {
+            alloc.free(entry.name);
+            alloc.free(entry.value);
+        }
+        alloc.free(self.host_env);
+        for (self.sandbox_env) |entry| {
+            alloc.free(entry.name);
+            alloc.free(entry.value);
+        }
+        alloc.free(self.sandbox_env);
+    }
+};
+
 pub const EncryptedBlob = struct {
     nonce: [NONCE_LEN]u8,
     ciphertext: []u8,
@@ -179,6 +214,136 @@ pub fn load(
     return decrypt(alloc, &payload_nonce, payload_ciphertext, &payload_tag, &dek);
 }
 
+pub fn storeWorkspaceSkillSecret(
+    alloc: std.mem.Allocator,
+    conn: *pg.Conn,
+    workspace_id: []const u8,
+    skill_ref: []const u8,
+    key_name: []const u8,
+    plaintext: []const u8,
+    scope: SkillSecretScope,
+    secret_meta_json: []const u8,
+    kek: [KEY_LEN]u8,
+) !void {
+    var dek: [KEY_LEN]u8 = undefined;
+    std.crypto.random.bytes(&dek);
+
+    const wrapped_dek = try encrypt(alloc, dek[0..], &kek);
+    defer wrapped_dek.deinit(alloc);
+
+    const encrypted_payload = try encrypt(alloc, plaintext, &dek);
+    defer encrypted_payload.deinit(alloc);
+
+    const now_ms = std.time.milliTimestamp();
+
+    var result = try conn.query(
+        \\INSERT INTO vault.workspace_skill_secrets
+        \\  (workspace_id, skill_ref, key_name, scope, secret_meta_json, kek_version, encrypted_dek, dek_nonce, dek_tag, nonce, ciphertext, tag, created_at, updated_at)
+        \\VALUES ($1, $2, $3, $4, $5, 1, $6, $7, $8, $9, $10, $11, $12, $12)
+        \\ON CONFLICT (workspace_id, skill_ref, key_name) DO UPDATE
+        \\SET scope = EXCLUDED.scope,
+        \\    secret_meta_json = EXCLUDED.secret_meta_json,
+        \\    encrypted_dek = EXCLUDED.encrypted_dek,
+        \\    dek_nonce = EXCLUDED.dek_nonce,
+        \\    dek_tag = EXCLUDED.dek_tag,
+        \\    nonce = EXCLUDED.nonce,
+        \\    ciphertext = EXCLUDED.ciphertext,
+        \\    tag = EXCLUDED.tag,
+        \\    updated_at = EXCLUDED.updated_at
+    , .{
+        workspace_id,
+        skill_ref,
+        key_name,
+        scope.label(),
+        secret_meta_json,
+        wrapped_dek.ciphertext,
+        wrapped_dek.nonce[0..],
+        wrapped_dek.tag[0..],
+        encrypted_payload.nonce[0..],
+        encrypted_payload.ciphertext,
+        encrypted_payload.tag[0..],
+        now_ms,
+    });
+    result.deinit();
+}
+
+pub fn deleteWorkspaceSkillSecret(
+    conn: *pg.Conn,
+    workspace_id: []const u8,
+    skill_ref: []const u8,
+    key_name: []const u8,
+) !void {
+    var result = try conn.query(
+        \\DELETE FROM vault.workspace_skill_secrets
+        \\WHERE workspace_id = $1 AND skill_ref = $2 AND key_name = $3
+    , .{ workspace_id, skill_ref, key_name });
+    result.deinit();
+}
+
+pub fn buildSecretInjectionPlan(
+    alloc: std.mem.Allocator,
+    keys: []const []const u8,
+    values: []const []const u8,
+    scopes: []const SkillSecretScope,
+) !SecretInjectionPlan {
+    if (keys.len != values.len or keys.len != scopes.len) return SecretError.InvalidEnvelope;
+
+    var host_env = std.ArrayList(EnvPair).empty;
+    errdefer {
+        for (host_env.items) |entry| {
+            alloc.free(entry.name);
+            alloc.free(entry.value);
+        }
+        host_env.deinit(alloc);
+    }
+
+    var sandbox_env = std.ArrayList(EnvPair).empty;
+    errdefer {
+        for (sandbox_env.items) |entry| {
+            alloc.free(entry.name);
+            alloc.free(entry.value);
+        }
+        sandbox_env.deinit(alloc);
+    }
+
+    for (keys, values, scopes) |key, value, scope| {
+        const env_name = try normalizeSkillSecretEnvName(alloc, key, scope);
+        const env_value = try alloc.dupe(u8, value);
+        const entry: EnvPair = .{ .name = env_name, .value = env_value };
+        switch (scope) {
+            .host => try host_env.append(alloc, entry),
+            .sandbox => try sandbox_env.append(alloc, entry),
+        }
+    }
+
+    return .{
+        .host_env = try host_env.toOwnedSlice(alloc),
+        .sandbox_env = try sandbox_env.toOwnedSlice(alloc),
+    };
+}
+
+fn normalizeSkillSecretEnvName(
+    alloc: std.mem.Allocator,
+    key_name: []const u8,
+    scope: SkillSecretScope,
+) ![]u8 {
+    const prefix = switch (scope) {
+        .host => "UZ_HOST_SKILL_",
+        .sandbox => "UZ_SANDBOX_SKILL_",
+    };
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(alloc);
+    try out.appendSlice(alloc, prefix);
+    for (key_name) |c| {
+        if (std.ascii.isAlphanumeric(c)) {
+            try out.append(alloc, std.ascii.toUpper(c));
+        } else {
+            try out.append(alloc, '_');
+        }
+    }
+    return out.toOwnedSlice(alloc);
+}
+
 test "encrypt/decrypt round-trip with raw bytes" {
     const alloc = std.testing.allocator;
 
@@ -211,4 +376,17 @@ test "decrypt fails when tag is tampered" {
         SecretError.DecryptFailed,
         decrypt(alloc, &blob.nonce, blob.ciphertext, &bad_tag, &key),
     );
+}
+
+test "buildSecretInjectionPlan keeps host and sandbox scopes separate" {
+    const keys = [_][]const u8{ "api_key", "session-token" };
+    const values = [_][]const u8{ "k1", "k2" };
+    const scopes = [_]SkillSecretScope{ .host, .sandbox };
+    const plan = try buildSecretInjectionPlan(std.testing.allocator, &keys, &values, &scopes);
+    defer plan.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), plan.host_env.len);
+    try std.testing.expectEqual(@as(usize, 1), plan.sandbox_env.len);
+    try std.testing.expectEqualStrings("UZ_HOST_SKILL_API_KEY", plan.host_env[0].name);
+    try std.testing.expectEqualStrings("UZ_SANDBOX_SKILL_SESSION_TOKEN", plan.sandbox_env[0].name);
 }

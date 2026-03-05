@@ -28,6 +28,12 @@ zombiectl run [spec_id]                # Trigger a run (or next queued spec)
 zombiectl run status <run_id>          # Watch run progress (live polling)
 zombiectl runs list                    # List recent runs with status
 zombiectl doctor                       # Check connectivity, auth, workspace health
+zombiectl harness source put <file>    # Upload harness markdown source for workspace
+zombiectl harness compile [--version]  # Compile + validate workspace harness profile
+zombiectl harness activate <version>   # Activate validated harness profile version
+zombiectl harness active               # Fetch active profile (or default-v1 fallback)
+zombiectl skills secret put <skill_ref> <key_name> --from-env <ENV> [--scope host|sandbox]
+zombiectl skills secret delete <skill_ref> <key_name>
 ```
 
 ## Tech Stack
@@ -149,6 +155,32 @@ Workspaces    ✓ 3 active workspaces
 GitHub App    ✓ Installation valid for 3 repos
 Config        ✓ ~/.zombie/config.json exists
 ```
+
+## Harness And Skill Secrets
+
+### `zombiectl harness source put <file>`
+
+Uploads workspace harness markdown to `PUT /v1/workspaces/{workspace_id}/harness/source` and creates a new draft profile version.
+
+### `zombiectl harness compile [--version <profile_version_id>]`
+
+Triggers deterministic compile + validation via `POST /v1/workspaces/{workspace_id}/harness/compile`.
+
+### `zombiectl harness activate <profile_version_id>`
+
+Activates a validated profile version with `POST /v1/workspaces/{workspace_id}/harness/activate`.
+
+### `zombiectl harness active`
+
+Fetches current active profile using `GET /v1/workspaces/{workspace_id}/harness/active` and shows whether source is `active` or `default-v1`.
+
+### `zombiectl skills secret put/delete`
+
+Manages per-workspace, per-skill secrets:
+- `PUT /v1/workspaces/{workspace_id}/skills/{skill_ref}/secrets/{key_name}`
+- `DELETE /v1/workspaces/{workspace_id}/skills/{skill_ref}/secrets/{key_name}`
+
+For ClawHub skill refs in `harness.md`, CLI URL-encodes `skill_ref` and stores secrets with explicit scope (`host` vs `sandbox`) to preserve injection boundaries.
 
 ## Config File
 
