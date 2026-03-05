@@ -27,6 +27,18 @@ pub const Migration = struct {
     sql: []const u8,
 };
 
+pub const MigrationState = struct {
+    expected_versions: u32,
+    applied_versions: u32,
+    latest_expected_version: i32,
+    latest_applied_version: i32,
+    has_failed_migrations: bool,
+    lock_available: bool,
+    has_newer_schema_version: bool,
+};
+
+const MigrationAdvisoryLockKey: i64 = 0x7A6F6D6269650001;
+
 /// Parse a Postgres connection URL into pg.Pool.Opts.
 /// URL format: postgres://user:pass@host:port/dbname
 pub fn parseUrl(alloc: std.mem.Allocator, url: []const u8) !pg.Pool.Opts {
@@ -133,6 +145,17 @@ fn ensureSchemaMigrationsTable(conn: *Conn) !void {
     result.deinit();
 }
 
+fn ensureSchemaMigrationFailuresTable(conn: *Conn) !void {
+    var result = try conn.query(
+        \\CREATE TABLE IF NOT EXISTS schema_migration_failures (
+        \\    version     INTEGER PRIMARY KEY,
+        \\    failed_at   BIGINT NOT NULL,
+        \\    error_text  TEXT NOT NULL
+        \\)
+    , .{});
+    result.deinit();
+}
+
 fn isMigrationApplied(conn: *Conn, version: i32) !bool {
     var result = try conn.query(
         "SELECT 1 FROM schema_migrations WHERE version = $1",
@@ -140,6 +163,56 @@ fn isMigrationApplied(conn: *Conn, version: i32) !bool {
     );
     defer result.deinit();
     return (try result.next()) != null;
+}
+
+fn hasFailedMigrationRecords(conn: *Conn) !bool {
+    var result = try conn.query(
+        "SELECT 1 FROM schema_migration_failures LIMIT 1",
+        .{},
+    );
+    defer result.deinit();
+    return (try result.next()) != null;
+}
+
+fn tryAcquireMigrationLock(conn: *Conn) !bool {
+    var result = try conn.query("SELECT pg_try_advisory_lock($1)", .{MigrationAdvisoryLockKey});
+    defer result.deinit();
+    const row = try result.next() orelse return false;
+    return try row.get(bool, 0);
+}
+
+fn acquireMigrationLock(conn: *Conn) !void {
+    var result = try conn.query("SELECT pg_advisory_lock($1)", .{MigrationAdvisoryLockKey});
+    result.deinit();
+}
+
+fn releaseMigrationLock(conn: *Conn) void {
+    var result = conn.query("SELECT pg_advisory_unlock($1)", .{MigrationAdvisoryLockKey}) catch return;
+    result.deinit();
+}
+
+fn markMigrationFailure(conn: *Conn, version: i32, err: anyerror) void {
+    const ts = std.time.milliTimestamp();
+    var q = conn.query(
+        \\INSERT INTO schema_migration_failures (version, failed_at, error_text)
+        \\VALUES ($1, $2, $3)
+        \\ON CONFLICT (version) DO UPDATE
+        \\SET failed_at = EXCLUDED.failed_at,
+        \\    error_text = EXCLUDED.error_text
+    , .{ version, ts, @errorName(err) }) catch return;
+    q.deinit();
+}
+
+fn clearMigrationFailure(conn: *Conn, version: i32) void {
+    var q = conn.query("DELETE FROM schema_migration_failures WHERE version = $1", .{version}) catch return;
+    q.deinit();
+}
+
+fn maxAppliedMigrationVersion(conn: *Conn) !i32 {
+    var result = try conn.query("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", .{});
+    defer result.deinit();
+    const row = try result.next() orelse return 0;
+    return try row.get(i32, 0);
 }
 
 fn applySqlStatements(conn: *Conn, sql: []const u8) !u32 {
@@ -205,22 +278,61 @@ fn rollbackTx(conn: *Conn) void {
     tx.deinit();
 }
 
+pub fn inspectMigrationState(pool: *Pool, migrations: []const Migration) !MigrationState {
+    const conn = try pool.acquire();
+    defer pool.release(conn);
+
+    try ensureSchemaMigrationsTable(conn);
+    try ensureSchemaMigrationFailuresTable(conn);
+
+    var applied_versions: u32 = 0;
+    var latest_expected: i32 = 0;
+    for (migrations) |migration| {
+        latest_expected = @max(latest_expected, migration.version);
+        if (try isMigrationApplied(conn, migration.version)) {
+            applied_versions += 1;
+        }
+    }
+
+    const latest_applied = try maxAppliedMigrationVersion(conn);
+    const failed = try hasFailedMigrationRecords(conn);
+    const lock_available = try tryAcquireMigrationLock(conn);
+    if (lock_available) releaseMigrationLock(conn);
+
+    return .{
+        .expected_versions = @intCast(migrations.len),
+        .applied_versions = applied_versions,
+        .latest_expected_version = latest_expected,
+        .latest_applied_version = latest_applied,
+        .has_failed_migrations = failed,
+        .lock_available = lock_available,
+        .has_newer_schema_version = latest_applied > latest_expected,
+    };
+}
+
 /// Execute versioned schema migrations, once each, in order.
 pub fn runMigrations(pool: *Pool, migrations: []const Migration) !void {
     var conn = try pool.acquire();
     defer pool.release(conn);
 
     try ensureSchemaMigrationsTable(conn);
+    try ensureSchemaMigrationFailuresTable(conn);
+
+    try acquireMigrationLock(conn);
+    defer releaseMigrationLock(conn);
 
     for (migrations) |migration| {
         if (try isMigrationApplied(conn, migration.version)) {
+            clearMigrationFailure(conn, migration.version);
             continue;
         }
 
         try beginTx(conn);
-        errdefer rollbackTx(conn);
-
-        const statements = try applySqlStatements(conn, migration.sql);
+        const statements = applySqlStatements(conn, migration.sql) catch |err| {
+            rollbackTx(conn);
+            markMigrationFailure(conn, migration.version, err);
+            return err;
+        };
 
         var insert = try conn.query(
             "INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)",
@@ -228,7 +340,12 @@ pub fn runMigrations(pool: *Pool, migrations: []const Migration) !void {
         );
         insert.deinit();
 
-        try commitTx(conn);
+        commitTx(conn) catch |err| {
+            rollbackTx(conn);
+            markMigrationFailure(conn, migration.version, err);
+            return err;
+        };
+        clearMigrationFailure(conn, migration.version);
         log.info("migration applied version={d} statements={d}", .{ migration.version, statements });
     }
 }
