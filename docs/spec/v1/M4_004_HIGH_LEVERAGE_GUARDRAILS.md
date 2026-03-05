@@ -50,8 +50,8 @@ This workstream contains the must-have reliability and safety guardrails deferre
 ### 2.2 Safety Track
 
 **Dimensions:**
-- 2.2.1 PENDING Close execution-boundary gaps (path, hooks, env exposure)
-- 2.2.2 IN_PROGRESS Complete exactly-once + idempotency protections for all side effects (PR path done, remaining side effects pending)
+- 2.2.1 IN_PROGRESS Close execution-boundary gaps (path, hooks, env exposure)
+- 2.2.2 IN_PROGRESS Complete exactly-once + idempotency protections for all side effects (PR path recovery + replay hardening in progress)
 - 2.2.3 PENDING Enforce shutdown, cancellation, and thread/allocator correctness invariants
 
 ### 2.3 Verification Track

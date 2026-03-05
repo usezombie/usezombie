@@ -364,19 +364,13 @@ fn loadInstallationId(
     conn: *pg.Conn,
     workspace_id: []const u8,
 ) ![]u8 {
-    const fallback = std.process.getEnvVarOwned(alloc, "GITHUB_INSTALLATION_ID") catch null;
-
     const kek = secrets.loadKek(alloc) catch {
-        if (fallback) |id| return id;
         return WorkerError.MissingGitHubInstallation;
     };
 
     const from_vault = secrets.load(alloc, conn, workspace_id, "github_app_installation_id", kek) catch {
-        if (fallback) |id| return id;
         return WorkerError.MissingGitHubInstallation;
     };
-
-    if (fallback) |id| alloc.free(id);
     return from_vault;
 }
 
@@ -507,6 +501,51 @@ fn opCreatePr(ctx: *PrRetryCtx, _: u32) ![]u8 {
 
 fn prDetail(ctx: *PrRetryCtx, _: anyerror) ?[]const u8 {
     return ctx.last_error_detail;
+}
+
+fn tryRecoverPrUrl(
+    run_alloc: std.mem.Allocator,
+    conn: *pg.Conn,
+    token_cache: *github_auth.TokenCache,
+    tenant_limiter: *TenantRateLimiter,
+    ctx: RunContext,
+    branch: []const u8,
+) !?[]u8 {
+    const installation_id = loadInstallationId(run_alloc, conn, ctx.workspace_id) catch return null;
+    defer run_alloc.free(installation_id);
+
+    try tenant_limiter.acquire(ctx.tenant_id, "github_installation_token", 1.0);
+    var token_retry_ctx = TokenRetryCtx{
+        .cache = token_cache,
+        .alloc = run_alloc,
+        .installation_id = installation_id,
+    };
+    defer if (token_retry_ctx.last_error_detail) |d| run_alloc.free(d);
+    const github_token = try reliable.callWithDetail([]u8, &token_retry_ctx, opGetInstallationToken, tokenDetail, .{
+        .max_retries = 2,
+        .base_delay_ms = 500,
+        .max_delay_ms = 5_000,
+        .operation_name = "github_installation_token",
+    });
+    defer run_alloc.free(github_token);
+
+    var detail: ?[]u8 = null;
+    defer if (detail) |d| run_alloc.free(d);
+
+    try tenant_limiter.acquire(ctx.tenant_id, "github_pr_lookup", 1.0);
+    const existing = try git.findOpenPullRequestByHead(
+        run_alloc,
+        ctx.repo_url,
+        branch,
+        github_token,
+        &detail,
+    );
+    if (existing) |pr_url| {
+        const side_effect_key = try std.fmt.allocPrint(run_alloc, "pr:create:{s}", .{branch});
+        try state.markSideEffectDone(conn, ctx.run_id, side_effect_key, pr_url);
+        return pr_url;
+    }
+    return null;
 }
 
 const StageRetryCtx = struct {
@@ -776,7 +815,10 @@ fn executeRun(
 
                 if (!claimed) {
                     pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
-                    if (pr_url == null) return WorkerError.SideEffectClaimedNoResult;
+                    if (pr_url == null) {
+                        pr_url = try tryRecoverPrUrl(run_alloc, conn, token_cache, tenant_limiter, ctx, branch);
+                        if (pr_url == null) return WorkerError.SideEffectClaimedNoResult;
+                    }
                 }
 
                 if (pr_url == null) {
@@ -1029,4 +1071,10 @@ test "integration: rate limiter scopes by tenant and provider" {
     try std.testing.expect(scout_bucket.allow(now_ms, 1.0));
     try std.testing.expect(!scout_bucket.allow(now_ms, 1.0));
     try std.testing.expect(pr_bucket.allow(now_ms, 1.0));
+}
+
+test "integration: side effect key format for pr create is stable" {
+    const key = try std.fmt.allocPrint(std.testing.allocator, "pr:create:{s}", .{"zombie/run-r_abc"});
+    defer std.testing.allocator.free(key);
+    try std.testing.expectEqualStrings("pr:create:zombie/run-r_abc", key);
 }
