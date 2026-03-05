@@ -43,6 +43,8 @@ const Snapshot = struct {
     side_effect_outbox_enqueued_total: u64,
     side_effect_outbox_delivered_total: u64,
     side_effect_outbox_dead_letter_total: u64,
+    worker_in_flight_runs: u64,
+    worker_allocator_leaks_total: u64,
     agent_duration_seconds: HistogramSnapshot,
     run_total_wall_seconds: HistogramSnapshot,
 };
@@ -78,6 +80,8 @@ var g_rate_limit_wait_ms_total = std.atomic.Value(u64).init(0);
 var g_side_effect_outbox_enqueued_total = std.atomic.Value(u64).init(0);
 var g_side_effect_outbox_delivered_total = std.atomic.Value(u64).init(0);
 var g_side_effect_outbox_dead_letter_total = std.atomic.Value(u64).init(0);
+var g_worker_in_flight_runs = std.atomic.Value(u64).init(0);
+var g_worker_allocator_leaks_total = std.atomic.Value(u64).init(0);
 var g_histograms_mu: std.Thread.Mutex = .{};
 var g_agent_duration_seconds = HistogramSnapshot{};
 var g_run_total_wall_seconds = HistogramSnapshot{};
@@ -191,6 +195,14 @@ pub fn incOutboxDeadLetter() void {
     _ = g_side_effect_outbox_dead_letter_total.fetchAdd(1, .monotonic);
 }
 
+pub fn setWorkerInFlightRuns(v: u32) void {
+    g_worker_in_flight_runs.store(@as(u64, @intCast(v)), .release);
+}
+
+pub fn incWorkerAllocatorLeaks() void {
+    _ = g_worker_allocator_leaks_total.fetchAdd(1, .monotonic);
+}
+
 pub fn observeAgentDurationSeconds(seconds: u64) void {
     g_histograms_mu.lock();
     defer g_histograms_mu.unlock();
@@ -244,6 +256,8 @@ fn snapshot() Snapshot {
         .side_effect_outbox_enqueued_total = g_side_effect_outbox_enqueued_total.load(.acquire),
         .side_effect_outbox_delivered_total = g_side_effect_outbox_delivered_total.load(.acquire),
         .side_effect_outbox_dead_letter_total = g_side_effect_outbox_dead_letter_total.load(.acquire),
+        .worker_in_flight_runs = g_worker_in_flight_runs.load(.acquire),
+        .worker_allocator_leaks_total = g_worker_allocator_leaks_total.load(.acquire),
         .agent_duration_seconds = .{},
         .run_total_wall_seconds = .{},
     };
@@ -383,6 +397,12 @@ pub fn renderPrometheus(
         \\# HELP zombie_side_effect_outbox_dead_letter_total Total side-effect outbox entries dead-lettered by reconciliation.
         \\# TYPE zombie_side_effect_outbox_dead_letter_total counter
         \\zombie_side_effect_outbox_dead_letter_total {d}
+        \\# HELP zombie_worker_in_flight_runs Current in-flight runs across worker threads.
+        \\# TYPE zombie_worker_in_flight_runs gauge
+        \\zombie_worker_in_flight_runs {d}
+        \\# HELP zombie_worker_allocator_leaks_total Total worker allocator leak detections on teardown.
+        \\# TYPE zombie_worker_allocator_leaks_total counter
+        \\zombie_worker_allocator_leaks_total {d}
         \\# HELP zombie_worker_running Worker liveness gauge (1 running, 0 stopped).
         \\# TYPE zombie_worker_running gauge
         \\zombie_worker_running {d}
@@ -425,6 +445,8 @@ pub fn renderPrometheus(
         s.side_effect_outbox_enqueued_total,
         s.side_effect_outbox_delivered_total,
         s.side_effect_outbox_dead_letter_total,
+        s.worker_in_flight_runs,
+        s.worker_allocator_leaks_total,
         worker_running_gauge,
         queue_depth_gauge,
         oldest_age_gauge,
@@ -476,4 +498,16 @@ test "integration: outbox metric counters are exposed in prometheus output" {
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_side_effect_outbox_enqueued_total"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_side_effect_outbox_delivered_total"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_side_effect_outbox_dead_letter_total"));
+}
+
+test "integration: worker guardrail metrics are exposed in prometheus output" {
+    const alloc = std.testing.allocator;
+    setWorkerInFlightRuns(2);
+    incWorkerAllocatorLeaks();
+
+    const body = try renderPrometheus(alloc, true, 0, 0);
+    defer alloc.free(body);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_worker_in_flight_runs 2"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_worker_allocator_leaks_total"));
 }
