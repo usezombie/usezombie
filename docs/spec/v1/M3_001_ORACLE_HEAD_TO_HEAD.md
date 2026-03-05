@@ -26,12 +26,12 @@
 | 2 | Allocation best practices | **Medium** | Single GPA for worker; many manual frees | Per-run ArenaAllocator; bounded buffers |
 | 3 | Async / API performance | **High** | Sequential single-thread worker | Multi-worker + concurrent dispatch |
 | 4 | Event bus / actor dispatch | **Medium** | Ad-hoc log lines only | Ring-buffer MPSC bus (`bus.zig`) |
-| 5 | Reliability & retry | **Critical** | `reliable_call` wrappers added for token/push/PR; no outbox/circuit-breaker yet | `reliable.zig` + outbox + dead-letter |
+| 5 | Reliability & retry | **Critical** | `reliable_call` wrappers added for token/push/PR with PR error-detail plumbing; no outbox/circuit-breaker yet | `reliable.zig` + outbox + dead-letter |
 | 6 | Rate limiting | **High** | None | Token bucket per tenant/provider |
-| 7 | Backoff | **Critical** | Jittered exponential backoff added in worker loop and retry path; Retry-After propagation still incomplete | Exponential + jitter + Retry-After parsing |
+| 7 | Backoff | **Critical** | Jittered exponential backoff added in worker loop and retry path; PR HTTP `Retry-After` is now consumed, other paths still incomplete | Exponential + jitter + Retry-After parsing |
 | 8 | Logging (.env / agent-friendly) | **Medium** | Compile-time level; unstructured text | Runtime `LOG_LEVEL`; key=value structured logs |
 | 9 | Logging on errors | **High** | Many `catch {}`; generic error names | Classification + context + correlation IDs |
-| 10 | Error code classification | **Critical** | `error_classify.zig` added and wired in worker; API-layer mapping still coarse | `error_classify.zig`: rate_limited / context_exhausted / auth / server_error |
+| 10 | Error code classification | **Critical** | `error_classify.zig` wired in worker with explicit `AUTH_FAILED`/`RATE_LIMITED` reason codes; API-layer mapping still coarse | `error_classify.zig`: rate_limited / context_exhausted / auth / server_error |
 
 ### Oracle Verification Snapshot (Mar 05, 2026)
 
@@ -41,12 +41,12 @@
 | 2 | ⚠️ Partial | Per-run arena added in worker, but allocator/thread model not fully normalized |
 | 3 | ❌ Open | Still single-worker sequential execution |
 | 4 | ❌ Open | No event bus implementation yet |
-| 5 | ⚠️ Partial | `reliable_call` is added for GitHub token fetch, `git push`, and PR creation; outbox/dead-letter and circuit breaker are still missing |
+| 5 | ⚠️ Partial | `reliable_call` is added for GitHub token fetch, `git push`, and PR creation, including PR response detail plumbing; outbox/dead-letter and circuit breaker are still missing |
 | 6 | ❌ Open | No token bucket or tenant-level throttling |
-| 7 | ⚠️ Partial | Worker loop and run retry now use exponential+jitter backoff; Retry-After from provider/API responses is not yet plumbed end-to-end |
+| 7 | ⚠️ Partial | Worker loop and run retry now use exponential+jitter backoff; PR HTTP `Retry-After` is plumbed, but provider/API responses are not yet end-to-end |
 | 8 | ❌ Open | No runtime `LOG_LEVEL` or structured key/value logging |
 | 9 | ⚠️ Partial | Some error paths improved, but consistent classification/context is missing |
-| 10 | ⚠️ Partial | `error_classify` exists and drives worker failure reason mapping; richer provider payload parsing and HTTP error harmonization are still missing |
+| 10 | ⚠️ Partial | `error_classify` drives worker failure mapping with explicit auth/quota reason codes; richer provider payload parsing and HTTP/API harmonization are still missing |
 | 11 | ⚠️ Partial | Path canonicalization + hook disable done; env scrubbing/sandbox hardening still pending |
 | 12 | ⚠️ Partial | Signal handling + join done; stale worktree startup cleanup still missing |
 | 13 | ⚠️ Partial | Claim transaction + CAS done; idempotency conflict flow still not fully race-safe at handler level |
@@ -214,8 +214,8 @@ pub const Bus = struct {
 
 | File | Line | Issue |
 |------|------|-------|
-| `src/reliability/reliable_call.zig` | 1–56 | Generic retry wrapper exists, but currently classifies from error name only (no provider payload parsing in wrapper path) |
-| `src/pipeline/worker.zig` | 446–502 | Token fetch, `git.push`, and PR creation now wrapped, but Scout/Warden agent calls are still outside the wrapper |
+| `src/reliability/reliable_call.zig` | 1–93 | Generic retry wrapper now supports detail-aware classification via `callWithDetail`, but most call sites still use error-name-only path |
+| `src/pipeline/worker.zig` | 446–511 | Token fetch, `git.push`, and PR creation are wrapped (PR includes detail path), but Scout/Warden agent calls are still outside the wrapper |
 | `src/pipeline/worker.zig` | 214–220 | Run-level retry still applies for full pipeline failures; there is no dead-letter/outbox ledger |
 | `src/git/ops.zig` | 28–52 | Core subprocess abstraction still lacks a single reusable timeout+classification contract |
 
@@ -312,9 +312,9 @@ Key buckets by `tenant_id` (and optionally `provider/model`).
 | File | Line | Issue |
 |------|------|-------|
 | `src/pipeline/worker.zig` | 91–103 | Worker-loop adaptive backoff exists, but only from internal errors and queue idle/work states |
-| `src/pipeline/worker.zig` | 560–563 | Retry delay is now jittered, but delay source is local only and not provider `Retry-After` aware |
-| `src/reliability/error_classify.zig` | 20–32 | `Retry-After` parser exists but is only effective when detail payload is provided by caller |
-| `src/git/ops.zig` | 206–223 | GitHub API response headers still not parsed into classification flow |
+| `src/pipeline/worker.zig` | 569–572 | Retry delay is jittered, but only PR path currently injects external `Retry-After` detail |
+| `src/reliability/error_classify.zig` | 34–46 | `Retry-After` parser is case-insensitive and active when detail payload is provided; most non-PR call sites still pass no detail |
+| `src/git/ops.zig` | 264–334 | PR creation now parses HTTP status and returns typed errors, but other external calls do not expose response headers/details |
 
 ### Recommendation: shared backoff helper
 
@@ -427,10 +427,10 @@ For git failures: include stderr + command + exit code in logs, classify retryab
 
 | File | Line | Issue |
 |------|------|-------|
-| `src/reliability/error_classify.zig` | 1–145 | Classifier exists for timeout/rate-limit/auth/server classes, but matching is still string-heuristic |
-| `src/pipeline/worker.zig` | 210–215 | Worker transition now uses classified reason code, but not all external call sites pass detailed payload context |
+| `src/reliability/error_classify.zig` | 1–203 | Classifier now includes typed PR error mapping and explicit auth/quota reasons, but matching remains mostly string-heuristic |
+| `src/pipeline/worker.zig` | 210–225 | Worker transition uses classified reason code and logs class/retryability, but not all external call sites pass detailed payload context |
 | `src/http/handler.zig` | 35–46 | Public API errors are still generic and not linked to internal classifier taxonomy |
-| `src/types.zig` | n/a | No dedicated reason code yet for auth/permission-class failures (still mapped to existing generic reason codes) |
+| `src/types.zig` | 62–79 | Dedicated `AUTH_FAILED` and `RATE_LIMITED` reason codes now exist, but broader HTTP/API response harmonization is pending |
 
 ### Decision: YES, keep error codes AND add classification
 
