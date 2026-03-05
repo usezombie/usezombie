@@ -11,6 +11,7 @@ pub const ServerConfig = struct {
     interface: []const u8 = "0.0.0.0",
     threads: i16 = 1,
     workers: i16 = 1,
+    max_clients: usize = 1024,
 };
 
 /// Single global context pointer used by the Zap callbacks.
@@ -146,7 +147,7 @@ pub fn serve(ctx: *handler.Context, cfg: ServerConfig) !void {
         .port = cfg.port,
         .on_request = dispatch,
         .log = false,
-        .max_clients = 1024,
+        .max_clients = cfg.max_clients,
         .max_body_size = 2 * 1024 * 1024, // 2MB
     });
     try listener.listen();
