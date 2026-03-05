@@ -195,6 +195,14 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
     defer if (max_attempts_str) |s| alloc.free(s);
     const max_attempts: u32 = if (max_attempts_str) |s| std.fmt.parseInt(u32, s, 10) catch 3 else 3;
 
+    const rate_capacity_str = std.process.getEnvVarOwned(alloc, "RATE_LIMIT_CAPACITY") catch null;
+    defer if (rate_capacity_str) |s| alloc.free(s);
+    const rate_limit_capacity: u32 = if (rate_capacity_str) |s| std.fmt.parseInt(u32, s, 10) catch 30 else 30;
+
+    const rate_refill_str = std.process.getEnvVarOwned(alloc, "RATE_LIMIT_REFILL_PER_SEC") catch null;
+    defer if (rate_refill_str) |s| alloc.free(s);
+    const rate_limit_refill_per_sec: f64 = if (rate_refill_str) |s| std.fmt.parseFloat(f64, s) catch 5.0 else 5.0;
+
     std.fs.makeDirAbsolute(cache_root) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => log.warn("could not create cache root {s}: {}", .{ cache_root, err }),
@@ -216,6 +224,8 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
         .github_app_id = github_app_id,
         .github_app_private_key = github_app_private_key,
         .max_attempts = max_attempts,
+        .rate_limit_capacity = rate_limit_capacity,
+        .rate_limit_refill_per_sec = rate_limit_refill_per_sec,
     };
 
     shutdown_requested.store(false, .release);
