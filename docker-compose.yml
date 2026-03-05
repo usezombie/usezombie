@@ -13,9 +13,12 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
     ports:
       - "6379:6379"
     volumes:
+      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - ./docker/redis/tls:/tls:ro
       - redis-data:/data
 
   zombied:
@@ -25,7 +28,8 @@ services:
     environment:
       PORT: 3000
       DATABASE_URL: postgres://usezombie:usezombie@postgres:5432/usezombiedb
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: rediss://redis:6379
+      REDIS_TLS_CA_CERT_FILE: /app/docker/redis/tls/ca.crt
       API_KEY: local-dev-api-key
       AGENT_CONFIG_DIR: /app/config
     depends_on:

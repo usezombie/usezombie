@@ -25,7 +25,7 @@ Replace Postgres polling with Redis streams using consumer groups. Postgres rema
 | Environment | Provider | Notes |
 |---|---|---|
 | Local | Redis 7 in docker-compose | `redis:7-alpine` container |
-| Development | Upstash Redis | TLS required, `usezombie-dev` |
+| Development | Upstash Redis | TLS required, `usezombie-cache-dev` |
 | Production | Upstash Redis | TLS required, `usezombie-cache` |
 
 ### Stream Contract
@@ -161,6 +161,9 @@ For Upstash (dev/prod): `rediss://default:<password>@<host>:6379` (note `rediss:
 3. Worker loop now consumes queue messages first and acknowledges on successful claim execution.
 4. `zombied doctor` now validates Redis API/worker connectivity (`PING`).
 5. Local `docker-compose.yml` now includes `redis:7-alpine`.
+6. Native TLS (`rediss://`) transport added in `src/queue/redis.zig` with CA verification:
+   - system CA bundle by default (Upstash path)
+   - optional `REDIS_TLS_CA_CERT_FILE` for local self-signed certs
 
 ---
 
