@@ -18,6 +18,7 @@ const reliable = @import("../reliability/reliable_call.zig");
 const rate_limit = @import("../reliability/rate_limit.zig");
 const metrics = @import("../observability/metrics.zig");
 const events = @import("../events/bus.zig");
+const obs_log = @import("../observability/logging.zig");
 const log = std.log.scoped(.worker);
 
 // ── Worker configuration ──────────────────────────────────────────────────
@@ -237,7 +238,7 @@ fn processNextRun(
     defer alloc.free(spec_path);
 
     result.drain() catch |err| {
-        log.warn("claim query drain failed run_id={s}: {}", .{ run_id, err });
+        obs_log.logWarnErr(.worker, err, "claim query drain failed run_id={s}", .{run_id});
     };
 
     // Move SPEC_QUEUED -> RUN_PLANNED while the row is still locked.
@@ -270,7 +271,7 @@ fn processNextRun(
     }, tenant_limiter) catch |err| {
         if (err == WorkerError.ShutdownRequested) {
             _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, .AGENT_TIMEOUT, "shutdown requested") catch |tx_err| {
-                log.warn("shutdown transition failed run_id={s}: {}", .{ run_id, tx_err });
+                obs_log.logWarnErr(.worker, tx_err, "shutdown transition failed run_id={s}", .{run_id});
             };
             metrics.incRunsBlocked();
             return err;
@@ -296,7 +297,7 @@ fn processNextRun(
         ) catch "run_failed";
         events.emit("run_failed", run_id, failed_detail_slice);
         _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, classified.reason_code, note) catch |tx_err| {
-            log.warn("failure transition failed run_id={s}: {}", .{ run_id, tx_err });
+            obs_log.logWarnErr(.worker, tx_err, "failure transition failed run_id={s}", .{run_id});
         };
         metrics.incRunsBlocked();
     };
