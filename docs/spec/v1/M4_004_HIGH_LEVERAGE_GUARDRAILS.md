@@ -30,7 +30,7 @@ This workstream contains the must-have reliability and safety guardrails deferre
 - 1.11 DONE D14 Side-effect idempotency ledger completion (`run_side_effects` + PR side-effect claim/done tracking)
 - 1.12 DONE D15 Cooperative cancellation for long-running calls
 - 1.13 DONE D16 Thread-safety and allocator guardrails
-- 1.14 PENDING D17 Migration safety policy (`serve` gating + robust migration handling)
+- 1.14 DONE D17 Migration safety policy (`serve` gating + robust migration handling)
 - 1.15 PENDING D18 Readiness depth hardening
 - 1.16 DONE D21 Coverage measurement and test-depth gates (test inventory thresholds + integration filter gate)
 
