@@ -108,6 +108,13 @@ fn parseSubcommand() Subcommand {
     return std.meta.stringToEnum(Subcommand, cmd) orelse .serve;
 }
 
+fn isHexString(s: []const u8) bool {
+    for (s) |ch| {
+        if (!std.ascii.isHex(ch)) return false;
+    }
+    return true;
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     defer _ = gpa.deinit();
@@ -150,7 +157,10 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
 
     const port_str = std.process.getEnvVarOwned(alloc, "PORT") catch null;
     defer if (port_str) |ps| alloc.free(ps);
-    const port: u16 = if (port_str) |ps| std.fmt.parseInt(u16, ps, 10) catch 3000 else 3000;
+    const port: u16 = if (port_str) |ps| std.fmt.parseInt(u16, ps, 10) catch {
+        std.debug.print("fatal: invalid PORT value: {s}\n", .{ps});
+        std.process.exit(1);
+    } else 3000;
 
     const api_pool = db.initFromEnvForRole(alloc, .api) catch |err| {
         std.debug.print("fatal: api database init failed: {}\n", .{err});
@@ -169,11 +179,35 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
         std.process.exit(1);
     };
 
-    const api_key = std.process.getEnvVarOwned(alloc, "API_KEY") catch {
+    const api_keys = std.process.getEnvVarOwned(alloc, "API_KEY") catch {
         std.debug.print("fatal: API_KEY not set\n", .{});
         std.process.exit(1);
     };
-    defer alloc.free(api_key);
+    defer alloc.free(api_keys);
+    {
+        var it = std.mem.tokenizeScalar(u8, api_keys, ',');
+        var has_key = false;
+        while (it.next()) |candidate_raw| {
+            if (std.mem.trim(u8, candidate_raw, " \t").len > 0) {
+                has_key = true;
+                break;
+            }
+        }
+        if (!has_key) {
+            std.debug.print("fatal: API_KEY has no usable keys\n", .{});
+            std.process.exit(1);
+        }
+    }
+
+    const encryption_master_key = std.process.getEnvVarOwned(alloc, "ENCRYPTION_MASTER_KEY") catch {
+        std.debug.print("fatal: ENCRYPTION_MASTER_KEY not set\n", .{});
+        std.process.exit(1);
+    };
+    defer alloc.free(encryption_master_key);
+    if (encryption_master_key.len != 64 or !isHexString(encryption_master_key)) {
+        std.debug.print("fatal: ENCRYPTION_MASTER_KEY must be 64 hex chars\n", .{});
+        std.process.exit(1);
+    }
 
     const cache_root = std.process.getEnvVarOwned(alloc, "GIT_CACHE_ROOT") catch
         try alloc.dupe(u8, "/tmp/zombie-git-cache");
@@ -182,10 +216,18 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
     const github_app_id = std.process.getEnvVarOwned(alloc, "GITHUB_APP_ID") catch
         try alloc.dupe(u8, "");
     defer alloc.free(github_app_id);
+    if (github_app_id.len == 0) {
+        std.debug.print("fatal: GITHUB_APP_ID not set\n", .{});
+        std.process.exit(1);
+    }
 
     const github_app_private_key = std.process.getEnvVarOwned(alloc, "GITHUB_APP_PRIVATE_KEY") catch
         try alloc.dupe(u8, "");
     defer alloc.free(github_app_private_key);
+    if (github_app_private_key.len == 0) {
+        std.debug.print("fatal: GITHUB_APP_PRIVATE_KEY not set\n", .{});
+        std.process.exit(1);
+    }
 
     const config_dir = std.process.getEnvVarOwned(alloc, "AGENT_CONFIG_DIR") catch
         try alloc.dupe(u8, "./config");
@@ -193,19 +235,31 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
 
     const max_attempts_str = std.process.getEnvVarOwned(alloc, "DEFAULT_MAX_ATTEMPTS") catch null;
     defer if (max_attempts_str) |s| alloc.free(s);
-    const max_attempts: u32 = if (max_attempts_str) |s| std.fmt.parseInt(u32, s, 10) catch 3 else 3;
+    const max_attempts: u32 = if (max_attempts_str) |s| std.fmt.parseInt(u32, s, 10) catch {
+        std.debug.print("fatal: invalid DEFAULT_MAX_ATTEMPTS value: {s}\n", .{s});
+        std.process.exit(1);
+    } else 3;
 
     const worker_concurrency_str = std.process.getEnvVarOwned(alloc, "WORKER_CONCURRENCY") catch null;
     defer if (worker_concurrency_str) |s| alloc.free(s);
-    const worker_concurrency: u32 = if (worker_concurrency_str) |s| std.fmt.parseInt(u32, s, 10) catch 1 else 1;
+    const worker_concurrency: u32 = if (worker_concurrency_str) |s| std.fmt.parseInt(u32, s, 10) catch {
+        std.debug.print("fatal: invalid WORKER_CONCURRENCY value: {s}\n", .{s});
+        std.process.exit(1);
+    } else 1;
 
     const rate_capacity_str = std.process.getEnvVarOwned(alloc, "RATE_LIMIT_CAPACITY") catch null;
     defer if (rate_capacity_str) |s| alloc.free(s);
-    const rate_limit_capacity: u32 = if (rate_capacity_str) |s| std.fmt.parseInt(u32, s, 10) catch 30 else 30;
+    const rate_limit_capacity: u32 = if (rate_capacity_str) |s| std.fmt.parseInt(u32, s, 10) catch {
+        std.debug.print("fatal: invalid RATE_LIMIT_CAPACITY value: {s}\n", .{s});
+        std.process.exit(1);
+    } else 30;
 
     const rate_refill_str = std.process.getEnvVarOwned(alloc, "RATE_LIMIT_REFILL_PER_SEC") catch null;
     defer if (rate_refill_str) |s| alloc.free(s);
-    const rate_limit_refill_per_sec: f64 = if (rate_refill_str) |s| std.fmt.parseFloat(f64, s) catch 5.0 else 5.0;
+    const rate_limit_refill_per_sec: f64 = if (rate_refill_str) |s| std.fmt.parseFloat(f64, s) catch {
+        std.debug.print("fatal: invalid RATE_LIMIT_REFILL_PER_SEC value: {s}\n", .{s});
+        std.process.exit(1);
+    } else 5.0;
 
     std.fs.makeDirAbsolute(cache_root) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -217,7 +271,7 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
     var ctx = http_handler.Context{
         .pool = api_pool,
         .alloc = alloc,
-        .api_key = api_key,
+        .api_keys = api_keys,
         .worker_state = &wstate,
     };
 
