@@ -36,6 +36,10 @@ fn dispatch(r: zap.Request) !void {
         handler.handleReadyz(g_ctx, r);
         return;
     }
+    if (std.mem.eql(u8, path, "/metrics")) {
+        handler.handleMetrics(g_ctx, r);
+        return;
+    }
 
     // Route: /v1/github/callback
     if (std.mem.eql(u8, path, "/v1/github/callback")) {
