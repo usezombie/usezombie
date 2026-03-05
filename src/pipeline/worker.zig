@@ -277,6 +277,10 @@ fn processNextRun(
     token_cache: *github_auth.TokenCache,
     tenant_limiter: *TenantRateLimiter,
 ) !ProcessOutcome {
+    var claim_arena = std.heap.ArenaAllocator.init(alloc);
+    defer claim_arena.deinit();
+    const claim_alloc = claim_arena.allocator();
+
     var conn = try cfg.pool.acquire();
     defer cfg.pool.release(conn);
 
@@ -305,24 +309,16 @@ fn processNextRun(
         return .idle;
     };
 
-    const run_id = try alloc.dupe(u8, try row.get([]u8, 0));
-    defer alloc.free(run_id);
-    const workspace_id = try alloc.dupe(u8, try row.get([]u8, 1));
-    defer alloc.free(workspace_id);
-    const spec_id = try alloc.dupe(u8, try row.get([]u8, 2));
-    defer alloc.free(spec_id);
-    const tenant_id = try alloc.dupe(u8, try row.get([]u8, 3));
-    defer alloc.free(tenant_id);
+    const run_id = try claim_alloc.dupe(u8, try row.get([]u8, 0));
+    const workspace_id = try claim_alloc.dupe(u8, try row.get([]u8, 1));
+    const spec_id = try claim_alloc.dupe(u8, try row.get([]u8, 2));
+    const tenant_id = try claim_alloc.dupe(u8, try row.get([]u8, 3));
     const attempt = @as(u32, @intCast(try row.get(i32, 4)));
     const request_id_raw = try row.get(?[]u8, 5);
-    const request_id = try alloc.dupe(u8, request_id_raw orelse "-");
-    defer alloc.free(request_id);
-    const repo_url = try alloc.dupe(u8, try row.get([]u8, 6));
-    defer alloc.free(repo_url);
-    const default_branch = try alloc.dupe(u8, try row.get([]u8, 7));
-    defer alloc.free(default_branch);
-    const spec_path = try alloc.dupe(u8, try row.get([]u8, 8));
-    defer alloc.free(spec_path);
+    const request_id = try claim_alloc.dupe(u8, request_id_raw orelse "-");
+    const repo_url = try claim_alloc.dupe(u8, try row.get([]u8, 6));
+    const default_branch = try claim_alloc.dupe(u8, try row.get([]u8, 7));
+    const spec_path = try claim_alloc.dupe(u8, try row.get([]u8, 8));
 
     result.drain() catch |err| {
         obs_log.logWarnErr(.worker, err, "claim query drain failed run_id={s}", .{run_id});
@@ -1354,4 +1350,24 @@ test "integration: finalizeWorkerAllocator returns true when leaks are present" 
     _ = leaked;
 
     try std.testing.expect(finalizeWorkerAllocator(&gpa));
+}
+
+test "integration: tenant limiter deinit releases scoped keys under churn" {
+    var gpa = WorkerAllocator{};
+    defer {
+        const leaked = finalizeWorkerAllocator(&gpa);
+        std.testing.expect(!leaked) catch unreachable;
+    }
+
+    var limiter = TenantRateLimiter.init(gpa.allocator(), 2, 5.0);
+    defer limiter.deinit();
+
+    var i: usize = 0;
+    while (i < 1_000) : (i += 1) {
+        var tenant_buf: [32]u8 = undefined;
+        var provider_buf: [32]u8 = undefined;
+        const tenant = try std.fmt.bufPrint(&tenant_buf, "tenant-{d}", .{i % 50});
+        const provider = try std.fmt.bufPrint(&provider_buf, "provider-{d}", .{i % 20});
+        _ = try limiter.getOrCreateBucket(tenant, provider, std.time.milliTimestamp());
+    }
 }
