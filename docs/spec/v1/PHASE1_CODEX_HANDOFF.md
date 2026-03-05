@@ -135,6 +135,13 @@ Create `ArenaAllocator` at start of `executeRun()`, `defer arena.deinit()`. Pass
 - `src/git/ops.zig`: added a `CommandResources` lifecycle wrapper for subprocess execution (`spawn`/timeout/read/deinit). Timeout path now closes pipes, kills, waits, and returns deterministic timeout errors.
 - `src/pipeline/agents.zig`: consolidated duplicated restricted tool construction into shared helpers to standardize ownership and cleanup behavior.
 
+### ✅ DONE: 1.12 Centralized serve runtime config loading (Dimension 20)
+
+**File:** `src/config/runtime.zig` + `src/main.zig`
+
+- Added `ServeConfig.load()` to centralize serve-mode env parsing and validation (`PORT`, `API_KEY`, `ENCRYPTION_MASTER_KEY`, GitHub app env, worker/rate-limit knobs).
+- `cmdServe` now consumes this typed config object instead of duplicating env parsing logic inline.
+
 ---
 
 ## ✅ DONE: Step 1 (parallel) — M3_000 Secrets + Schema Separation
