@@ -18,7 +18,7 @@ This workstream contains the must-have reliability and safety guardrails deferre
 
 **Dimensions:**
 - 1.1 IN_PROGRESS D2 Allocation normalization (per-run allocator model + reduced manual free churn; run-claim arena normalization + limiter key lookup stack-fast-path + side-effect key stack-fast-path with heap fallback + key-churn leak stress coverage landed)
-- 1.2 PENDING D3 Async/API throughput model (beyond thread-level parallelism)
+- 1.2 DONE D3 Async/API throughput model (API concurrency/backpressure controls + configurable HTTP parallelism)
 - 1.3 DONE D5 Reliability wrappers + durable outbox/dead-letter baseline
 - 1.4 DONE D6 Rate-limit policy hardening (tenant + provider semantics)
 - 1.5 DONE D7 Backoff standardization with full `Retry-After` plumbing

@@ -201,6 +201,10 @@ Deploy in sequence.
    - `GITHUB_APP_PRIVATE_KEY`
    - `GITHUB_CLIENT_ID`
    - `GITHUB_CLIENT_SECRET`
+   - `API_HTTP_THREADS` (default `1`)
+   - `API_HTTP_WORKERS` (default `1`)
+   - `API_MAX_CLIENTS` (default `1024`)
+   - `API_MAX_IN_FLIGHT_REQUESTS` (default `256`, local-process backpressure guard)
 3. Configure migration startup policy explicitly:
    - `MIGRATE_ON_START=0` (default/fail-closed): `serve` refuses startup if migrations are pending.
    - `MIGRATE_ON_START=1`: `serve` acquires DB migration advisory lock and applies pending migrations before serving traffic.
