@@ -16,7 +16,7 @@ const log = std.log.scoped(.http);
 pub const Context = struct {
     pool: *pg.Pool,
     alloc: std.mem.Allocator,
-    api_key: []const u8, // expected API key from env
+    api_keys: []const u8, // comma-separated API key list from env
     worker_state: *const worker.WorkerState,
 };
 
@@ -55,12 +55,21 @@ fn requestId(alloc: std.mem.Allocator) []const u8 {
     return std.fmt.allocPrint(alloc, "req_{s}", .{hex[0..12]}) catch "req_unknown";
 }
 
-/// Validate Authorization header: "Bearer <api_key>"
+/// Validate Authorization header: "Bearer <api_key>".
+/// Supports key rotation via `API_KEY=key1,key2,...`.
 fn authenticate(r: zap.Request, ctx: *Context) bool {
     const auth = r.getHeader("authorization") orelse return false;
     const prefix = "Bearer ";
     if (!std.mem.startsWith(u8, auth, prefix)) return false;
-    return std.mem.eql(u8, auth[prefix.len..], ctx.api_key);
+    const provided = auth[prefix.len..];
+
+    var it = std.mem.tokenizeScalar(u8, ctx.api_keys, ',');
+    while (it.next()) |candidate_raw| {
+        const candidate = std.mem.trim(u8, candidate_raw, " \t");
+        if (candidate.len == 0) continue;
+        if (std.mem.eql(u8, provided, candidate)) return true;
+    }
+    return false;
 }
 
 // ── Healthz ───────────────────────────────────────────────────────────────
