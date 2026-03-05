@@ -126,6 +126,9 @@ fn runWithInput(
     timeout_ms: u64,
 ) ![]u8 {
     var child = std.process.Child.init(argv, alloc);
+    var env = try sanitizedChildEnv(alloc);
+    defer env.deinit();
+    child.env_map = &env;
     child.stdin_behavior = if (stdin_data != null) .Pipe else .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -176,6 +179,24 @@ fn runWithInput(
     }
 
     return stdout;
+}
+
+fn sanitizedChildEnv(alloc: std.mem.Allocator) !std.process.EnvMap {
+    var env = std.process.EnvMap.init(alloc);
+    errdefer env.deinit();
+
+    try copyEnvIfPresent(alloc, &env, "PATH");
+    try copyEnvIfPresent(alloc, &env, "HOME");
+    try copyEnvIfPresent(alloc, &env, "TMPDIR");
+    try copyEnvIfPresent(alloc, &env, "SSL_CERT_FILE");
+    try copyEnvIfPresent(alloc, &env, "SSL_CERT_DIR");
+    return env;
+}
+
+fn copyEnvIfPresent(alloc: std.mem.Allocator, env: *std.process.EnvMap, key: []const u8) !void {
+    const value = std.process.getEnvVarOwned(alloc, key) catch return;
+    defer alloc.free(value);
+    try env.put(key, value);
 }
 
 fn signRs256(
@@ -358,4 +379,13 @@ test "classifyHttpStatus maps retry and auth errors" {
     try std.testing.expectEqual(GitHubAuthError.AuthFailed, classifyHttpStatus(401));
     try std.testing.expectEqual(GitHubAuthError.InvalidRequest, classifyHttpStatus(422));
     try std.testing.expectEqual(GitHubAuthError.ServerError, classifyHttpStatus(503));
+}
+
+test "integration: sanitizedChildEnv does not leak auth env vars" {
+    var env = try sanitizedChildEnv(std.testing.allocator);
+    defer env.deinit();
+
+    try std.testing.expect(env.get("GITHUB_TOKEN") == null);
+    try std.testing.expect(env.get("GIT_ASKPASS") == null);
+    try std.testing.expect(env.get("ENCRYPTION_MASTER_KEY") == null);
 }
