@@ -53,7 +53,7 @@
 | 14 | ⚠️ Partial | PR dedupe and no-op commit handling done; no side-effect ledger |
 | 15 | ⚠️ Partial | Git/curl timeouts and per-run deadline gating are in place; direct agent-call cancellation tokening is still missing |
 | 16 | ⚠️ Partial | Main allocator is now thread-safe and worker concurrency is configurable; global leak-reporting/thread-safety guardrails still need tightening |
-| 17 | ⚠️ Partial | Versioned migrations + tx done; SQL splitting remains heuristic |
+| 17 | ⚠️ Partial | Versioned migrations + tx + dedicated `migrate` command are in place; SQL splitting remains heuristic and `serve` still auto-migrates |
 | 18 | ⚠️ Partial | `/healthz` + `/readyz` improved, and `/readyz` now supports queue depth/age thresholds; migration/dependency readiness gates are still missing |
 | 19 | ⚠️ Partial | `/metrics` now exposes core counters + duration histograms, observer wiring is enabled, and `request_id` is propagated through API/worker/state/policy lifecycle events; trace-level correlation is still missing |
 | 20 | ⚠️ Partial | Serve-time config is now centralized in `src/config/runtime.zig`, fail-fast on critical env is active, and API key rotation is supported; secret versioning/rotation model is still missing |
@@ -473,7 +473,7 @@ Advanced path then adds:
 | 14 | Side-effect idempotency (PR/push/commit) | **Critical** | Duplicate PRs on retry; repeated git pushes |
 | 15 | Timeouts & cancellation | **High** | Agent calls still lack cooperative cancellation/token interruption |
 | 16 | Thread safety & Zig allocator pitfalls | **High** | Shared GPA across threads; leak detection ignored |
-| 17 | Schema migration safety | **High** | Naïve SQL split; non-transactional; silent failures |
+| 17 | Schema migration safety | **High** | SQL splitting remains heuristic and startup migration policy is still coupled to `serve` |
 | 18 | Health check depth (readiness vs liveness) | **Medium–High** | Readiness still lacks migration/dependency gates under degraded upstream conditions |
 | 19 | Metrics / telemetry / tracing | **Medium** | Core counters and duration histograms are in place with default LogObserver wiring, but trace-context normalization/export is still missing |
 | 20 | Config validation & secret hygiene | **Medium–High** | Core fail-fast and API key rotation exist; encrypted-secret key versioning/rotation is still missing |
@@ -641,11 +641,11 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 
 | File | Line | Issue |
 |------|------|-------|
-| `src/main.zig` | 94–99 | Auto-runs migrations on every startup; failure only logs warning |
-| `src/db/pool.zig` | 99–111 | Splits SQL on `";\n"` (breaks on triggers, functions, multi-line strings); continues on error; not transactional |
+| `src/main.zig` | subcommand routing | Dedicated `migrate` subcommand now exists, but `serve` still auto-runs migrations by default |
+| `src/db/pool.zig` | SQL application parser | Statement splitting is still heuristic for complex SQL bodies (function/trigger edge cases) |
 
 ### Recommendation
-- Separate `migrate` subcommand from `serve` (or require `MIGRATE_ON_START=1`)
+- Keep `migrate` as the explicit operational entrypoint and gate `serve` auto-migration with a startup flag (`MIGRATE_ON_START=1`) in a later pass
 - Use a `schema_migrations` table with ordered version files
 - Run migrations inside a transaction; fail hard on error
 
@@ -739,7 +739,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 | **P2** | Multi-worker concurrency (`WORKER_CONCURRENCY`) | M (2–4h) | 3 |
 | **P2** | Token bucket rate limiter | M (2–4h) | 6 |
 | **P2** | Health check depth hardening (migration/dependency readiness gates) | S (1–2h) | 18 |
-| **P3** | Schema migration safety (versioned, transactional, separate command) | M (3–4h) | 17 |
+| **P3** | Schema migration hardening (`serve` migration gating + robust SQL splitting) | M (3–4h) | 17 |
 | **P3** | Config validation fail-fast + multi-key rotation | S (1–2h) | 20 |
 | **P3** | Event bus + outbox/dead-letter table | L (1–2d) | 4, 5 |
 | **P4** | Telemetry correlation hardening + secure scrape guidance | M (3–4h) | 19 |

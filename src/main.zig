@@ -5,6 +5,7 @@
 //!   serve    Start HTTP API server + worker loop (default)
 //!   doctor   Verify Postgres, git, agent config, and critical env
 //!   run      One-shot: process a spec file without HTTP server
+//!   migrate  Apply schema migrations and exit
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -103,7 +104,7 @@ fn signalWatcher(wstate: *worker.WorkerState) void {
 
 // ── CLI ───────────────────────────────────────────────────────────────────
 
-const Subcommand = enum { serve, doctor, run };
+const Subcommand = enum { serve, doctor, run, migrate };
 
 fn parseSubcommand() Subcommand {
     var args = std.process.args();
@@ -134,6 +135,7 @@ pub fn main() !void {
         .serve => try cmdServe(alloc),
         .doctor => try cmdDoctor(alloc),
         .run => try cmdRun(alloc),
+        .migrate => try cmdMigrate(alloc),
     }
 }
 
@@ -421,6 +423,22 @@ fn cmdRun(alloc: std.mem.Allocator) !void {
 
     log.info("spec loaded ({d} bytes) — pipeline runs via `zombied serve`", .{spec_content.len});
     log.info("one-shot mode: POST /v1/runs to trigger pipeline", .{});
+}
+
+// ── migrate ───────────────────────────────────────────────────────────────
+
+fn cmdMigrate(alloc: std.mem.Allocator) !void {
+    const pool = db.initFromEnvForRole(alloc, .api) catch |err| {
+        std.debug.print("fatal: api database init failed: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer pool.deinit();
+
+    runCanonicalMigrations(pool) catch |err| {
+        std.debug.print("fatal: schema migration failed: {}\n", .{err});
+        std.process.exit(1);
+    };
+    log.info("schema migrations completed", .{});
 }
 
 test {

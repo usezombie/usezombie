@@ -199,6 +199,14 @@ Create `ArenaAllocator` at start of `executeRun()`, `defer arena.deinit()`. Pass
 - Worker now enforces run deadline checks before major phases and blocks over-time runs with deterministic state transition.
 - Remaining: true in-flight cooperative cancellation for currently running `agent.runSingle()` calls.
 
+### ⚠️ PARTIAL: 1.21 Dedicated migration entrypoint (Dimension 17)
+
+**File:** `src/main.zig`
+
+- Added `zombied migrate` subcommand to run schema migrations explicitly and exit.
+- Keeps existing behavior compatible (`serve` still runs migrations), while enabling operator-controlled migration workflows.
+- Remaining: decouple `serve` startup migration via explicit flag policy and further harden SQL statement splitting edge cases.
+
 ### ⚠️ PARTIAL: 1.16 Readiness threshold gating (Dimension 18)
 
 **File:** `src/config/runtime.zig` + `src/http/handler.zig` + `src/main.zig`
