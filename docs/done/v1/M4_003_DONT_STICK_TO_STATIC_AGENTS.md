@@ -1,5 +1,7 @@
 # M4_003: Dynamic Agent Topology Runtime Baseline (Don’t Stick To Static Agents)
 
+> Superseded by docs/spec/v1/M5_002_HARNESS_CONTROL_PLANE.md
+
 **Prototype:** v1.0.0
 **Milestone:** M4
 **Workstream:** 003
