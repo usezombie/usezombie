@@ -8,6 +8,7 @@ const http_server = @import("../http/server.zig");
 const http_handler = @import("../http/handler.zig");
 const worker = @import("../pipeline/worker.zig");
 const git_ops = @import("../git/ops.zig");
+const metrics = @import("../observability/metrics.zig");
 const obs_log = @import("../observability/logging.zig");
 const common = @import("common.zig");
 
@@ -131,9 +132,12 @@ pub fn run(alloc: std.mem.Allocator) !void {
         .api_keys = serve_cfg.api_keys,
         .clerk = null,
         .worker_state = &wstate,
+        .api_in_flight_requests = std.atomic.Value(u32).init(0),
+        .api_max_in_flight_requests = serve_cfg.api_max_in_flight_requests,
         .ready_max_queue_depth = serve_cfg.ready_max_queue_depth,
         .ready_max_queue_age_ms = serve_cfg.ready_max_queue_age_ms,
     };
+    metrics.setApiInFlightRequests(0);
 
     var clerk = if (serve_cfg.clerk_enabled) clerk_auth.Verifier.init(alloc, .{
         .jwks_url = serve_cfg.clerk_jwks_url orelse "",
@@ -187,8 +191,20 @@ pub fn run(alloc: std.mem.Allocator) !void {
     signal_thread = try std.Thread.spawn(.{}, signalWatcher, .{&wstate});
     event_thread = try std.Thread.spawn(.{}, events_bus.runThread, .{&event_bus});
 
-    log.info("HTTP server starting port={d} worker_concurrency={d}", .{ serve_cfg.port, worker_count });
-    http_server.serve(&ctx, .{ .port = serve_cfg.port }) catch |err| {
+    log.info("HTTP server starting port={d} worker_concurrency={d} api_threads={d} api_workers={d} api_max_clients={d} api_max_in_flight={d}", .{
+        serve_cfg.port,
+        worker_count,
+        serve_cfg.api_http_threads,
+        serve_cfg.api_http_workers,
+        serve_cfg.api_max_clients,
+        serve_cfg.api_max_in_flight_requests,
+    });
+    http_server.serve(&ctx, .{
+        .port = serve_cfg.port,
+        .threads = serve_cfg.api_http_threads,
+        .workers = serve_cfg.api_http_workers,
+        .max_clients = @intCast(serve_cfg.api_max_clients),
+    }) catch |err| {
         obs_log.logErr(.zombied, err, "http server exited with error", .{});
     };
 

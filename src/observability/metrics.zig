@@ -43,6 +43,8 @@ const Snapshot = struct {
     side_effect_outbox_enqueued_total: u64,
     side_effect_outbox_delivered_total: u64,
     side_effect_outbox_dead_letter_total: u64,
+    api_backpressure_rejections_total: u64,
+    api_in_flight_requests: u64,
     worker_in_flight_runs: u64,
     worker_allocator_leaks_total: u64,
     agent_duration_seconds: HistogramSnapshot,
@@ -80,6 +82,8 @@ var g_rate_limit_wait_ms_total = std.atomic.Value(u64).init(0);
 var g_side_effect_outbox_enqueued_total = std.atomic.Value(u64).init(0);
 var g_side_effect_outbox_delivered_total = std.atomic.Value(u64).init(0);
 var g_side_effect_outbox_dead_letter_total = std.atomic.Value(u64).init(0);
+var g_api_backpressure_rejections_total = std.atomic.Value(u64).init(0);
+var g_api_in_flight_requests = std.atomic.Value(u64).init(0);
 var g_worker_in_flight_runs = std.atomic.Value(u64).init(0);
 var g_worker_allocator_leaks_total = std.atomic.Value(u64).init(0);
 var g_histograms_mu: std.Thread.Mutex = .{};
@@ -195,6 +199,14 @@ pub fn incOutboxDeadLetter() void {
     _ = g_side_effect_outbox_dead_letter_total.fetchAdd(1, .monotonic);
 }
 
+pub fn incApiBackpressureRejections() void {
+    _ = g_api_backpressure_rejections_total.fetchAdd(1, .monotonic);
+}
+
+pub fn setApiInFlightRequests(v: u32) void {
+    g_api_in_flight_requests.store(@as(u64, @intCast(v)), .release);
+}
+
 pub fn setWorkerInFlightRuns(v: u32) void {
     g_worker_in_flight_runs.store(@as(u64, @intCast(v)), .release);
 }
@@ -256,6 +268,8 @@ fn snapshot() Snapshot {
         .side_effect_outbox_enqueued_total = g_side_effect_outbox_enqueued_total.load(.acquire),
         .side_effect_outbox_delivered_total = g_side_effect_outbox_delivered_total.load(.acquire),
         .side_effect_outbox_dead_letter_total = g_side_effect_outbox_dead_letter_total.load(.acquire),
+        .api_backpressure_rejections_total = g_api_backpressure_rejections_total.load(.acquire),
+        .api_in_flight_requests = g_api_in_flight_requests.load(.acquire),
         .worker_in_flight_runs = g_worker_in_flight_runs.load(.acquire),
         .worker_allocator_leaks_total = g_worker_allocator_leaks_total.load(.acquire),
         .agent_duration_seconds = .{},
@@ -397,6 +411,12 @@ pub fn renderPrometheus(
         \\# HELP zombie_side_effect_outbox_dead_letter_total Total side-effect outbox entries dead-lettered by reconciliation.
         \\# TYPE zombie_side_effect_outbox_dead_letter_total counter
         \\zombie_side_effect_outbox_dead_letter_total {d}
+        \\# HELP zombie_api_backpressure_rejections_total Total API requests rejected by in-flight backpressure guard.
+        \\# TYPE zombie_api_backpressure_rejections_total counter
+        \\zombie_api_backpressure_rejections_total {d}
+        \\# HELP zombie_api_in_flight_requests Current in-flight API requests protected by backpressure guard.
+        \\# TYPE zombie_api_in_flight_requests gauge
+        \\zombie_api_in_flight_requests {d}
         \\# HELP zombie_worker_in_flight_runs Current in-flight runs across worker threads.
         \\# TYPE zombie_worker_in_flight_runs gauge
         \\zombie_worker_in_flight_runs {d}
@@ -445,6 +465,8 @@ pub fn renderPrometheus(
         s.side_effect_outbox_enqueued_total,
         s.side_effect_outbox_delivered_total,
         s.side_effect_outbox_dead_letter_total,
+        s.api_backpressure_rejections_total,
+        s.api_in_flight_requests,
         s.worker_in_flight_runs,
         s.worker_allocator_leaks_total,
         worker_running_gauge,
@@ -482,6 +504,8 @@ test "prometheus render includes key metrics" {
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_rate_limit_wait_ms_total"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_side_effect_outbox_enqueued_total"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_side_effect_outbox_dead_letter_total"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_api_backpressure_rejections_total"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_api_in_flight_requests"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_agent_duration_seconds_bucket"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_run_total_wall_seconds_bucket"));
 }
@@ -510,4 +534,16 @@ test "integration: worker guardrail metrics are exposed in prometheus output" {
 
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_worker_in_flight_runs 2"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_worker_allocator_leaks_total"));
+}
+
+test "integration: api throughput guardrail metrics are exposed in prometheus output" {
+    const alloc = std.testing.allocator;
+    setApiInFlightRequests(3);
+    incApiBackpressureRejections();
+
+    const body = try renderPrometheus(alloc, true, 0, 0);
+    defer alloc.free(body);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_api_in_flight_requests 3"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_api_backpressure_rejections_total"));
 }

@@ -21,6 +21,8 @@ pub const Context = struct {
     api_keys: []const u8, // comma-separated API key list from env
     clerk: ?*clerk.Verifier,
     worker_state: *const worker.WorkerState,
+    api_in_flight_requests: std.atomic.Value(u32),
+    api_max_in_flight_requests: u32,
     ready_max_queue_depth: ?i64,
     ready_max_queue_age_ms: ?i64,
 };
@@ -130,6 +132,25 @@ fn authorizeWorkspace(conn: *pg.Conn, principal: AuthPrincipal, workspace_id: []
     ) catch return false;
     defer q.deinit();
     return (q.next() catch null) != null;
+}
+
+fn beginApiRequest(ctx: *Context) bool {
+    const prev = ctx.api_in_flight_requests.fetchAdd(1, .acq_rel);
+    if (prev >= ctx.api_max_in_flight_requests) {
+        const reverted = ctx.api_in_flight_requests.fetchSub(1, .acq_rel);
+        std.debug.assert(reverted > 0);
+        metrics.incApiBackpressureRejections();
+        return false;
+    }
+
+    metrics.setApiInFlightRequests(ctx.api_in_flight_requests.load(.acquire));
+    return true;
+}
+
+fn endApiRequest(ctx: *Context) void {
+    const prev = ctx.api_in_flight_requests.fetchSub(1, .acq_rel);
+    std.debug.assert(prev > 0);
+    metrics.setApiInFlightRequests(ctx.api_in_flight_requests.load(.acquire));
 }
 
 // ── Healthz ───────────────────────────────────────────────────────────────
@@ -287,6 +308,12 @@ pub fn handleStartRun(ctx: *Context, r: zap.Request) void {
     };
     defer parsed.deinit();
     const req = parsed.value;
+
+    if (!beginApiRequest(ctx)) {
+        errorResponse(r, .service_unavailable, "API_SATURATED", "Server overloaded; retry shortly", req_id);
+        return;
+    }
+    defer endApiRequest(ctx);
 
     var conn = ctx.pool.acquire() catch {
         errorResponse(r, .service_unavailable, "INTERNAL_ERROR", "Database unavailable", req_id);
@@ -653,6 +680,45 @@ pub fn handleRetryRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
         .attempt = current.attempt,
         .request_id = req_id,
     });
+}
+
+test "integration: beginApiRequest enforces max in-flight limit" {
+    var ws = worker.WorkerState.init();
+    var ctx = Context{
+        .pool = undefined,
+        .alloc = std.testing.allocator,
+        .api_keys = "",
+        .clerk = null,
+        .worker_state = &ws,
+        .api_in_flight_requests = std.atomic.Value(u32).init(0),
+        .api_max_in_flight_requests = 2,
+        .ready_max_queue_depth = null,
+        .ready_max_queue_age_ms = null,
+    };
+
+    try std.testing.expect(beginApiRequest(&ctx));
+    try std.testing.expect(beginApiRequest(&ctx));
+    try std.testing.expect(!beginApiRequest(&ctx));
+    try std.testing.expectEqual(@as(u32, 2), ctx.api_in_flight_requests.load(.acquire));
+}
+
+test "integration: endApiRequest decrements in-flight counter deterministically" {
+    var ws = worker.WorkerState.init();
+    var ctx = Context{
+        .pool = undefined,
+        .alloc = std.testing.allocator,
+        .api_keys = "",
+        .clerk = null,
+        .worker_state = &ws,
+        .api_in_flight_requests = std.atomic.Value(u32).init(0),
+        .api_max_in_flight_requests = 1,
+        .ready_max_queue_depth = null,
+        .ready_max_queue_age_ms = null,
+    };
+
+    try std.testing.expect(beginApiRequest(&ctx));
+    endApiRequest(&ctx);
+    try std.testing.expectEqual(@as(u32, 0), ctx.api_in_flight_requests.load(.acquire));
 }
 
 // ── POST /v1/workspaces/:workspace_id:pause ───────────────────────────────

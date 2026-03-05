@@ -14,6 +14,10 @@ pub const ValidationError = error{
     InvalidPort,
     InvalidMaxAttempts,
     InvalidWorkerConcurrency,
+    InvalidApiHttpThreads,
+    InvalidApiHttpWorkers,
+    InvalidApiMaxClients,
+    InvalidApiMaxInFlightRequests,
     InvalidRateLimitCapacity,
     InvalidRateLimitRefillPerSec,
     InvalidRunTimeoutMs,
@@ -31,6 +35,10 @@ pub const ServeConfig = struct {
     pipeline_profile_path: []u8,
     max_attempts: u32,
     worker_concurrency: u32,
+    api_http_threads: i16,
+    api_http_workers: i16,
+    api_max_clients: u32,
+    api_max_in_flight_requests: u32,
     run_timeout_ms: u64,
     rate_limit_capacity: u32,
     rate_limit_refill_per_sec: f64,
@@ -48,6 +56,10 @@ pub const ServeConfig = struct {
         const port = try parseU16Env(alloc, "PORT", 3000, ValidationError.InvalidPort);
         const max_attempts = try parseU32Env(alloc, "DEFAULT_MAX_ATTEMPTS", 3, ValidationError.InvalidMaxAttempts);
         const worker_concurrency = try parseU32Env(alloc, "WORKER_CONCURRENCY", 1, ValidationError.InvalidWorkerConcurrency);
+        const api_http_threads = try parseI16Env(alloc, "API_HTTP_THREADS", 1, ValidationError.InvalidApiHttpThreads);
+        const api_http_workers = try parseI16Env(alloc, "API_HTTP_WORKERS", 1, ValidationError.InvalidApiHttpWorkers);
+        const api_max_clients = try parseU32Env(alloc, "API_MAX_CLIENTS", 1024, ValidationError.InvalidApiMaxClients);
+        const api_max_in_flight_requests = try parseU32Env(alloc, "API_MAX_IN_FLIGHT_REQUESTS", 256, ValidationError.InvalidApiMaxInFlightRequests);
         const run_timeout_ms = try parseU64Env(alloc, "RUN_TIMEOUT_MS", 300_000, ValidationError.InvalidRunTimeoutMs);
         const rate_limit_capacity = try parseU32Env(alloc, "RATE_LIMIT_CAPACITY", 30, ValidationError.InvalidRateLimitCapacity);
         const rate_limit_refill_per_sec = try parseF64Env(alloc, "RATE_LIMIT_REFILL_PER_SEC", 5.0, ValidationError.InvalidRateLimitRefillPerSec);
@@ -56,6 +68,10 @@ pub const ServeConfig = struct {
 
         if (max_attempts == 0) return ValidationError.InvalidMaxAttempts;
         if (worker_concurrency == 0) return ValidationError.InvalidWorkerConcurrency;
+        if (api_http_threads <= 0) return ValidationError.InvalidApiHttpThreads;
+        if (api_http_workers <= 0) return ValidationError.InvalidApiHttpWorkers;
+        if (api_max_clients == 0) return ValidationError.InvalidApiMaxClients;
+        if (api_max_in_flight_requests == 0) return ValidationError.InvalidApiMaxInFlightRequests;
         if (run_timeout_ms == 0) return ValidationError.InvalidRunTimeoutMs;
         if (rate_limit_capacity == 0) return ValidationError.InvalidRateLimitCapacity;
         if (!(rate_limit_refill_per_sec > 0)) return ValidationError.InvalidRateLimitRefillPerSec;
@@ -116,6 +132,10 @@ pub const ServeConfig = struct {
             .pipeline_profile_path = pipeline_profile_path,
             .max_attempts = max_attempts,
             .worker_concurrency = worker_concurrency,
+            .api_http_threads = api_http_threads,
+            .api_http_workers = api_http_workers,
+            .api_max_clients = api_max_clients,
+            .api_max_in_flight_requests = api_max_in_flight_requests,
             .run_timeout_ms = run_timeout_ms,
             .rate_limit_capacity = rate_limit_capacity,
             .rate_limit_refill_per_sec = rate_limit_refill_per_sec,
@@ -155,6 +175,10 @@ pub const ServeConfig = struct {
             ValidationError.InvalidPort => std.debug.print("fatal: invalid PORT value\n", .{}),
             ValidationError.InvalidMaxAttempts => std.debug.print("fatal: invalid DEFAULT_MAX_ATTEMPTS value\n", .{}),
             ValidationError.InvalidWorkerConcurrency => std.debug.print("fatal: invalid WORKER_CONCURRENCY value\n", .{}),
+            ValidationError.InvalidApiHttpThreads => std.debug.print("fatal: invalid API_HTTP_THREADS value\n", .{}),
+            ValidationError.InvalidApiHttpWorkers => std.debug.print("fatal: invalid API_HTTP_WORKERS value\n", .{}),
+            ValidationError.InvalidApiMaxClients => std.debug.print("fatal: invalid API_MAX_CLIENTS value\n", .{}),
+            ValidationError.InvalidApiMaxInFlightRequests => std.debug.print("fatal: invalid API_MAX_IN_FLIGHT_REQUESTS value\n", .{}),
             ValidationError.InvalidRunTimeoutMs => std.debug.print("fatal: invalid RUN_TIMEOUT_MS value\n", .{}),
             ValidationError.InvalidRateLimitCapacity => std.debug.print("fatal: invalid RATE_LIMIT_CAPACITY value\n", .{}),
             ValidationError.InvalidRateLimitRefillPerSec => std.debug.print("fatal: invalid RATE_LIMIT_REFILL_PER_SEC value\n", .{}),
@@ -182,6 +206,12 @@ fn parseU32Env(alloc: std.mem.Allocator, name: []const u8, default_value: u32, i
     const raw = std.process.getEnvVarOwned(alloc, name) catch return default_value;
     defer alloc.free(raw);
     return std.fmt.parseInt(u32, raw, 10) catch invalid_error;
+}
+
+fn parseI16Env(alloc: std.mem.Allocator, name: []const u8, default_value: i16, invalid_error: ValidationError) !i16 {
+    const raw = std.process.getEnvVarOwned(alloc, name) catch return default_value;
+    defer alloc.free(raw);
+    return std.fmt.parseInt(i16, raw, 10) catch invalid_error;
 }
 
 fn parseF64Env(alloc: std.mem.Allocator, name: []const u8, default_value: f64, invalid_error: ValidationError) !f64 {
@@ -227,4 +257,13 @@ test "hasUsableApiKey validates rotation list" {
 test "isHexString validates encryption key format" {
     try std.testing.expect(isHexString("abcdef0123"));
     try std.testing.expect(!isHexString("abcxyz"));
+}
+
+test "parseI16Env parses signed short values" {
+    const alloc = std.testing.allocator;
+    try std.posix.setenv("API_HTTP_THREADS", "3", true);
+    defer std.posix.unsetenv("API_HTTP_THREADS");
+
+    const value = try parseI16Env(alloc, "API_HTTP_THREADS", 1, ValidationError.InvalidApiHttpThreads);
+    try std.testing.expectEqual(@as(i16, 3), value);
 }
