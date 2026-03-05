@@ -18,6 +18,7 @@ const err_classify = @import("../reliability/error_classify.zig");
 const reliable = @import("../reliability/reliable_call.zig");
 const rate_limit = @import("../reliability/rate_limit.zig");
 const topology = @import("topology.zig");
+const profile_resolver = @import("profile_resolver.zig");
 const metrics = @import("../observability/metrics.zig");
 const events = @import("../events/bus.zig");
 const queue_consts = @import("../queue/constants.zig");
@@ -330,26 +331,6 @@ fn beginRunIfActive(worker_state: *WorkerState) WorkerError!void {
     worker_state.beginRun();
 }
 
-fn loadWorkspaceActiveProfile(
-    alloc: std.mem.Allocator,
-    conn: *pg.Conn,
-    workspace_id: []const u8,
-) !?topology.Profile {
-    var q = try conn.query(
-        \\SELECT v.compiled_profile_json
-        \\FROM workspace_active_profile wap
-        \\JOIN agent_profile_versions v ON v.profile_version_id = wap.profile_version_id
-        \\WHERE wap.workspace_id = $1 AND v.is_valid = TRUE
-        \\LIMIT 1
-    , .{workspace_id});
-    defer q.deinit();
-
-    const row = try q.next() orelse return null;
-    const compiled_opt = try row.get(?[]const u8, 0);
-    const compiled = compiled_opt orelse return null;
-    return topology.parseProfileJson(alloc, compiled);
-}
-
 fn processNextRun(
     alloc: std.mem.Allocator,
     cfg: WorkerConfig,
@@ -412,7 +393,7 @@ fn processNextRun(
     try commitTx(conn);
     tx_open = false;
 
-    var workspace_profile: ?topology.Profile = loadWorkspaceActiveProfile(alloc, conn, workspace_id) catch |err| blk: {
+    var workspace_profile: ?topology.Profile = profile_resolver.loadWorkspaceActiveProfile(alloc, conn, workspace_id) catch |err| blk: {
         obs_log.logWarnErr(.worker, err, "active profile load failed; fallback to default workspace_id={s}", .{workspace_id});
         break :blk null;
     };
@@ -1369,7 +1350,7 @@ test "integration: workspace active profile is loaded for worker execution" {
         q.deinit();
     }
 
-    var profile = (try loadWorkspaceActiveProfile(std.testing.allocator, db_ctx.conn, "ws_1")) orelse return error.TestUnexpectedResult;
+    var profile = (try profile_resolver.loadWorkspaceActiveProfile(std.testing.allocator, db_ctx.conn, "ws_1")) orelse return error.TestUnexpectedResult;
     defer profile.deinit();
     try std.testing.expectEqualStrings("acme-harness-v1", profile.profile_id);
     try std.testing.expectEqual(@as(usize, 3), profile.stages.len);
@@ -1400,7 +1381,7 @@ test "integration: worker profile fallback path returns null when no active bind
         q.deinit();
     }
 
-    const none = try loadWorkspaceActiveProfile(std.testing.allocator, db_ctx.conn, "ws_missing");
+    const none = try profile_resolver.loadWorkspaceActiveProfile(std.testing.allocator, db_ctx.conn, "ws_missing");
     try std.testing.expect(none == null);
 }
 
