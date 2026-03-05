@@ -273,20 +273,14 @@ pub const Client = struct {
     }
 
     pub fn ensureConsumerGroup(self: *Client) !void {
-        var resp = self.command(&.{
+        var resp = try self.commandAllowError(&.{
             "XGROUP",
             "CREATE",
             queue_consts.stream_name,
             queue_consts.consumer_group,
             "0",
             "MKSTREAM",
-        }) catch |err| switch (err) {
-            error.RedisCommandError => {
-                // Handled below from response parsing in command() path.
-                return err;
-            },
-            else => return err,
-        };
+        });
         defer resp.deinit(self.alloc);
 
         switch (resp) {
@@ -299,6 +293,11 @@ pub const Client = struct {
             },
             else => return error.RedisGroupCreateFailed,
         }
+    }
+
+    pub fn readyCheck(self: *Client) !void {
+        try self.ping();
+        try self.ensureConsumerGroup();
     }
 
     pub fn xaddRun(
@@ -379,6 +378,15 @@ pub const Client = struct {
     }
 
     pub fn command(self: *Client, argv: []const []const u8) !RespValue {
+        var value = try self.commandAllowError(argv);
+        if (value == .err) {
+            value.deinit(self.alloc);
+            return error.RedisCommandError;
+        }
+        return value;
+    }
+
+    fn commandAllowError(self: *Client, argv: []const []const u8) !RespValue {
         self.lock.lock();
         defer self.lock.unlock();
         return self.commandUnlocked(argv);
@@ -401,9 +409,7 @@ pub const Client = struct {
         }
 
         const reader = self.transport.reader();
-        const value = try readRespValue(self.alloc, reader);
-        if (value == .err) return error.RedisCommandError;
-        return value;
+        return try readRespValue(self.alloc, reader);
     }
 
     fn decodeSingleMessage(self: *Client, value: RespValue) !?QueueMessage {
@@ -680,4 +686,18 @@ test "integration: rediss ping via REDIS_TLS_TEST_URL" {
     var client = try Client.connectFromUrl(alloc, tls_url);
     defer client.deinit();
     try client.ping();
+}
+
+test "integration: ensureConsumerGroup is idempotent for readiness checks" {
+    const alloc = std.testing.allocator;
+    const redis_url = std.process.getEnvVarOwned(alloc, "REDIS_READY_TEST_URL") catch
+        std.process.getEnvVarOwned(alloc, "REDIS_TLS_TEST_URL") catch
+        std.process.getEnvVarOwned(alloc, "REDIS_URL") catch return error.SkipZigTest;
+    defer alloc.free(redis_url);
+
+    var client = try Client.connectFromUrl(alloc, redis_url);
+    defer client.deinit();
+
+    try client.ensureConsumerGroup();
+    try client.ensureConsumerGroup();
 }

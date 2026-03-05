@@ -239,6 +239,9 @@ Deploy in sequence.
 curl -sS https://api.usezombie.com/healthz
 curl -sS https://api.usezombie.com/readyz
 
+# /readyz must report queue_dependency=true; fail closed on Redis degradation
+curl -sS https://api.usezombie.com/readyz | jq '.queue_dependency,.ready'
+
 # CLI auth
 npx zombiectl login
 npx zombiectl doctor
