@@ -24,6 +24,14 @@ const Snapshot = struct {
     external_retries_invalid_request_total: u64,
     external_retries_server_error_total: u64,
     external_retries_unknown_total: u64,
+    external_failures_total: u64,
+    external_failures_rate_limited_total: u64,
+    external_failures_timeout_total: u64,
+    external_failures_context_exhausted_total: u64,
+    external_failures_auth_total: u64,
+    external_failures_invalid_request_total: u64,
+    external_failures_server_error_total: u64,
+    external_failures_unknown_total: u64,
     retry_after_hints_total: u64,
     worker_errors_total: u64,
     agent_echo_calls_total: u64,
@@ -48,6 +56,14 @@ var g_external_retries_auth_total = std.atomic.Value(u64).init(0);
 var g_external_retries_invalid_request_total = std.atomic.Value(u64).init(0);
 var g_external_retries_server_error_total = std.atomic.Value(u64).init(0);
 var g_external_retries_unknown_total = std.atomic.Value(u64).init(0);
+var g_external_failures_total = std.atomic.Value(u64).init(0);
+var g_external_failures_rate_limited_total = std.atomic.Value(u64).init(0);
+var g_external_failures_timeout_total = std.atomic.Value(u64).init(0);
+var g_external_failures_context_exhausted_total = std.atomic.Value(u64).init(0);
+var g_external_failures_auth_total = std.atomic.Value(u64).init(0);
+var g_external_failures_invalid_request_total = std.atomic.Value(u64).init(0);
+var g_external_failures_server_error_total = std.atomic.Value(u64).init(0);
+var g_external_failures_unknown_total = std.atomic.Value(u64).init(0);
 var g_retry_after_hints_total = std.atomic.Value(u64).init(0);
 var g_worker_errors_total = std.atomic.Value(u64).init(0);
 var g_agent_echo_calls_total = std.atomic.Value(u64).init(0);
@@ -78,14 +94,50 @@ pub fn incRunRetries() void {
 
 pub fn incExternalRetry(class: error_classify.ErrorClass) void {
     _ = g_external_retries_total.fetchAdd(1, .monotonic);
+    incrementClassCounter(
+        class,
+        &g_external_retries_rate_limited_total,
+        &g_external_retries_timeout_total,
+        &g_external_retries_context_exhausted_total,
+        &g_external_retries_auth_total,
+        &g_external_retries_invalid_request_total,
+        &g_external_retries_server_error_total,
+        &g_external_retries_unknown_total,
+    );
+}
+
+pub fn incExternalFailure(class: error_classify.ErrorClass) void {
+    _ = g_external_failures_total.fetchAdd(1, .monotonic);
+    incrementClassCounter(
+        class,
+        &g_external_failures_rate_limited_total,
+        &g_external_failures_timeout_total,
+        &g_external_failures_context_exhausted_total,
+        &g_external_failures_auth_total,
+        &g_external_failures_invalid_request_total,
+        &g_external_failures_server_error_total,
+        &g_external_failures_unknown_total,
+    );
+}
+
+fn incrementClassCounter(
+    class: error_classify.ErrorClass,
+    rate_limited: *std.atomic.Value(u64),
+    timeout: *std.atomic.Value(u64),
+    context_exhausted: *std.atomic.Value(u64),
+    auth: *std.atomic.Value(u64),
+    invalid_request: *std.atomic.Value(u64),
+    server_error: *std.atomic.Value(u64),
+    unknown: *std.atomic.Value(u64),
+) void {
     switch (class) {
-        .rate_limited => _ = g_external_retries_rate_limited_total.fetchAdd(1, .monotonic),
-        .timeout => _ = g_external_retries_timeout_total.fetchAdd(1, .monotonic),
-        .context_exhausted => _ = g_external_retries_context_exhausted_total.fetchAdd(1, .monotonic),
-        .auth => _ = g_external_retries_auth_total.fetchAdd(1, .monotonic),
-        .invalid_request => _ = g_external_retries_invalid_request_total.fetchAdd(1, .monotonic),
-        .server_error => _ = g_external_retries_server_error_total.fetchAdd(1, .monotonic),
-        .unknown => _ = g_external_retries_unknown_total.fetchAdd(1, .monotonic),
+        .rate_limited => _ = rate_limited.fetchAdd(1, .monotonic),
+        .timeout => _ = timeout.fetchAdd(1, .monotonic),
+        .context_exhausted => _ = context_exhausted.fetchAdd(1, .monotonic),
+        .auth => _ = auth.fetchAdd(1, .monotonic),
+        .invalid_request => _ = invalid_request.fetchAdd(1, .monotonic),
+        .server_error => _ = server_error.fetchAdd(1, .monotonic),
+        .unknown => _ = unknown.fetchAdd(1, .monotonic),
     }
 }
 
@@ -155,6 +207,14 @@ fn snapshot() Snapshot {
         .external_retries_invalid_request_total = g_external_retries_invalid_request_total.load(.acquire),
         .external_retries_server_error_total = g_external_retries_server_error_total.load(.acquire),
         .external_retries_unknown_total = g_external_retries_unknown_total.load(.acquire),
+        .external_failures_total = g_external_failures_total.load(.acquire),
+        .external_failures_rate_limited_total = g_external_failures_rate_limited_total.load(.acquire),
+        .external_failures_timeout_total = g_external_failures_timeout_total.load(.acquire),
+        .external_failures_context_exhausted_total = g_external_failures_context_exhausted_total.load(.acquire),
+        .external_failures_auth_total = g_external_failures_auth_total.load(.acquire),
+        .external_failures_invalid_request_total = g_external_failures_invalid_request_total.load(.acquire),
+        .external_failures_server_error_total = g_external_failures_server_error_total.load(.acquire),
+        .external_failures_unknown_total = g_external_failures_unknown_total.load(.acquire),
         .retry_after_hints_total = g_retry_after_hints_total.load(.acquire),
         .worker_errors_total = g_worker_errors_total.load(.acquire),
         .agent_echo_calls_total = g_agent_echo_calls_total.load(.acquire),
@@ -245,6 +305,30 @@ pub fn renderPrometheus(
         \\# HELP zombie_external_retries_unknown_total External retries classified as unknown.
         \\# TYPE zombie_external_retries_unknown_total counter
         \\zombie_external_retries_unknown_total {d}
+        \\# HELP zombie_external_failures_total External calls that exited wrappers as classified failures.
+        \\# TYPE zombie_external_failures_total counter
+        \\zombie_external_failures_total {d}
+        \\# HELP zombie_external_failures_rate_limited_total External failures classified as rate-limited.
+        \\# TYPE zombie_external_failures_rate_limited_total counter
+        \\zombie_external_failures_rate_limited_total {d}
+        \\# HELP zombie_external_failures_timeout_total External failures classified as timeout.
+        \\# TYPE zombie_external_failures_timeout_total counter
+        \\zombie_external_failures_timeout_total {d}
+        \\# HELP zombie_external_failures_context_exhausted_total External failures classified as context exhausted.
+        \\# TYPE zombie_external_failures_context_exhausted_total counter
+        \\zombie_external_failures_context_exhausted_total {d}
+        \\# HELP zombie_external_failures_auth_total External failures classified as auth.
+        \\# TYPE zombie_external_failures_auth_total counter
+        \\zombie_external_failures_auth_total {d}
+        \\# HELP zombie_external_failures_invalid_request_total External failures classified as invalid request.
+        \\# TYPE zombie_external_failures_invalid_request_total counter
+        \\zombie_external_failures_invalid_request_total {d}
+        \\# HELP zombie_external_failures_server_error_total External failures classified as server error.
+        \\# TYPE zombie_external_failures_server_error_total counter
+        \\zombie_external_failures_server_error_total {d}
+        \\# HELP zombie_external_failures_unknown_total External failures classified as unknown.
+        \\# TYPE zombie_external_failures_unknown_total counter
+        \\zombie_external_failures_unknown_total {d}
         \\# HELP zombie_retry_after_hints_total Retry attempts that used Retry-After guidance.
         \\# TYPE zombie_retry_after_hints_total counter
         \\zombie_retry_after_hints_total {d}
@@ -292,6 +376,14 @@ pub fn renderPrometheus(
         s.external_retries_invalid_request_total,
         s.external_retries_server_error_total,
         s.external_retries_unknown_total,
+        s.external_failures_total,
+        s.external_failures_rate_limited_total,
+        s.external_failures_timeout_total,
+        s.external_failures_context_exhausted_total,
+        s.external_failures_auth_total,
+        s.external_failures_invalid_request_total,
+        s.external_failures_server_error_total,
+        s.external_failures_unknown_total,
         s.retry_after_hints_total,
         s.worker_errors_total,
         s.agent_echo_calls_total,
@@ -331,6 +423,7 @@ test "prometheus render includes key metrics" {
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_worker_running 1"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_queue_depth 3"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_external_retries_total"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_external_failures_total"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_rate_limit_wait_ms_total"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_agent_duration_seconds_bucket"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_run_total_wall_seconds_bucket"));

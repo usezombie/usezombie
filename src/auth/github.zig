@@ -10,6 +10,10 @@ pub const GitHubAuthError = error{
     CurlFailed,
     InvalidResponse,
     CommandTimedOut,
+    RateLimited,
+    AuthFailed,
+    InvalidRequest,
+    ServerError,
 };
 
 pub const TokenCache = struct {
@@ -41,6 +45,16 @@ pub const TokenCache = struct {
         alloc: std.mem.Allocator,
         installation_id: []const u8,
     ) ![]u8 {
+        return self.getInstallationTokenWithDetail(alloc, installation_id, null);
+    }
+
+    pub fn getInstallationTokenWithDetail(
+        self: *TokenCache,
+        alloc: std.mem.Allocator,
+        installation_id: []const u8,
+        error_detail_out: ?*?[]u8,
+    ) ![]u8 {
+        if (error_detail_out) |out| out.* = null;
         if (self.app_id.len == 0 or self.private_key_pem.len == 0 or installation_id.len == 0) {
             return GitHubAuthError.MissingConfig;
         }
@@ -58,7 +72,7 @@ pub const TokenCache = struct {
         const jwt = try buildAppJwt(alloc, self.app_id, self.private_key_pem);
         defer alloc.free(jwt);
 
-        const fresh_token = try exchangeInstallationToken(alloc, installation_id, jwt);
+        const fresh_token = try exchangeInstallationToken(alloc, installation_id, jwt, error_detail_out);
         errdefer alloc.free(fresh_token);
 
         if (self.cached_token) |token| self.alloc.free(token);
@@ -226,7 +240,10 @@ fn exchangeInstallationToken(
     alloc: std.mem.Allocator,
     installation_id: []const u8,
     app_jwt: []const u8,
+    error_detail_out: ?*?[]u8,
 ) ![]u8 {
+    if (error_detail_out) |out| out.* = null;
+
     const url = try std.fmt.allocPrint(
         alloc,
         "https://api.github.com/app/installations/{s}/access_tokens",
@@ -237,27 +254,108 @@ fn exchangeInstallationToken(
     const auth = try std.fmt.allocPrint(alloc, "Authorization: Bearer {s}", .{app_jwt});
     defer alloc.free(auth);
 
-    const body = try runWithInput(alloc, &.{
+    const response = try runWithInput(alloc, &.{
         "curl",                                "-sS",
         "--connect-timeout",                   "10",
         "--max-time",                          "30",
-        "--fail-with-body",                    "-X",
+        "-i",                                  "-X",
         "POST",                                "-H",
         "Accept: application/vnd.github+json", "-H",
         auth,                                  url,
     }, null, 30_000);
-    defer alloc.free(body);
+    defer alloc.free(response);
 
-    const parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
-        log.err("invalid github token response: {s}", .{body});
+    const parts = splitHttpResponse(response);
+    const status = parseHttpStatus(parts.headers) orelse {
+        log.err("invalid github token response status headers={s}", .{parts.headers});
+        return GitHubAuthError.InvalidResponse;
+    };
+
+    if (status >= 400) {
+        if (error_detail_out) |out| out.* = alloc.dupe(u8, response) catch null;
+        log.err("installation token request failed status={d} body={s}", .{ status, parts.body });
+        return classifyHttpStatus(status);
+    }
+
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, parts.body, .{}) catch {
+        log.err("invalid github token response: {s}", .{parts.body});
         return GitHubAuthError.InvalidResponse;
     };
     defer parsed.deinit();
 
     const token_val = parsed.value.object.get("token") orelse {
-        log.err("token field missing in response: {s}", .{body});
+        log.err("token field missing in response: {s}", .{parts.body});
         return GitHubAuthError.InvalidResponse;
     };
 
     return alloc.dupe(u8, token_val.string);
+}
+
+fn classifyHttpStatus(status: u16) GitHubAuthError {
+    return switch (status) {
+        429 => GitHubAuthError.RateLimited,
+        401, 403 => GitHubAuthError.AuthFailed,
+        400, 404, 422 => GitHubAuthError.InvalidRequest,
+        500...599 => GitHubAuthError.ServerError,
+        else => GitHubAuthError.CurlFailed,
+    };
+}
+
+const HttpResponseParts = struct {
+    headers: []const u8,
+    body: []const u8,
+};
+
+fn splitHttpResponse(response: []const u8) HttpResponseParts {
+    if (std.mem.lastIndexOf(u8, response, "\r\n\r\n")) |sep| {
+        return .{
+            .headers = response[0..sep],
+            .body = response[sep + 4 ..],
+        };
+    }
+    if (std.mem.lastIndexOf(u8, response, "\n\n")) |sep| {
+        return .{
+            .headers = response[0..sep],
+            .body = response[sep + 2 ..],
+        };
+    }
+    return .{
+        .headers = "",
+        .body = response,
+    };
+}
+
+fn parseHttpStatus(headers: []const u8) ?u16 {
+    const idx = std.mem.lastIndexOf(u8, headers, "HTTP/") orelse return null;
+    const line = headers[idx..];
+    const line_end = std.mem.indexOfScalar(u8, line, '\n') orelse line.len;
+    const status_line = std.mem.trim(u8, line[0..line_end], " \r\n\t");
+
+    const first_space = std.mem.indexOfScalar(u8, status_line, ' ') orelse return null;
+    var rest = status_line[first_space + 1 ..];
+    rest = std.mem.trimLeft(u8, rest, " ");
+    if (rest.len < 3) return null;
+
+    return std.fmt.parseInt(u16, rest[0..3], 10) catch null;
+}
+
+test "parseHttpStatus handles latest status line" {
+    const headers =
+        "HTTP/1.1 100 Continue\r\n\r\n" ++
+        "HTTP/2 429\r\nRetry-After: 7\r\n";
+    try std.testing.expectEqual(@as(?u16, 429), parseHttpStatus(headers));
+}
+
+test "splitHttpResponse separates headers and body" {
+    const raw = "HTTP/2 201\r\nContent-Type: application/json\r\n\r\n{\"token\":\"abc\"}";
+    const parts = splitHttpResponse(raw);
+    try std.testing.expect(std.mem.containsAtLeast(u8, parts.headers, 1, "HTTP/2 201"));
+    try std.testing.expect(std.mem.eql(u8, parts.body, "{\"token\":\"abc\"}"));
+}
+
+test "classifyHttpStatus maps retry and auth errors" {
+    try std.testing.expectEqual(GitHubAuthError.RateLimited, classifyHttpStatus(429));
+    try std.testing.expectEqual(GitHubAuthError.AuthFailed, classifyHttpStatus(401));
+    try std.testing.expectEqual(GitHubAuthError.InvalidRequest, classifyHttpStatus(422));
+    try std.testing.expectEqual(GitHubAuthError.ServerError, classifyHttpStatus(503));
 }

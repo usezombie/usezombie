@@ -39,6 +39,7 @@ pub fn callWithDetail(
         const result = operation(ctx, attempt) catch |err| {
             const classified = classifier.classify(err, detail_for_error(ctx, err));
             if (!classified.retryable or attempt >= opts.max_retries) {
+                metrics.incExternalFailure(classified.class);
                 return err;
             }
 
