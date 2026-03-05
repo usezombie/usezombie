@@ -6,6 +6,7 @@ const std = @import("std");
 pub const ValidationError = error{
     MissingApiKey,
     InvalidApiKeyList,
+    MissingClerkJwksUrl,
     MissingEncryptionMasterKey,
     InvalidEncryptionMasterKey,
     MissingGitHubAppId,
@@ -27,6 +28,7 @@ pub const ServeConfig = struct {
     github_app_id: []u8,
     github_app_private_key: []u8,
     config_dir: []u8,
+    pipeline_profile_path: []u8,
     max_attempts: u32,
     worker_concurrency: u32,
     run_timeout_ms: u64,
@@ -34,6 +36,10 @@ pub const ServeConfig = struct {
     rate_limit_refill_per_sec: f64,
     ready_max_queue_depth: ?i64,
     ready_max_queue_age_ms: ?i64,
+    clerk_enabled: bool,
+    clerk_jwks_url: ?[]u8,
+    clerk_issuer: ?[]u8,
+    clerk_audience: ?[]u8,
     encryption_master_key: []u8,
 
     alloc: std.mem.Allocator,
@@ -56,9 +62,18 @@ pub const ServeConfig = struct {
         if (ready_max_queue_depth) |v| if (v <= 0) return ValidationError.InvalidReadyMaxQueueDepth;
         if (ready_max_queue_age_ms) |v| if (v <= 0) return ValidationError.InvalidReadyMaxQueueAgeMs;
 
-        const api_keys = try requiredEnvOwned(alloc, "API_KEY", ValidationError.MissingApiKey);
+        const clerk_secret_key = std.process.getEnvVarOwned(alloc, "CLERK_SECRET_KEY") catch null;
+        const clerk_enabled = if (clerk_secret_key) |raw| blk: {
+            defer alloc.free(raw);
+            break :blk std.mem.trim(u8, raw, " \t\r\n").len > 0;
+        } else false;
+
+        const api_keys = if (clerk_enabled)
+            std.process.getEnvVarOwned(alloc, "API_KEY") catch try alloc.dupe(u8, "")
+        else
+            try requiredEnvOwned(alloc, "API_KEY", ValidationError.MissingApiKey);
         errdefer alloc.free(api_keys);
-        if (!hasUsableApiKey(api_keys)) return ValidationError.InvalidApiKeyList;
+        if (!clerk_enabled and !hasUsableApiKey(api_keys)) return ValidationError.InvalidApiKeyList;
 
         const encryption_master_key = try requiredEnvOwned(alloc, "ENCRYPTION_MASTER_KEY", ValidationError.MissingEncryptionMasterKey);
         errdefer alloc.free(encryption_master_key);
@@ -78,6 +93,18 @@ pub const ServeConfig = struct {
         errdefer alloc.free(cache_root);
         const config_dir = try envOrDefaultOwned(alloc, "AGENT_CONFIG_DIR", "./config");
         errdefer alloc.free(config_dir);
+        const pipeline_profile_path = try envOrDefaultOwned(alloc, "PIPELINE_PROFILE_PATH", "./config/pipeline-default.json");
+        errdefer alloc.free(pipeline_profile_path);
+
+        const clerk_jwks_url = if (clerk_enabled)
+            try requiredEnvOwned(alloc, "CLERK_JWKS_URL", ValidationError.MissingClerkJwksUrl)
+        else
+            std.process.getEnvVarOwned(alloc, "CLERK_JWKS_URL") catch null;
+        errdefer if (clerk_jwks_url) |v| alloc.free(v);
+        const clerk_issuer = std.process.getEnvVarOwned(alloc, "CLERK_ISSUER") catch null;
+        errdefer if (clerk_issuer) |v| alloc.free(v);
+        const clerk_audience = std.process.getEnvVarOwned(alloc, "CLERK_AUDIENCE") catch null;
+        errdefer if (clerk_audience) |v| alloc.free(v);
 
         return .{
             .port = port,
@@ -86,6 +113,7 @@ pub const ServeConfig = struct {
             .github_app_id = github_app_id,
             .github_app_private_key = github_app_private_key,
             .config_dir = config_dir,
+            .pipeline_profile_path = pipeline_profile_path,
             .max_attempts = max_attempts,
             .worker_concurrency = worker_concurrency,
             .run_timeout_ms = run_timeout_ms,
@@ -93,6 +121,10 @@ pub const ServeConfig = struct {
             .rate_limit_refill_per_sec = rate_limit_refill_per_sec,
             .ready_max_queue_depth = ready_max_queue_depth,
             .ready_max_queue_age_ms = ready_max_queue_age_ms,
+            .clerk_enabled = clerk_enabled,
+            .clerk_jwks_url = clerk_jwks_url,
+            .clerk_issuer = clerk_issuer,
+            .clerk_audience = clerk_audience,
             .encryption_master_key = encryption_master_key,
             .alloc = alloc,
         };
@@ -104,6 +136,10 @@ pub const ServeConfig = struct {
         self.alloc.free(self.github_app_id);
         self.alloc.free(self.github_app_private_key);
         self.alloc.free(self.config_dir);
+        self.alloc.free(self.pipeline_profile_path);
+        if (self.clerk_jwks_url) |v| self.alloc.free(v);
+        if (self.clerk_issuer) |v| self.alloc.free(v);
+        if (self.clerk_audience) |v| self.alloc.free(v);
         self.alloc.free(self.encryption_master_key);
     }
 
@@ -111,6 +147,7 @@ pub const ServeConfig = struct {
         switch (err) {
             ValidationError.MissingApiKey => std.debug.print("fatal: API_KEY not set\n", .{}),
             ValidationError.InvalidApiKeyList => std.debug.print("fatal: API_KEY has no usable keys\n", .{}),
+            ValidationError.MissingClerkJwksUrl => std.debug.print("fatal: CLERK_JWKS_URL not set while CLERK_SECRET_KEY is configured\n", .{}),
             ValidationError.MissingEncryptionMasterKey => std.debug.print("fatal: ENCRYPTION_MASTER_KEY not set\n", .{}),
             ValidationError.InvalidEncryptionMasterKey => std.debug.print("fatal: ENCRYPTION_MASTER_KEY must be 64 hex chars\n", .{}),
             ValidationError.MissingGitHubAppId => std.debug.print("fatal: GITHUB_APP_ID not set\n", .{}),

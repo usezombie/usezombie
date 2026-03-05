@@ -13,6 +13,7 @@ const builtin = @import("builtin");
 const db = @import("db/pool.zig");
 const runtime_config = @import("config/runtime.zig");
 const events_bus = @import("events/bus.zig");
+const clerk_auth = @import("auth/clerk.zig");
 const http_server = @import("http/server.zig");
 const http_handler = @import("http/handler.zig");
 const worker = @import("pipeline/worker.zig");
@@ -153,6 +154,7 @@ fn runCanonicalMigrations(pool: *db.Pool) !void {
         .{ .version = 1, .sql = schema.initial_sql },
         .{ .version = 2, .sql = schema.vault_sql },
         .{ .version = 3, .sql = schema.request_correlation_sql },
+        .{ .version = 4, .sql = schema.side_effect_ledger_sql },
     };
     try db.runMigrations(pool, &migrations);
 }
@@ -166,6 +168,7 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
         switch (err) {
             runtime_config.ValidationError.MissingApiKey,
             runtime_config.ValidationError.InvalidApiKeyList,
+            runtime_config.ValidationError.MissingClerkJwksUrl,
             runtime_config.ValidationError.MissingEncryptionMasterKey,
             runtime_config.ValidationError.InvalidEncryptionMasterKey,
             runtime_config.ValidationError.MissingGitHubAppId,
@@ -213,10 +216,19 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
         .pool = api_pool,
         .alloc = alloc,
         .api_keys = serve_cfg.api_keys,
+        .clerk = null,
         .worker_state = &wstate,
         .ready_max_queue_depth = serve_cfg.ready_max_queue_depth,
         .ready_max_queue_age_ms = serve_cfg.ready_max_queue_age_ms,
     };
+
+    var clerk = if (serve_cfg.clerk_enabled) clerk_auth.Verifier.init(alloc, .{
+        .jwks_url = serve_cfg.clerk_jwks_url orelse "",
+        .issuer = serve_cfg.clerk_issuer,
+        .audience = serve_cfg.clerk_audience,
+    }) else null;
+    defer if (clerk) |*v| v.deinit();
+    if (clerk) |*v| ctx.clerk = v;
 
     const wcfg = worker.WorkerConfig{
         .pool = worker_pool,
@@ -224,6 +236,7 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
         .cache_root = serve_cfg.cache_root,
         .github_app_id = serve_cfg.github_app_id,
         .github_app_private_key = serve_cfg.github_app_private_key,
+        .pipeline_profile_path = serve_cfg.pipeline_profile_path,
         .max_attempts = serve_cfg.max_attempts,
         .run_timeout_ms = serve_cfg.run_timeout_ms,
         .rate_limit_capacity = serve_cfg.rate_limit_capacity,
@@ -359,8 +372,9 @@ fn cmdDoctor(alloc: std.mem.Allocator) !void {
         defer alloc.free(config_dir);
 
         const required_files = [_][]const u8{
-            "echo-prompt.md", "scout-prompt.md", "warden-prompt.md",
-            "echo.json",      "scout.json",      "warden.json",
+            "echo-prompt.md",        "scout-prompt.md", "warden-prompt.md",
+            "echo.json",             "scout.json",      "warden.json",
+            "pipeline-default.json",
         };
         for (required_files) |fname| {
             const path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ config_dir, fname });
@@ -375,13 +389,49 @@ fn cmdDoctor(alloc: std.mem.Allocator) !void {
     }
 
     {
-        const key = std.process.getEnvVarOwned(alloc, "API_KEY") catch null;
-        if (key) |k| {
-            defer alloc.free(k);
-            try stdout.print("  [OK]   API_KEY set\n", .{});
+        const clerk_secret = std.process.getEnvVarOwned(alloc, "CLERK_SECRET_KEY") catch null;
+        if (clerk_secret) |secret| {
+            defer alloc.free(secret);
+            if (std.mem.trim(u8, secret, " \t\r\n").len > 0) {
+                try stdout.print("  [OK]   CLERK_SECRET_KEY set\n", .{});
+                const jwks_url = std.process.getEnvVarOwned(alloc, "CLERK_JWKS_URL") catch null;
+                if (jwks_url) |url| {
+                    defer alloc.free(url);
+                    if (url.len == 0) {
+                        try stdout.print("  [FAIL] CLERK_JWKS_URL is empty\n", .{});
+                        ok = false;
+                    } else {
+                        var verifier = clerk_auth.Verifier.init(alloc, .{
+                            .jwks_url = url,
+                        });
+                        defer verifier.deinit();
+                        var jwks_ok = true;
+                        verifier.checkJwksConnectivity() catch {
+                            try stdout.print("  [FAIL] CLERK JWKS fetch failed\n", .{});
+                            ok = false;
+                            jwks_ok = false;
+                        };
+                        if (jwks_ok) {
+                            try stdout.print("  [OK]   Clerk JWKS reachable\n", .{});
+                        }
+                    }
+                } else {
+                    try stdout.print("  [FAIL] CLERK_JWKS_URL not set\n", .{});
+                    ok = false;
+                }
+            } else {
+                try stdout.print("  [FAIL] CLERK_SECRET_KEY is empty\n", .{});
+                ok = false;
+            }
         } else {
-            try stdout.print("  [FAIL] API_KEY not set\n", .{});
-            ok = false;
+            const key = std.process.getEnvVarOwned(alloc, "API_KEY") catch null;
+            if (key) |k| {
+                defer alloc.free(k);
+                try stdout.print("  [OK]   API_KEY set (dev fallback)\n", .{});
+            } else {
+                try stdout.print("  [FAIL] API_KEY not set (required when Clerk is disabled)\n", .{});
+                ok = false;
+            }
         }
     }
 
