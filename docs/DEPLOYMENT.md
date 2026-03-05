@@ -201,7 +201,14 @@ Deploy in sequence.
    - `GITHUB_APP_PRIVATE_KEY`
    - `GITHUB_CLIENT_ID`
    - `GITHUB_CLIENT_SECRET`
-3. Verify `/healthz` and `/readyz` endpoints.
+3. Configure migration startup policy explicitly:
+   - `MIGRATE_ON_START=0` (default/fail-closed): `serve` refuses startup if migrations are pending.
+   - `MIGRATE_ON_START=1`: `serve` acquires DB migration advisory lock and applies pending migrations before serving traffic.
+4. Fail-closed safety behavior (deterministic restart contract):
+   - If `schema_migration_failures` has records, `serve` exits immediately until operator runs `zombied migrate` successfully.
+   - If migration lock is busy, `serve` exits immediately (`migration in progress`) and should be restarted after lock holder completes.
+   - If DB schema version is newer than binary's canonical migrations, `serve` exits (binary/schema mismatch).
+5. Verify `/healthz` and `/readyz` endpoints.
 
 ### Step 5: Worker (`zombied worker`)
 
