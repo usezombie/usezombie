@@ -60,6 +60,18 @@ pub const Bus = struct {
         self.cond.broadcast();
     }
 
+    pub fn pendingCount(self: *Bus) usize {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.len;
+    }
+
+    pub fn droppedCount(self: *Bus) u64 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.dropped;
+    }
+
     pub fn publish(self: *Bus, event: BusEvent) void {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -117,11 +129,12 @@ pub const Bus = struct {
 var global_bus = std.atomic.Value(?*Bus).init(null);
 
 pub fn install(bus: *Bus) void {
-    global_bus.store(bus, .release);
+    const previous = global_bus.swap(bus, .acq_rel);
+    std.debug.assert(previous == null);
 }
 
 pub fn uninstall() void {
-    global_bus.store(null, .release);
+    _ = global_bus.swap(null, .acq_rel);
 }
 
 pub fn emit(kind: []const u8, run_id: ?[]const u8, detail: []const u8) void {
@@ -150,4 +163,41 @@ test "event slices are truncated to bounded limits" {
     try std.testing.expect(event.kindSlice().len <= KIND_MAX);
     try std.testing.expect(event.runIdSlice().len <= RUN_ID_MAX);
     try std.testing.expect(event.detailSlice().len <= DETAIL_MAX);
+}
+
+test "integration: event bus run thread exits when stopped while idle" {
+    var bus = Bus.init();
+    const thread = try std.Thread.spawn(.{}, runThread, .{&bus});
+    std.Thread.sleep(5 * std.time.ns_per_ms);
+    bus.stop();
+    thread.join();
+
+    try std.testing.expectEqual(@as(usize, 0), bus.pendingCount());
+}
+
+test "integration: event bus drains queued events before shutdown completes" {
+    var bus = Bus.init();
+    const thread = try std.Thread.spawn(.{}, runThread, .{&bus});
+
+    bus.publish(BusEvent.init("k1", "run-1", "d1"));
+    bus.publish(BusEvent.init("k2", "run-2", "d2"));
+    std.Thread.sleep(5 * std.time.ns_per_ms);
+    bus.stop();
+    thread.join();
+
+    try std.testing.expectEqual(@as(usize, 0), bus.pendingCount());
+    try std.testing.expectEqual(@as(u64, 0), bus.droppedCount());
+}
+
+test "integration: emit is ignored after uninstall" {
+    var bus = Bus.init();
+    install(&bus);
+    defer uninstall();
+
+    emit("before_uninstall", "run-1", "detail");
+    try std.testing.expectEqual(@as(usize, 1), bus.pendingCount());
+
+    uninstall();
+    emit("after_uninstall", "run-2", "detail");
+    try std.testing.expectEqual(@as(usize, 1), bus.pendingCount());
 }
