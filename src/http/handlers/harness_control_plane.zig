@@ -1,5 +1,6 @@
 const std = @import("std");
 const pg = @import("pg");
+const db = @import("../../db/pool.zig");
 const topology = @import("../../pipeline/topology.zig");
 const harness = @import("../../harness/control_plane.zig");
 
@@ -304,4 +305,96 @@ fn normalizeProfileId(
         return out.toOwnedSlice(alloc);
     }
     return std.fmt.allocPrint(alloc, "{s}-harness", .{workspace_id});
+}
+
+fn openHarnessHandlerTestConn(alloc: std.mem.Allocator) !?struct { pool: *db.Pool, conn: *pg.Conn } {
+    const url = std.process.getEnvVarOwned(alloc, "HANDLER_DB_TEST_URL") catch
+        std.process.getEnvVarOwned(alloc, "DATABASE_URL") catch return null;
+    defer alloc.free(url);
+
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const opts = try db.parseUrl(arena.allocator(), url);
+    const pool = try pg.Pool.init(alloc, opts);
+    errdefer pool.deinit();
+    const conn = try pool.acquire();
+    return .{ .pool = pool, .conn = conn };
+}
+
+test "integration: activateProfile rejects invalid profile versions" {
+    const db_ctx = (try openHarnessHandlerTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.release(db_ctx.conn);
+    defer db_ctx.pool.deinit();
+
+    {
+        var q = try db_ctx.conn.query(
+            \\CREATE TEMP TABLE agent_profiles (
+            \\  profile_id TEXT PRIMARY KEY,
+            \\  workspace_id TEXT NOT NULL,
+            \\  status TEXT NOT NULL DEFAULT 'DRAFT',
+            \\  updated_at BIGINT NOT NULL DEFAULT 0
+            \\) ON COMMIT DROP
+        , .{});
+        q.deinit();
+    }
+    {
+        var q = try db_ctx.conn.query(
+            \\CREATE TEMP TABLE agent_profile_versions (
+            \\  profile_version_id TEXT PRIMARY KEY,
+            \\  profile_id TEXT NOT NULL,
+            \\  is_valid BOOLEAN NOT NULL
+            \\) ON COMMIT DROP
+        , .{});
+        q.deinit();
+    }
+
+    {
+        var q = try db_ctx.conn.query(
+            "INSERT INTO agent_profiles (profile_id, workspace_id, status, updated_at) VALUES ('prof_1', 'ws_1', 'DRAFT', 0)",
+            .{},
+        );
+        q.deinit();
+    }
+    {
+        var q = try db_ctx.conn.query(
+            "INSERT INTO agent_profile_versions (profile_version_id, profile_id, is_valid) VALUES ('pver_1', 'prof_1', false)",
+            .{},
+        );
+        q.deinit();
+    }
+
+    try std.testing.expectError(ControlPlaneError.ProfileInvalid, activateProfile(db_ctx.conn, "ws_1", .{
+        .profile_version_id = "pver_1",
+        .activated_by = "test",
+    }));
+}
+
+test "integration: getActiveProfile falls back to default-v1 when no active profile exists" {
+    const db_ctx = (try openHarnessHandlerTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.release(db_ctx.conn);
+    defer db_ctx.pool.deinit();
+
+    {
+        var q = try db_ctx.conn.query(
+            \\CREATE TEMP TABLE workspace_active_profile (
+            \\  workspace_id TEXT PRIMARY KEY,
+            \\  profile_version_id TEXT NOT NULL
+            \\) ON COMMIT DROP
+        , .{});
+        q.deinit();
+    }
+    {
+        var q = try db_ctx.conn.query(
+            \\CREATE TEMP TABLE agent_profile_versions (
+            \\  profile_version_id TEXT PRIMARY KEY,
+            \\  compiled_profile_json TEXT
+            \\) ON COMMIT DROP
+        , .{});
+        q.deinit();
+    }
+
+    const out = try getActiveProfile(db_ctx.conn, std.testing.allocator, "ws_missing");
+    defer std.testing.allocator.free(out.profile_json);
+    try std.testing.expectEqualStrings("default-v1", out.source);
+    try std.testing.expect(out.profile_version_id == null);
 }
