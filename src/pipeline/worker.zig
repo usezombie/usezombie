@@ -96,6 +96,8 @@ const ProcessOutcome = enum {
     worked,
 };
 
+const WorkerAllocator = std.heap.GeneralPurposeAllocator(.{});
+
 const TenantRateLimiter = struct {
     alloc: std.mem.Allocator,
     buckets: std.StringHashMap(rate_limit.TokenBucket),
@@ -173,20 +175,14 @@ const TenantRateLimiter = struct {
 
 pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
     metrics.setWorkerInFlightRuns(worker_state.currentInFlightRuns());
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = WorkerAllocator{};
     defer {
         worker_state.running.store(false, .release);
         const inflight = worker_state.currentInFlightRuns();
         if (inflight != 0) {
             log.warn("worker exiting with in_flight_runs={d}", .{inflight});
         }
-        switch (gpa.deinit()) {
-            .ok => {},
-            .leak => {
-                metrics.incWorkerAllocatorLeaks();
-                log.warn("worker allocator leak detected", .{});
-            },
-        }
+        _ = finalizeWorkerAllocator(&gpa);
     }
     const alloc = gpa.allocator();
 
@@ -239,6 +235,17 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
     }
 
     log.info("worker stopped", .{});
+}
+
+fn finalizeWorkerAllocator(gpa: *WorkerAllocator) bool {
+    return switch (gpa.deinit()) {
+        .ok => false,
+        .leak => blk: {
+            metrics.incWorkerAllocatorLeaks();
+            log.warn("worker allocator leak detected", .{});
+            break :blk true;
+        },
+    };
 }
 
 fn beginTx(conn: *pg.Conn) !void {
@@ -1259,4 +1266,54 @@ test "worker state in-flight run counter tracks begin/end safely" {
     try std.testing.expectEqual(@as(u32, 1), ws.currentInFlightRuns());
     ws.endRun();
     try std.testing.expectEqual(@as(u32, 0), ws.currentInFlightRuns());
+}
+
+const CounterRaceCtx = struct {
+    ws: *WorkerState,
+    iterations: u32,
+};
+
+fn runBalancedCounterLoop(ctx: CounterRaceCtx) void {
+    var i: u32 = 0;
+    while (i < ctx.iterations) : (i += 1) {
+        ctx.ws.beginRun();
+        ctx.ws.endRun();
+    }
+}
+
+test "integration: worker state in-flight run counter is balanced across threads" {
+    var ws = WorkerState.init();
+    const thread_count: usize = 6;
+    const iterations: u32 = 500;
+
+    const threads = try std.testing.allocator.alloc(std.Thread, thread_count);
+    defer std.testing.allocator.free(threads);
+
+    for (threads) |*thread| {
+        thread.* = try std.Thread.spawn(.{}, runBalancedCounterLoop, .{CounterRaceCtx{
+            .ws = &ws,
+            .iterations = iterations,
+        }});
+    }
+    for (threads) |*thread| thread.join();
+
+    try std.testing.expectEqual(@as(u32, 0), ws.currentInFlightRuns());
+}
+
+test "integration: finalizeWorkerAllocator returns false for clean allocator" {
+    var gpa = WorkerAllocator{};
+    const alloc = gpa.allocator();
+    const buf = try alloc.alloc(u8, 32);
+    alloc.free(buf);
+
+    try std.testing.expect(!finalizeWorkerAllocator(&gpa));
+}
+
+test "integration: finalizeWorkerAllocator returns true when leaks are present" {
+    var gpa = WorkerAllocator{};
+    const alloc = gpa.allocator();
+    const leaked = try alloc.alloc(u8, 32);
+    _ = leaked;
+
+    try std.testing.expect(finalizeWorkerAllocator(&gpa));
 }
