@@ -1,7 +1,7 @@
 # M3_004: Redis Streams — Worker Queue + Coordination
 
 Date: Mar 4, 2026
-Status: PENDING
+Status: IN_PROGRESS
 Priority: P0 — v1 requirement
 Depends on: M3_001 (bug fixes must land first for CAS transitions)
 
@@ -148,6 +148,19 @@ For Upstash (dev/prod): `rediss://default:<password>@<host>:6379` (note `rediss:
 - Redis pub/sub for real-time status updates (future: SSE/WebSocket to CLI).
 - Redis as session store for Clerk tokens.
 - Redis Cluster or Sentinel HA.
+
+## Progress Snapshot
+
+1. Native Redis RESP client introduced at `src/queue/redis.zig` with:
+   - `XGROUP CREATE` (consumer-group bootstrap)
+   - `XADD` enqueue
+   - `XREADGROUP` dequeue
+   - `XACK` ack
+   - `XAUTOCLAIM` stale reclaim path
+2. API enqueue wired in `handleStartRun` and manual retry enqueue path.
+3. Worker loop now consumes queue messages first and acknowledges on successful claim execution.
+4. `zombied doctor` now validates Redis API/worker connectivity (`PING`).
+5. Local `docker-compose.yml` now includes `redis:7-alpine`.
 
 ---
 

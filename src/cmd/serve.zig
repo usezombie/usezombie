@@ -6,6 +6,7 @@ const events_bus = @import("../events/bus.zig");
 const clerk_auth = @import("../auth/clerk.zig");
 const http_server = @import("../http/server.zig");
 const http_handler = @import("../http/handler.zig");
+const queue_redis = @import("../queue/redis.zig");
 const worker = @import("../pipeline/worker.zig");
 const git_ops = @import("../git/ops.zig");
 const metrics = @import("../observability/metrics.zig");
@@ -81,6 +82,16 @@ pub fn run(alloc: std.mem.Allocator) !void {
     };
     defer worker_pool.deinit();
 
+    var api_queue = queue_redis.Client.connectFromEnv(alloc, .api) catch |err| {
+        std.debug.print("fatal: redis queue init failed for api role: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer api_queue.deinit();
+    api_queue.ensureConsumerGroup() catch |err| {
+        std.debug.print("fatal: redis queue group init failed: {}\n", .{err});
+        std.process.exit(1);
+    };
+
     const migrate_on_start = common.migrateOnStartEnabledFromEnv(alloc) catch |err| {
         std.debug.print(
             "fatal: invalid MIGRATE_ON_START value: {} (use 0/1/false/true)\n",
@@ -128,6 +139,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
 
     var ctx = http_handler.Context{
         .pool = api_pool,
+        .queue = &api_queue,
         .alloc = alloc,
         .api_keys = serve_cfg.api_keys,
         .clerk = null,
