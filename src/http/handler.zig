@@ -26,12 +26,12 @@ fn writeJson(r: zap.Request, status: zap.http.StatusCode, value: anytype) void {
     var fba = std.heap.FixedBufferAllocator.init(&buf);
     const json = std.json.Stringify.valueAlloc(fba.allocator(), value, .{}) catch {
         r.setStatus(.internal_server_error);
-        r.sendBody("{}") catch {};
+        r.sendBody("{}") catch |err| log.warn("writeJson fallback send failed: {}", .{err});
         return;
     };
     r.setStatus(status);
-    r.setContentType(.JSON) catch {};
-    r.sendBody(json) catch {};
+    r.setContentType(.JSON) catch |err| log.warn("setContentType failed: {}", .{err});
+    r.sendBody(json) catch |err| log.warn("sendBody failed: {}", .{err});
 }
 
 fn errorResponse(
@@ -298,7 +298,7 @@ pub fn handleGetRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
     const created_at = row.get(i64, 9) catch 0;
     const updated_at = row.get(i64, 10) catch 0;
 
-    run_result.drain() catch {};
+    run_result.drain() catch |err| log.warn("run query drain failed run_id={s}: {}", .{ run_id, err });
 
     // Fetch transitions
     var trans_result = conn.query(
@@ -327,7 +327,7 @@ pub fn handleGetRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
         obj.put("ts", .{ .integer = ts }) catch continue;
         transitions.append(alloc, .{ .object = obj }) catch continue;
     }
-    trans_result.drain() catch {};
+    trans_result.drain() catch |err| log.warn("transitions query drain failed run_id={s}: {}", .{ run_id, err });
 
     // Fetch artifacts (M1_002 Gap 3 + M1_003 Gap 5)
     var artifacts_arr: std.ArrayList(std.json.Value) = .empty;

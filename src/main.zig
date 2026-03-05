@@ -378,7 +378,9 @@ fn cmdRun(alloc: std.mem.Allocator) !void {
     };
     defer pool.deinit();
 
-    runCanonicalMigrations(pool) catch {};
+    runCanonicalMigrations(pool) catch |err| {
+        log.warn("one-shot migration run skipped due to error: {}", .{err});
+    };
 
     log.info("spec loaded ({d} bytes) — pipeline runs via `zombied serve`", .{spec_content.len});
     log.info("one-shot mode: POST /v1/runs to trigger pipeline", .{});
