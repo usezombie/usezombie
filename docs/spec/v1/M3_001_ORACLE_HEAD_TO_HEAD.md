@@ -478,7 +478,7 @@ Decision matrix for worker:
 
 | Priority | Work item | Effort | Dimension(s) |
 |----------|-----------|--------|---------------|
-| **P0** | `reliable_call.zig` + `error_classify.zig` + `expBackoffJitter` | L (1–2d) | 5, 7, 10 |
+| **P0 (remaining)** | Expand `reliable_call.zig` + `error_classify.zig` + `expBackoffJitter` coverage (`Retry-After` plumbing, agent-call wrapping, richer parsing) | M (4–6h) | 5, 7, 10 |
 | **P1** | Structured logging + runtime `LOG_LEVEL` + real Observer | M (2–4h) | 8, 9 |
 | **P2** | Multi-worker concurrency (`WORKER_CONCURRENCY`) | M (2–4h) | 3 |
 | **P3** | Token bucket rate limiter | M (2–4h) | 6 |
@@ -763,7 +763,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 | **P0** | Transactional correctness (BEGIN/COMMIT, CAS transitions, idempotency index) | M (4–6h) | 13 |
 | **P0** | Side-effect idempotency (PR dedupe, side-effect ledger) | M (3–4h) | 14 |
 | **P0** | Secure execution boundary (path canonicalization, hook disable, env scrub) | M (3–4h) | 11 |
-| **P0** | `reliable_call.zig` + `error_classify.zig` + `expBackoffJitter` | L (1–2d) | 5, 7, 10 |
+| **P0 (remaining)** | Expand `reliable_call.zig` + `error_classify.zig` + `expBackoffJitter` coverage (`Retry-After` plumbing, agent-call wrapping, richer parsing) | M (4–6h) | 5, 7, 10 |
 | **P1** | Timeouts for subprocess + curl + agent calls | M (3–4h) | 15 |
 | **P1** | Graceful shutdown (signal handler, thread join, worktree cleanup) | M (2–3h) | 12 |
 | **P1** | Thread safety (force single-thread or thread-safe GPA) | S (1h) | 16 |
