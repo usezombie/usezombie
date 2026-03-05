@@ -11,6 +11,7 @@ const builtin = @import("builtin");
 
 const db = @import("db/pool.zig");
 const runtime_config = @import("config/runtime.zig");
+const events_bus = @import("events/bus.zig");
 const http_server = @import("http/server.zig");
 const http_handler = @import("http/handler.zig");
 const worker = @import("pipeline/worker.zig");
@@ -223,12 +224,22 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
     shutdown_requested.store(false, .release);
     installSignalHandlers();
 
+    var event_bus = events_bus.Bus.init();
+    events_bus.install(&event_bus);
+    defer events_bus.uninstall();
+
     const worker_count: usize = @max(@as(usize, @intCast(serve_cfg.worker_concurrency)), 1);
     var worker_threads = try alloc.alloc(std.Thread, worker_count);
     defer alloc.free(worker_threads);
     var spawned_workers: usize = 0;
+    var signal_thread: ?std.Thread = null;
+    var event_thread: ?std.Thread = null;
     errdefer {
         wstate.running.store(false, .release);
+        shutdown_requested.store(true, .release);
+        event_bus.stop();
+        if (signal_thread) |*t| t.join();
+        if (event_thread) |*t| t.join();
         while (spawned_workers > 0) {
             spawned_workers -= 1;
             worker_threads[spawned_workers].join();
@@ -238,7 +249,8 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
         t.* = try std.Thread.spawn(.{}, worker.workerLoop, .{ wcfg, &wstate });
         spawned_workers += 1;
     }
-    const signal_thread = try std.Thread.spawn(.{}, signalWatcher, .{&wstate});
+    signal_thread = try std.Thread.spawn(.{}, signalWatcher, .{&wstate});
+    event_thread = try std.Thread.spawn(.{}, events_bus.runThread, .{&event_bus});
 
     log.info("HTTP server starting port={d} worker_concurrency={d}", .{ serve_cfg.port, worker_count });
     http_server.serve(&ctx, .{ .port = serve_cfg.port }) catch |err| {
@@ -248,8 +260,10 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
     // Server exited. Ensure worker and watcher terminate and join both.
     wstate.running.store(false, .release);
     shutdown_requested.store(true, .release);
+    event_bus.stop();
     for (worker_threads) |*t| t.join();
-    signal_thread.join();
+    if (signal_thread) |*t| t.join();
+    if (event_thread) |*t| t.join();
 }
 
 // ── doctor ────────────────────────────────────────────────────────────────
