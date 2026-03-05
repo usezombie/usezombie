@@ -5,6 +5,7 @@
 const std = @import("std");
 const nullclaw = @import("nullclaw");
 const types = @import("../types.zig");
+const events = @import("../events/bus.zig");
 const log = std.log.scoped(.agents);
 
 const Config = nullclaw.config.Config;
@@ -37,6 +38,13 @@ pub fn emitNullclawRunEvent(
         "nullclaw_run event_type=nullclaw_run run_id={s} attempt={d} actor={s} exit_ok={} tokens={d} wall_seconds={d} peak_memory_kb=N/A",
         .{ run_id, attempt, actor.label(), result.exit_ok, result.token_count, result.wall_seconds },
     );
+    var detail_buf: [192]u8 = undefined;
+    const detail = std.fmt.bufPrint(
+        &detail_buf,
+        "attempt={d} actor={s} exit_ok={} tokens={d} wall_seconds={d}",
+        .{ attempt, actor.label(), result.exit_ok, result.token_count, result.wall_seconds },
+    ) catch "nullclaw_run";
+    events.emit("nullclaw_run", run_id, detail);
 }
 
 // ── Per-agent system prompts (loaded from config/ directory) ───────────────

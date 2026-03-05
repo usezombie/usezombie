@@ -6,6 +6,7 @@
 const std = @import("std");
 const pg = @import("pg");
 const types = @import("../types.zig");
+const events = @import("../events/bus.zig");
 const log = std.log.scoped(.policy);
 
 /// Record a policy_decision event in the policy_events table.
@@ -45,4 +46,11 @@ pub fn recordPolicyEvent(
         rule_id,
         actor,
     });
+    var detail_buf: [192]u8 = undefined;
+    const detail = std.fmt.bufPrint(
+        &detail_buf,
+        "workspace={s} class={s} decision={s} rule={s} actor={s}",
+        .{ workspace_id, @tagName(action_class), @tagName(decision), rule_id, actor },
+    ) catch "policy_event";
+    events.emit("policy_event", run_id, detail);
 }

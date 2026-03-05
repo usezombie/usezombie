@@ -5,6 +5,7 @@
 const std = @import("std");
 const pg = @import("pg");
 const types = @import("../types.zig");
+const events = @import("../events/bus.zig");
 const log = std.log.scoped(.state);
 
 pub const TransitionError = error{
@@ -131,6 +132,13 @@ pub fn transition(
         to.label(),
         actor.label(),
     });
+    var detail_buf: [160]u8 = undefined;
+    const detail = std.fmt.bufPrint(
+        &detail_buf,
+        "from={s} to={s} actor={s} reason={s}",
+        .{ current.state.label(), to.label(), actor.label(), reason_code.label() },
+    ) catch "state_transition";
+    events.emit("state_transition", run_id, detail);
 
     return attempt;
 }

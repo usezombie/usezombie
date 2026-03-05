@@ -25,7 +25,7 @@
 | 1 | Memory leaks | **Medium** | ✅ Command/process lifecycle now uses explicit resource bundling and shared tool-builder ownership patterns | ResourceBundle pattern, errdefer at boundaries |
 | 2 | Allocation best practices | **Medium** | Single GPA for worker; many manual frees | Per-run ArenaAllocator; bounded buffers |
 | 3 | Async / API performance | **High** | Configurable multi-worker threads via `WORKER_CONCURRENCY`; deeper async/provider concurrency still missing | Multi-worker + concurrent dispatch |
-| 4 | Event bus / actor dispatch | **Medium** | Ad-hoc log lines only | Ring-buffer MPSC bus (`bus.zig`) |
+| 4 | Event bus / actor dispatch | **Medium** | Minimal bounded in-process event bus is wired with background sink; no persistence/replay yet | Ring-buffer MPSC bus (`bus.zig`) |
 | 5 | Reliability & retry | **Critical** | `reliable_call` wrappers now cover Scout/Warden + token/push/PR (with PR detail plumbing); no outbox/circuit-breaker yet | `reliable.zig` + outbox + dead-letter |
 | 6 | Rate limiting | **High** | Tenant token-bucket limiter added in worker; provider-level policy still missing | Token bucket per tenant/provider |
 | 7 | Backoff | **Critical** | Jittered exponential backoff added in worker loop and retry path; PR HTTP `Retry-After` is now consumed, other paths still incomplete | Exponential + jitter + Retry-After parsing |
@@ -40,7 +40,7 @@
 | 1 | ✅ Fixed | `src/git/ops.zig` now uses a `CommandResources` lifecycle wrapper (`spawn`/timeout/read/deinit), and agent restricted tool builders are consolidated in `src/pipeline/agents.zig` |
 | 2 | ⚠️ Partial | Per-run arena added in worker, but allocator/thread model not fully normalized |
 | 3 | ⚠️ Partial | Worker concurrency is now configurable with multiple threads; provider/tool dispatch is still blocking/sequential per run |
-| 4 | ❌ Open | No event bus implementation yet |
+| 4 | ⚠️ Partial | `src/events/bus.zig` provides bounded queue + background sink; state/policy/agent events are now emitted through the bus, but no persistent replay/outbox exists |
 | 5 | ⚠️ Partial | `reliable_call` now wraps Scout/Warden and GitHub token/push/PR paths (with PR response detail plumbing); outbox/dead-letter and circuit breaker are still missing |
 | 6 | ⚠️ Partial | Tenant token-bucket throttling now gates Echo/Scout/Warden calls; provider-level quotas and distributed state are still missing |
 | 7 | ⚠️ Partial | Worker loop and run retry now use exponential+jitter backoff; PR HTTP `Retry-After` is plumbed, but provider/API responses are not yet end-to-end |
@@ -55,7 +55,7 @@
 | 16 | ⚠️ Partial | Main allocator is now thread-safe and worker concurrency is configurable; global leak-reporting/thread-safety guardrails still need tightening |
 | 17 | ⚠️ Partial | Versioned migrations + tx done; SQL splitting remains heuristic |
 | 18 | ⚠️ Partial | `/healthz` + `/readyz` improved, and `/readyz` now exposes queue depth + oldest age; richer readiness policy is still missing |
-| 19 | ⚠️ Partial | `/metrics` endpoint + core counters are available; observer wiring and correlation propagation are still missing |
+| 19 | ⚠️ Partial | `/metrics` endpoint + core counters are available, and observer wiring is enabled; correlation propagation/histograms are still missing |
 | 20 | ⚠️ Partial | Serve-time config is now centralized in `src/config/runtime.zig`, fail-fast on critical env is active, and API key rotation is supported; secret versioning/rotation model is still missing |
 | 21 | ⚠️ Partial | Unit/integration/e2e targets added; coverage measurement and deeper module tests still missing |
 | 22 | ✅ Fixed | Comment policy section exists and is aligned with current style |
@@ -147,40 +147,27 @@ for (threads, 0..) |*t, _| {
 ---
 
 ## 4. Event bus / actor-based dispatch
-**Status (Mar 05, 2026): ❌ Open**
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### What nullclaw does well
 - First-class `Bus` with bounded ring-buffer MPSC queues (`bus.zig`)
 - Inbound + outbound channels decoupled from business logic
 - Attach observers without modifying pipeline code
 
-### usezombie gaps
+### usezombie fixes applied
 
-| File | Line | Issue |
-|------|------|-------|
-| `src/pipeline/agents.zig` | 30–40 | `emitNullclawRunEvent` is a single `log.info` call |
-| `src/state/machine.zig` | 112–117 | Transition events are direct log lines |
-| `src/state/policy.zig` | 41–47 | Policy events are direct log lines |
+| File | Scope | Fix |
+|------|-------|-----|
+| `src/events/bus.zig` | New event bus module | Added bounded in-process queue (`CAPACITY=1024`) with producer `emit`, drop-on-overflow accounting, and background sink thread |
+| `src/main.zig` | Runtime wiring | Bus is installed for `serve`, sink thread lifecycle is managed with shutdown/join semantics |
+| `src/state/machine.zig` | Transition emission | State transitions now emit `state_transition` events to the bus |
+| `src/state/policy.zig` | Policy emission | Policy decisions now emit `policy_event` events to the bus |
+| `src/pipeline/agents.zig` | Agent emission | `emitNullclawRunEvent` now also emits `nullclaw_run` events to the bus |
 
-### Recommendation: minimal MPSC event channel
-
-```zig
-// src/events/bus.zig
-pub const Bus = struct {
-    chan: BoundedQueue(Event, 1024),
-
-    pub fn emit(self: *Bus, e: Event) void {
-        _ = self.chan.publish(e) catch {}; // drop on overload
-    }
-
-    pub fn run(self: *Bus) void {
-        while (self.chan.consume()) |e| {
-            // serialize + write structured log
-            // optionally: persist to events table
-        }
-    }
-};
-```
+### Remaining gaps
+- Bus is in-process only; no durable persistence/replay or dead-letter handling.
+- No cross-host/distributed event fan-out yet.
+- Event schema is minimal (string payload), not yet versioned.
 
 ---
 

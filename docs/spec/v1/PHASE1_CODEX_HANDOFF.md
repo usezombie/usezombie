@@ -150,6 +150,14 @@ Create `ArenaAllocator` at start of `executeRun()`, `defer arena.deinit()`. Pass
 - `src/pipeline/agents.zig`: NullClaw observer is now env-selectable via `NULLCLAW_OBSERVER=log|noop|verbose` (default `log`) instead of hardcoded `NoopObserver`.
 - Remaining: correlation ID propagation across all layers and durable sink policy (`MultiObserver`/collector).
 
+### ⚠️ PARTIAL: 1.14 Minimal event bus runtime (Dimension 4)
+
+**File:** `src/events/bus.zig` + `src/main.zig` + `src/state/machine.zig` + `src/state/policy.zig` + `src/pipeline/agents.zig`
+
+- Added bounded in-process event bus (`CAPACITY=1024`) with background sink thread and drop accounting.
+- Wired event emission from state transitions (`state_transition`), policy decisions (`policy_event`), and agent run completions (`nullclaw_run`).
+- Remaining: durable outbox/replay model and distributed event fan-out.
+
 ---
 
 ## ✅ DONE: Step 1 (parallel) — M3_000 Secrets + Schema Separation
