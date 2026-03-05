@@ -142,7 +142,7 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
     log.info("worker started poll_interval_ms={d}", .{cfg.poll_interval_ms});
 
     const prompts = agents.loadPrompts(alloc, cfg.config_dir) catch |err| {
-        log.err("failed to load agent prompts: {}", .{err});
+        obs_log.logErr(.worker, err, "failed to load agent prompts config_dir={s}", .{cfg.config_dir});
         return;
     };
     defer {
@@ -152,7 +152,7 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
     }
 
     var profile = topology.loadProfile(alloc, cfg.pipeline_profile_path) catch |err| {
-        log.err("failed to load pipeline profile path={s} err={}", .{ cfg.pipeline_profile_path, err });
+        obs_log.logErr(.worker, err, "failed to load pipeline profile path={s}", .{cfg.pipeline_profile_path});
         return;
     };
     defer profile.deinit();
@@ -167,7 +167,7 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
     while (worker_state.running.load(.acquire)) {
         const outcome = processNextRun(alloc, cfg, worker_state, &prompts, &profile, &token_cache, &tenant_limiter) catch |err| {
             if (err != WorkerError.ShutdownRequested) {
-                log.err("run processing error: {}", .{err});
+                obs_log.logErr(.worker, err, "run processing error", .{});
                 metrics.incWorkerErrors();
                 consecutive_errors += 1;
 
@@ -875,7 +875,7 @@ fn executeRun(
                     total_wall_seconds,
                 },
             ) catch |err| {
-                log.warn("run_summary.md alloc failed (non-fatal): {}", .{err});
+                obs_log.logWarnErr(.worker, err, "run_summary.md alloc failed (non-fatal) run_id={s}", .{ctx.run_id});
                 log.info("run completed run_id={s} pr_url={s}", .{ ctx.run_id, pr_final });
                 var done_detail: [160]u8 = undefined;
                 const done_detail_slice = std.fmt.bufPrint(
@@ -892,7 +892,7 @@ fn executeRun(
             const summary_path = try std.fmt.allocPrint(run_alloc, "docs/runs/{s}/run_summary.md", .{ctx.run_id});
 
             commitArtifact(run_alloc, conn, ctx, &wt, summary_path, summary_content, "orchestrator: add run_summary.md", .orchestrator, attempt) catch |err| {
-                log.warn("run_summary.md commit failed (non-fatal): {}", .{err});
+                obs_log.logWarnErr(.worker, err, "run_summary.md commit failed (non-fatal) run_id={s}", .{ctx.run_id});
             };
 
             log.info("run completed run_id={s} pr_url={s}", .{ ctx.run_id, pr_final });

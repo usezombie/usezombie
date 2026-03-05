@@ -7,6 +7,7 @@ pub fn runCanonicalMigrations(pool: *db.Pool) !void {
         .{ .version = 2, .sql = schema.vault_sql },
         .{ .version = 3, .sql = schema.request_correlation_sql },
         .{ .version = 4, .sql = schema.side_effect_ledger_sql },
+        .{ .version = 5, .sql = schema.side_effect_outbox_sql },
     };
     try db.runMigrations(pool, &migrations);
 }

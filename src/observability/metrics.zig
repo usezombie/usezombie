@@ -40,6 +40,9 @@ const Snapshot = struct {
     agent_tokens_total: u64,
     backoff_wait_ms_total: u64,
     rate_limit_wait_ms_total: u64,
+    side_effect_outbox_enqueued_total: u64,
+    side_effect_outbox_delivered_total: u64,
+    side_effect_outbox_dead_letter_total: u64,
     agent_duration_seconds: HistogramSnapshot,
     run_total_wall_seconds: HistogramSnapshot,
 };
@@ -72,6 +75,9 @@ var g_agent_warden_calls_total = std.atomic.Value(u64).init(0);
 var g_agent_tokens_total = std.atomic.Value(u64).init(0);
 var g_backoff_wait_ms_total = std.atomic.Value(u64).init(0);
 var g_rate_limit_wait_ms_total = std.atomic.Value(u64).init(0);
+var g_side_effect_outbox_enqueued_total = std.atomic.Value(u64).init(0);
+var g_side_effect_outbox_delivered_total = std.atomic.Value(u64).init(0);
+var g_side_effect_outbox_dead_letter_total = std.atomic.Value(u64).init(0);
 var g_histograms_mu: std.Thread.Mutex = .{};
 var g_agent_duration_seconds = HistogramSnapshot{};
 var g_run_total_wall_seconds = HistogramSnapshot{};
@@ -173,6 +179,18 @@ pub fn addRateLimitWaitMs(ms: u64) void {
     _ = g_rate_limit_wait_ms_total.fetchAdd(ms, .monotonic);
 }
 
+pub fn incOutboxEnqueued() void {
+    _ = g_side_effect_outbox_enqueued_total.fetchAdd(1, .monotonic);
+}
+
+pub fn incOutboxDelivered() void {
+    _ = g_side_effect_outbox_delivered_total.fetchAdd(1, .monotonic);
+}
+
+pub fn incOutboxDeadLetter() void {
+    _ = g_side_effect_outbox_dead_letter_total.fetchAdd(1, .monotonic);
+}
+
 pub fn observeAgentDurationSeconds(seconds: u64) void {
     g_histograms_mu.lock();
     defer g_histograms_mu.unlock();
@@ -223,6 +241,9 @@ fn snapshot() Snapshot {
         .agent_tokens_total = g_agent_tokens_total.load(.acquire),
         .backoff_wait_ms_total = g_backoff_wait_ms_total.load(.acquire),
         .rate_limit_wait_ms_total = g_rate_limit_wait_ms_total.load(.acquire),
+        .side_effect_outbox_enqueued_total = g_side_effect_outbox_enqueued_total.load(.acquire),
+        .side_effect_outbox_delivered_total = g_side_effect_outbox_delivered_total.load(.acquire),
+        .side_effect_outbox_dead_letter_total = g_side_effect_outbox_dead_letter_total.load(.acquire),
         .agent_duration_seconds = .{},
         .run_total_wall_seconds = .{},
     };
@@ -353,6 +374,15 @@ pub fn renderPrometheus(
         \\# HELP zombie_rate_limit_wait_ms_total Total wait time due to rate limiting in milliseconds.
         \\# TYPE zombie_rate_limit_wait_ms_total counter
         \\zombie_rate_limit_wait_ms_total {d}
+        \\# HELP zombie_side_effect_outbox_enqueued_total Total side-effect outbox entries enqueued.
+        \\# TYPE zombie_side_effect_outbox_enqueued_total counter
+        \\zombie_side_effect_outbox_enqueued_total {d}
+        \\# HELP zombie_side_effect_outbox_delivered_total Total side-effect outbox entries marked delivered.
+        \\# TYPE zombie_side_effect_outbox_delivered_total counter
+        \\zombie_side_effect_outbox_delivered_total {d}
+        \\# HELP zombie_side_effect_outbox_dead_letter_total Total side-effect outbox entries dead-lettered by reconciliation.
+        \\# TYPE zombie_side_effect_outbox_dead_letter_total counter
+        \\zombie_side_effect_outbox_dead_letter_total {d}
         \\# HELP zombie_worker_running Worker liveness gauge (1 running, 0 stopped).
         \\# TYPE zombie_worker_running gauge
         \\zombie_worker_running {d}
@@ -392,6 +422,9 @@ pub fn renderPrometheus(
         s.agent_tokens_total,
         s.backoff_wait_ms_total,
         s.rate_limit_wait_ms_total,
+        s.side_effect_outbox_enqueued_total,
+        s.side_effect_outbox_delivered_total,
+        s.side_effect_outbox_dead_letter_total,
         worker_running_gauge,
         queue_depth_gauge,
         oldest_age_gauge,
@@ -425,6 +458,22 @@ test "prometheus render includes key metrics" {
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_external_retries_total"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_external_failures_total"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_rate_limit_wait_ms_total"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_side_effect_outbox_enqueued_total"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_side_effect_outbox_dead_letter_total"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_agent_duration_seconds_bucket"));
     try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_run_total_wall_seconds_bucket"));
+}
+
+test "integration: outbox metric counters are exposed in prometheus output" {
+    const alloc = std.testing.allocator;
+    incOutboxEnqueued();
+    incOutboxDelivered();
+    incOutboxDeadLetter();
+
+    const body = try renderPrometheus(alloc, false, 0, 0);
+    defer alloc.free(body);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_side_effect_outbox_enqueued_total"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_side_effect_outbox_delivered_total"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_side_effect_outbox_dead_letter_total"));
 }

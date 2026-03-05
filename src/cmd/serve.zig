@@ -7,6 +7,7 @@ const clerk_auth = @import("../auth/clerk.zig");
 const http_server = @import("../http/server.zig");
 const http_handler = @import("../http/handler.zig");
 const worker = @import("../pipeline/worker.zig");
+const obs_log = @import("../observability/logging.zig");
 const common = @import("common.zig");
 
 const log = std.log.scoped(.zombied);
@@ -83,7 +84,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
 
     std.fs.makeDirAbsolute(serve_cfg.cache_root) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => log.warn("could not create cache root {s}: {}", .{ serve_cfg.cache_root, err }),
+        else => obs_log.logWarnErr(.zombied, err, "could not create cache root {s}", .{serve_cfg.cache_root}),
     };
 
     var wstate = worker.WorkerState.init();
@@ -152,7 +153,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
 
     log.info("HTTP server starting port={d} worker_concurrency={d}", .{ serve_cfg.port, worker_count });
     http_server.serve(&ctx, .{ .port = serve_cfg.port }) catch |err| {
-        log.err("http server exited with error: {}", .{err});
+        obs_log.logErr(.zombied, err, "http server exited with error", .{});
     };
 
     wstate.running.store(false, .release);
