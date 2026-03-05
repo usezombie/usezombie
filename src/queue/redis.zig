@@ -102,18 +102,10 @@ const TlsTransport = struct {
     ca_bundle: std.crypto.Certificate.Bundle,
 
     fn initInPlace(self: *TlsTransport, alloc: std.mem.Allocator, stream: std.net.Stream, host: []const u8) !void {
-        var ca_bundle: std.crypto.Certificate.Bundle = .{};
-        errdefer ca_bundle.deinit(alloc);
-
         const ca_file = std.process.getEnvVarOwned(alloc, "REDIS_TLS_CA_CERT_FILE") catch null;
         defer if (ca_file) |v| alloc.free(v);
-
-        if (ca_file) |path| {
-            if (!std.fs.path.isAbsolute(path)) return error.RedisTlsCaFileMustBeAbsolute;
-            try ca_bundle.addCertsFromFilePathAbsolute(alloc, path);
-        } else {
-            try ca_bundle.rescan(alloc);
-        }
+        var ca_bundle = try loadCaBundle(alloc, ca_file);
+        errdefer ca_bundle.deinit(alloc);
 
         const socket_read_buffer = try alloc.alloc(u8, std.crypto.tls.Client.min_buffer_len);
         errdefer alloc.free(socket_read_buffer);
@@ -174,6 +166,23 @@ const TlsTransport = struct {
         return &self.tls_client.writer;
     }
 };
+
+fn loadCaBundle(
+    alloc: std.mem.Allocator,
+    ca_file_path: ?[]const u8,
+) !std.crypto.Certificate.Bundle {
+    var ca_bundle: std.crypto.Certificate.Bundle = .{};
+    errdefer ca_bundle.deinit(alloc);
+
+    if (ca_file_path) |path| {
+        if (!std.fs.path.isAbsolute(path)) return error.RedisTlsCaFileMustBeAbsolute;
+        try ca_bundle.addCertsFromFilePathAbsolute(alloc, path);
+    } else {
+        try ca_bundle.rescan(alloc);
+    }
+
+    return ca_bundle;
+}
 
 const Transport = union(enum) {
     plain: PlainTransport,
@@ -643,6 +652,21 @@ test "parseRedisUrl supports rediss default port" {
     try std.testing.expectEqualStrings("localhost", tls.host);
     try std.testing.expectEqual(@as(u16, 6379), tls.port);
     try std.testing.expect(tls.use_tls);
+}
+
+test "parseRedisUrl rejects invalid scheme and invalid port" {
+    const alloc = std.testing.allocator;
+
+    try std.testing.expectError(error.InvalidRedisUrl, parseRedisUrl(alloc, "http://localhost:6379"));
+    try std.testing.expectError(error.InvalidRedisUrl, parseRedisUrl(alloc, "redis://localhost:notaport"));
+    try std.testing.expectError(error.InvalidRedisUrl, parseRedisUrl(alloc, "redis://"));
+}
+
+test "loadCaBundle rejects relative custom CA path" {
+    try std.testing.expectError(
+        error.RedisTlsCaFileMustBeAbsolute,
+        loadCaBundle(std.testing.allocator, "docker/redis/tls/ca.crt"),
+    );
 }
 
 test "integration: rediss ping via REDIS_TLS_TEST_URL" {

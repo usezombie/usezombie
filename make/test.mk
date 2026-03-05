@@ -13,8 +13,15 @@ ZOMBIED_COVERAGE_MIN_LINES ?= 35
 test-unit-zombied:  ## Run zombied unit tests (Zig)
 	@echo "→ [zombied] Running Zig unit tests..."
 	@mkdir -p "$(ZIG_GLOBAL_CACHE_DIR)" "$(ZIG_LOCAL_CACHE_DIR)"
-	@ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
+	@redis_tls_test_url="$$REDIS_TLS_TEST_URL"; \
+	 if [ -z "$$redis_tls_test_url" ] && [ -n "$$REDIS_URL" ]; then \
+	   case "$$REDIS_URL" in \
+	     rediss://*) redis_tls_test_url="$$REDIS_URL" ;; \
+	   esac; \
+	 fi; \
+	 ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
 	 ZIG_LOCAL_CACHE_DIR="$(ZIG_LOCAL_CACHE_DIR)" \
+	 REDIS_TLS_TEST_URL="$$redis_tls_test_url" \
 	 zig build test --summary all
 	@$(MAKE) test-depth
 
@@ -31,8 +38,15 @@ test-unit: test-unit-zombied test-unit-website  ## Run all unit tests (zombied +
 test-integration-zombied:  ## Run Zig integration tests (deterministic, no live service required)
 	@echo "→ [zombied] Running Zig integration tests..."
 	@mkdir -p "$(ZIG_GLOBAL_CACHE_DIR)" "$(ZIG_LOCAL_CACHE_DIR)"
-	@ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
+	@redis_tls_test_url="$$REDIS_TLS_TEST_URL"; \
+	 if [ -z "$$redis_tls_test_url" ] && [ -n "$$REDIS_URL" ]; then \
+	   case "$$REDIS_URL" in \
+	     rediss://*) redis_tls_test_url="$$REDIS_URL" ;; \
+	   esac; \
+	 fi; \
+	 ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
 	 ZIG_LOCAL_CACHE_DIR="$(ZIG_LOCAL_CACHE_DIR)" \
+	 REDIS_TLS_TEST_URL="$$redis_tls_test_url" \
 	 zig build test -- --test-filter "integration:"
 
 test-integration: test-integration-zombied  ## Run integration checks
