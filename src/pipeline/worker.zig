@@ -110,6 +110,27 @@ const TenantRateLimiter = struct {
         }
     }
 
+    fn acquireCancelable(
+        self: *TenantRateLimiter,
+        tenant_id: []const u8,
+        provider: []const u8,
+        cost: f64,
+        worker_state: *WorkerState,
+        deadline_ms: i64,
+    ) WorkerError!void {
+        while (true) {
+            try ensureRunActive(worker_state, deadline_ms);
+
+            const now_ms = std.time.milliTimestamp();
+            const bucket = try self.getOrCreateBucket(tenant_id, provider, now_ms);
+            if (bucket.allow(now_ms, cost)) return;
+
+            const wait_ms = @max(bucket.waitMsUntil(now_ms, cost), 1);
+            metrics.addRateLimitWaitMs(wait_ms);
+            try sleepCooperative(wait_ms, worker_state, deadline_ms);
+        }
+    }
+
     fn getOrCreateBucket(
         self: *TenantRateLimiter,
         tenant_id: []const u8,
@@ -532,13 +553,16 @@ fn tryRecoverPrUrl(
     conn: *pg.Conn,
     token_cache: *github_auth.TokenCache,
     tenant_limiter: *TenantRateLimiter,
+    worker_state: *WorkerState,
+    deadline_ms: i64,
     ctx: RunContext,
     branch: []const u8,
 ) !?[]u8 {
+    try ensureRunActive(worker_state, deadline_ms);
     const installation_id = loadInstallationId(run_alloc, conn, ctx.workspace_id) catch return null;
     defer run_alloc.free(installation_id);
 
-    try tenant_limiter.acquire(ctx.tenant_id, "github_installation_token", 1.0);
+    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_installation_token", 1.0, worker_state, deadline_ms);
     var token_retry_ctx = TokenRetryCtx{
         .cache = token_cache,
         .alloc = run_alloc,
@@ -556,7 +580,7 @@ fn tryRecoverPrUrl(
     var detail: ?[]u8 = null;
     defer if (detail) |d| run_alloc.free(d);
 
-    try tenant_limiter.acquire(ctx.tenant_id, "github_pr_lookup", 1.0);
+    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_pr_lookup", 1.0, worker_state, deadline_ms);
     const existing = try git.findOpenPullRequestByHead(
         run_alloc,
         ctx.repo_url,
@@ -606,7 +630,7 @@ fn executeRun(
     tenant_limiter: *TenantRateLimiter,
 ) !void {
     const deadline_ms = std.time.milliTimestamp() + @as(i64, @intCast(cfg.run_timeout_ms));
-    try ensureBeforeDeadline(deadline_ms);
+    try ensureRunActive(worker_state, deadline_ms);
 
     var run_arena = std.heap.ArenaAllocator.init(alloc);
     defer run_arena.deinit();
@@ -658,8 +682,8 @@ fn executeRun(
     const plan_stage = profile.stages[0];
     const plan_binding = agents.lookupRole(plan_stage.role_id) orelse return WorkerError.InvalidPipelineRole;
 
-    try ensureBeforeDeadline(deadline_ms);
-    try tenant_limiter.acquire(ctx.tenant_id, plan_stage.role_id, 1.0);
+    try ensureRunActive(worker_state, deadline_ms);
+    try tenant_limiter.acquireCancelable(ctx.tenant_id, plan_stage.role_id, 1.0, worker_state, deadline_ms);
     const plan_result = try reliable.call(agents.AgentResult, StageRetryCtx{
         .alloc = run_alloc,
         .binding = plan_binding,
@@ -715,8 +739,7 @@ fn executeRun(
     var total_wall_seconds: u64 = plan_result.wall_seconds;
 
     while (attempt <= cfg.max_attempts) : (attempt += 1) {
-        try ensureBeforeDeadline(deadline_ms);
-        if (!worker_state.running.load(.acquire)) return WorkerError.ShutdownRequested;
+        try ensureRunActive(worker_state, deadline_ms);
 
         // ── Build stages (one or more) ───────────────────────────────────
         _ = try state.transition(conn, ctx.run_id, .PATCH_IN_PROGRESS, .orchestrator, .PATCH_STARTED, null);
@@ -731,8 +754,8 @@ fn executeRun(
                 attempt,
             });
 
-            try tenant_limiter.acquire(ctx.tenant_id, stage.role_id, 1.0);
-            try ensureBeforeDeadline(deadline_ms);
+            try tenant_limiter.acquireCancelable(ctx.tenant_id, stage.role_id, 1.0, worker_state, deadline_ms);
+            try ensureRunActive(worker_state, deadline_ms);
             const result = try reliable.call(agents.AgentResult, StageRetryCtx{
                 .alloc = run_alloc,
                 .binding = binding,
@@ -783,8 +806,8 @@ fn executeRun(
         // ── Gate stage: final verification ───────────────────────────────
         _ = try state.transition(conn, ctx.run_id, .VERIFICATION_IN_PROGRESS, .orchestrator, .PATCH_STARTED, null);
 
-        try ensureBeforeDeadline(deadline_ms);
-        try tenant_limiter.acquire(ctx.tenant_id, gate_stage.role_id, 1.0);
+        try ensureRunActive(worker_state, deadline_ms);
+        try tenant_limiter.acquireCancelable(ctx.tenant_id, gate_stage.role_id, 1.0, worker_state, deadline_ms);
         const gate_result = try reliable.call(agents.AgentResult, StageRetryCtx{
             .alloc = run_alloc,
             .binding = gate_binding,
@@ -834,11 +857,11 @@ fn executeRun(
 
             var pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
             if (pr_url == null) {
-                try ensureBeforeDeadline(deadline_ms);
+                try ensureRunActive(worker_state, deadline_ms);
                 const installation_id = try loadInstallationId(run_alloc, conn, ctx.workspace_id);
                 defer run_alloc.free(installation_id);
 
-                try tenant_limiter.acquire(ctx.tenant_id, "github_installation_token", 1.0);
+                try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_installation_token", 1.0, worker_state, deadline_ms);
                 var token_retry_ctx = TokenRetryCtx{
                     .cache = token_cache,
                     .alloc = run_alloc,
@@ -856,7 +879,8 @@ fn executeRun(
                 const push_side_effect_key = try sideEffectKeyPush(run_alloc, branch);
                 const push_claimed = try state.claimSideEffect(conn, ctx.run_id, push_side_effect_key, branch);
                 if (push_claimed) {
-                    try tenant_limiter.acquire(ctx.tenant_id, "github_push", 1.0);
+                    try ensureRunActive(worker_state, deadline_ms);
+                    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_push", 1.0, worker_state, deadline_ms);
                     try reliable.call(void, PushRetryCtx{
                         .alloc = run_alloc,
                         .wt_path = wt.path,
@@ -880,12 +904,13 @@ fn executeRun(
                 if (!pr_claimed) {
                     pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
                     if (pr_url == null) {
-                        pr_url = try tryRecoverPrUrl(run_alloc, conn, token_cache, tenant_limiter, ctx, branch);
+                        pr_url = try tryRecoverPrUrl(run_alloc, conn, token_cache, tenant_limiter, worker_state, deadline_ms, ctx, branch);
                         if (pr_url == null) return WorkerError.SideEffectClaimedNoResult;
                     }
                 }
 
                 if (pr_url == null) {
+                    try ensureRunActive(worker_state, deadline_ms);
                     const pr_title = try std.fmt.allocPrint(run_alloc, "usezombie: {s}", .{ctx.spec_id});
 
                     var pr_retry_ctx = PrRetryCtx{
@@ -897,7 +922,7 @@ fn executeRun(
                         .body = gate_result.content,
                         .github_token = github_token,
                     };
-                    try tenant_limiter.acquire(ctx.tenant_id, "github_pr_create", 1.0);
+                    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_pr_create", 1.0, worker_state, deadline_ms);
                     const created_pr = try reliable.callWithDetail([]u8, &pr_retry_ctx, opCreatePr, prDetail, .{
                         .max_retries = 2,
                         .base_delay_ms = 1_000,
@@ -1005,8 +1030,7 @@ fn executeRun(
         const delay_ms = backoff.expBackoffJitter(retry_index, 1_000, 30_000);
         metrics.incRunRetries();
         metrics.addBackoffWaitMs(delay_ms);
-        try ensureBeforeDeadline(deadline_ms);
-        std.Thread.sleep(delay_ms * std.time.ns_per_ms);
+        try sleepCooperative(delay_ms, worker_state, deadline_ms);
 
         log.info("retrying run_id={s} attempt={d}", .{ ctx.run_id, attempt + 1 });
     }
@@ -1029,6 +1053,23 @@ fn executeRun(
 
 fn ensureBeforeDeadline(deadline_ms: i64) WorkerError!void {
     if (std.time.milliTimestamp() > deadline_ms) return WorkerError.RunDeadlineExceeded;
+}
+
+fn ensureRunActive(worker_state: *WorkerState, deadline_ms: i64) WorkerError!void {
+    if (!worker_state.running.load(.acquire)) return WorkerError.ShutdownRequested;
+    try ensureBeforeDeadline(deadline_ms);
+}
+
+fn sleepCooperative(total_ms: u64, worker_state: *WorkerState, deadline_ms: i64) WorkerError!void {
+    var remaining = total_ms;
+    while (true) {
+        try ensureRunActive(worker_state, deadline_ms);
+        if (remaining == 0) return;
+
+        const slice_ms: u64 = @min(remaining, 100);
+        std.Thread.sleep(slice_ms * std.time.ns_per_ms);
+        remaining -= slice_ms;
+    }
 }
 
 // ── Artifact helpers ─────────────────────────────────────────────────────
@@ -1148,4 +1189,22 @@ test "integration: side effect key format for push is stable" {
     const key = try sideEffectKeyPush(std.testing.allocator, "zombie/run-r_abc");
     defer std.testing.allocator.free(key);
     try std.testing.expectEqualStrings("git:push:zombie/run-r_abc", key);
+}
+
+test "sleepCooperative returns shutdown when worker stops" {
+    var ws = WorkerState.init();
+    ws.running.store(false, .release);
+    try std.testing.expectError(
+        WorkerError.ShutdownRequested,
+        sleepCooperative(1, &ws, std.time.milliTimestamp() + 10_000),
+    );
+}
+
+test "integration: ensureRunActive returns deadline exceeded when past deadline" {
+    var ws = WorkerState.init();
+    ws.running.store(true, .release);
+    try std.testing.expectError(
+        WorkerError.RunDeadlineExceeded,
+        ensureRunActive(&ws, std.time.milliTimestamp() - 1),
+    );
 }
