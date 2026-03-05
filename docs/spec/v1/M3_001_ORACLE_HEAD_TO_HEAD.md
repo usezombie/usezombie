@@ -54,7 +54,7 @@
 | 15 | ⚠️ Partial | Git/curl timeouts done; agent-call cancellation/deadline still missing |
 | 16 | ⚠️ Partial | Current settings are single-threaded by config; allocator/thread-safety guardrails not enforced globally |
 | 17 | ⚠️ Partial | Versioned migrations + tx done; SQL splitting remains heuristic |
-| 18 | ⚠️ Partial | `/healthz` + `/readyz` improved; queue-depth/readiness richness still missing |
+| 18 | ⚠️ Partial | `/healthz` + `/readyz` improved, and `/readyz` now exposes queue depth + oldest age; richer readiness policy is still missing |
 | 19 | ❌ Open | No `/metrics` endpoint or observer wiring yet |
 | 20 | ⚠️ Partial | Doctor checks improved; serve-time fail-fast and key-rotation model still missing |
 | 21 | ⚠️ Partial | Unit/integration/e2e targets added; coverage measurement and deeper module tests still missing |
@@ -717,12 +717,17 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 
 | File | Line | Issue |
 |------|------|-------|
-| `src/http/handler.zig` | 65–71 | `/healthz` always returns `{"status":"ok"}` — no DB probe, no worker heartbeat check |
+| `src/http/handler.zig` | 95–137 | `/readyz` now includes queue depth and oldest queued age, but readiness does not yet enforce thresholds/SLO-aware gating |
 
 ### Recommendation
 - `/livez` — process alive (static, fast)
 - `/readyz` — checks: DB connectivity, migrations applied, worker loop healthy, queue depth
 - Include oldest-queued-run age for operational alerting
+
+### Oracle review: remaining scope after this fix
+- Define readiness gating thresholds (for example queue age SLO breach) instead of pure informational queue metrics.
+- Add migration-state and dependency checks to readiness beyond DB reachability.
+- Surface queue health in `/metrics` for alert-driven operations.
 
 ---
 
