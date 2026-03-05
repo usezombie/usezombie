@@ -36,10 +36,10 @@ M3_007 (Website) ──── independent, parallel ─────────�
 | Step | Milestones (parallel) | What |
 |------|----------------------|------|
 | 1 | ✅ M3_001 + ✅ M3_000 | Critical bug fixes + secrets schema separation — DONE (Mar 05, 2026) |
-| 2 | M3_004 + M3_006 | Redis streams + Clerk auth |
-| 3 | M3_005 | Security hardening (needs Redis + schema done) |
-| 4 | M4_001 | zombiectl CLI (needs Clerk + Redis + API hardened) |
-| 5 | M4_002 | npm publish |
+| 2 | ⏳ M3_004 + M3_006 | Redis streams + Clerk auth |
+| 3 | ⏳ M3_005 | Security hardening (needs Redis + schema done) |
+| 4 | ⏳ M4_001 | zombiectl CLI (needs Clerk + Redis + API hardened) |
+| 5 | ⏳ M4_002 | npm publish |
 | ∥ | ✅ M3_007 | Website (independent, can run in parallel with any step) — DONE (Mar 05, 2026) |
 
 ---
@@ -48,7 +48,7 @@ M3_007 (Website) ──── independent, parallel ─────────�
 
 Reference: `docs/spec/v1/M3_001_ORACLE_HEAD_TO_HEAD.md` (dimensions 5, 7, 11-20)
 
-### 1.1 Transaction wrapping for run claiming
+### ✅ DONE: 1.1 Transaction wrapping for run claiming
 
 **File:** `src/pipeline/worker.zig`
 
@@ -63,7 +63,7 @@ COMMIT;
 
 Commit after claiming. All subsequent transitions use CAS guards.
 
-### 1.2 Compare-and-set state transitions
+### ✅ DONE: 1.2 Compare-and-set state transitions
 
 **File:** `src/state/machine.zig`
 
@@ -77,49 +77,49 @@ RETURNING state
 
 Zero rows = invalid transition → return error.
 
-### 1.3 Idempotency key scoped to workspace
+### ✅ DONE: 1.3 Idempotency key scoped to workspace
 
 **File:** `schema/001_initial.sql` + `src/http/handler.zig`
 
 Change `UNIQUE(idempotency_key)` to `UNIQUE(workspace_id, idempotency_key)`. Update `handleStartRun` idempotency check query.
 
-### 1.4 PR dedup guard
+### ✅ DONE: 1.4 PR dedup guard
 
 **File:** `src/pipeline/worker.zig`
 
 Before `git.createPullRequest()`: `SELECT pr_url FROM runs WHERE run_id = $1`. Skip if not NULL.
 
-### 1.5 Path canonicalization
+### ✅ DONE: 1.5 Path canonicalization
 
 **File:** `src/pipeline/worker.zig`
 
 After constructing `spec_abs`: resolve to absolute, verify it starts with worktree path. Reject `..` traversal.
 
-### 1.6 Git hook disabling
+### ✅ DONE: 1.6 Git hook disabling
 
 **File:** `src/git/ops.zig`
 
 Add `-c core.hooksPath=/dev/null` to every git subprocess call.
 
-### 1.7 Subprocess timeouts
+### ✅ DONE: 1.7 Subprocess timeouts
 
 **File:** `src/git/ops.zig`
 
 Add `--max-time 30` / `--connect-timeout 10` to curl. Implement timeout wrapper for git subprocess: kill child after N seconds (clone=120s, commit=30s, push=60s).
 
-### 1.8 SIGTERM handler + graceful shutdown
+### ✅ DONE: 1.8 SIGTERM handler + graceful shutdown
 
 **File:** `src/main.zig`
 
 Install `SIGTERM`/`SIGINT` handler via `std.posix.sigaction`. Set `worker_state.running = false`. Join worker thread. Transition in-progress run to BLOCKED. Clean up worktrees.
 
-### 1.9 Per-run ArenaAllocator
+### ✅ DONE: 1.9 Per-run ArenaAllocator
 
 **File:** `src/pipeline/worker.zig`
 
 Create `ArenaAllocator` at start of `executeRun()`, `defer arena.deinit()`. Pass to all functions within the run. Matches per-request arena in `handler.zig`.
 
-### 1.10 Health check depth
+### ✅ DONE: 1.10 Health check depth
 
 **File:** `src/http/handler.zig` + `src/http/server.zig`
 
@@ -132,31 +132,31 @@ Create `ArenaAllocator` at start of `executeRun()`, `defer arena.deinit()`. Pass
 
 Reference: `docs/done/v1/M3_000_SECRETS_HARDENING.md`
 
-### 1A.1 Vault schema
+### ✅ DONE: 1A.1 Vault schema
 
 **File:** `schema/002_vault_schema.sql` (new)
 
 Create `vault` schema. Create roles: `api_accessor` (public only), `worker_accessor` (public + vault), `callback_accessor` (vault only). Move secrets to `vault.secrets` with BYTEA columns.
 
-### 1A.2 Migration runner with version tracking
+### ✅ DONE: 1A.2 Migration runner with version tracking
 
 **File:** `src/db/pool.zig`
 
 Create `schema_migrations` table. Track applied versions. Run each migration once, idempotently.
 
-### 1A.3 Split DATABASE_URL per role
+### ✅ DONE: 1A.3 Split DATABASE_URL per role
 
 **File:** `src/main.zig` + `src/db/pool.zig`
 
 Read `DATABASE_URL_API` and `DATABASE_URL_WORKER`. Fall back to `DATABASE_URL` for local dev.
 
-### 1A.4 GitHub App JWT authentication
+### ✅ DONE: 1A.4 GitHub App JWT authentication
 
 **File:** `src/auth/github.zig` (new)
 
 RS256 JWT generation from `GITHUB_APP_PRIVATE_KEY`. Exchange for installation tokens. Cache until 5 min before expiry. Use for git push + PR creation. Replace curl-based PR creation.
 
-### 1A.5 BYTEA secrets storage
+### ✅ DONE: 1A.5 BYTEA secrets storage
 
 **File:** `src/secrets/crypto.zig`
 
@@ -164,11 +164,11 @@ Return raw bytes from `encrypt()`. Accept raw bytes in `decrypt()`. Use BYTEA pa
 
 ---
 
-## Step 2: M3_004 — Redis Streams
+## ⏳ PENDING: Step 2 — M3_004 Redis Streams
 
 Reference: `docs/spec/v1/M3_004_REDIS_STREAMS.md`
 
-### 2.1 Redis client (RESP protocol)
+### ⏳ TODO: 2.1 Redis client (RESP protocol)
 
 **File:** `src/queue/redis.zig` (new)
 
@@ -180,13 +180,13 @@ Implement minimal RESP protocol client over TCP/TLS:
 - `xautoclaim(stream, group, consumer, min_idle_ms)` — reclaim stale
 - `xgroupCreate(stream, group)` — create group with MKSTREAM
 
-### 2.2 API enqueue
+### ⏳ TODO: 2.2 API enqueue
 
 **File:** `src/http/handler.zig`
 
 After `INSERT INTO runs`: `redis.xadd("run_queue", .{.run_id = id, .attempt = "0", .workspace_id = ws_id})`.
 
-### 2.3 Worker dequeue
+### ⏳ TODO: 2.3 Worker dequeue
 
 **File:** `src/pipeline/worker.zig`
 
@@ -198,41 +198,41 @@ while (running) {
 }
 ```
 
-### 2.4 Stale message recovery
+### ⏳ TODO: 2.4 Stale message recovery
 
 **File:** `src/pipeline/worker.zig`
 
 Periodic (every 60s): `redis.xautoclaim("run_queue", "workers", consumer_id, 300000)`. CAS guard in Postgres prevents double-processing.
 
-### 2.5 docker-compose.yml
+### ⏳ TODO: 2.5 docker-compose.yml
 
 Add `redis:7-alpine` service with ACL config from `config/redis-acl.conf`.
 
 ---
 
-## Step 2 (parallel): M3_006 — Clerk Authentication
+## ⏳ PENDING: Step 2 (parallel) — M3_006 Clerk Authentication
 
 Reference: `docs/spec/v1/M3_006_CLERK_AUTH.md`
 
-### 2A.1 JWT verification
+### ⏳ TODO: 2A.1 JWT verification
 
 **File:** `src/auth/clerk.zig` (new)
 
 Fetch JWKS from `CLERK_JWKS_URL` on startup. Verify RS256 JWT signatures. Extract `sub`, `org_id`, `tenant_id`. Cache JWKS, refresh every 6 hours.
 
-### 2A.2 Auth middleware
+### ⏳ TODO: 2A.2 Auth middleware
 
 **File:** `src/http/handler.zig`
 
 Replace `API_KEY` check with Clerk JWT verification. Fall back to `API_KEY` when `CLERK_SECRET_KEY` is not set (local dev).
 
-### 2A.3 Workspace authorization
+### ⏳ TODO: 2A.3 Workspace authorization
 
 **File:** `src/http/handler.zig`
 
 After JWT verification: check that requested workspace belongs to user's tenant. Return 403 if not.
 
-### 2A.4 GitHub callback handler
+### ⏳ TODO: 2A.4 GitHub callback handler
 
 **File:** `src/http/handler.zig` + `src/http/server.zig`
 
@@ -240,13 +240,13 @@ Add `GET /v1/github/callback` route. Handles GitHub App installation callback: `
 
 ---
 
-## Step 3: M3_005 — Security Hardening
+## ⏳ PENDING: Step 3 — M3_005 Security Hardening
 
 Reference: `docs/spec/v1/M3_005_SECURITY_HARDENING.md`
 
 This step coordinates and verifies work from Steps 1-2:
 
-### 3.1 Redis ACL configuration
+### ⏳ TODO: 3.1 Redis ACL configuration
 
 **File:** `config/redis-acl.conf` (new)
 
@@ -256,11 +256,11 @@ user worker_user on >worker_password ~run_queue +xreadgroup +xack +xautoclaim +x
 user default off
 ```
 
-### 3.2 Tailscale network policy documentation
+### ✅ DONE: 3.2 Tailscale network policy documentation
 
 Update `docs/DEPLOYMENT.md` section 2.1 with specific ACL rules (already done).
 
-### 3.3 Doctor security checks
+### ⏳ TODO: 3.3 Doctor security checks
 
 **File:** `src/main.zig` (doctor subcommand)
 
@@ -268,11 +268,11 @@ Add checks: Postgres role grants, Redis ACL WHOAMI, required env vars present.
 
 ---
 
-## Step 4: M4_001 — zombiectl CLI
+## ⏳ PENDING: Step 4 — M4_001 zombiectl CLI
 
 Reference: `docs/spec/v1/M4_001_CLI_ZOMBIECTL.md`
 
-### Tech stack
+### ⏳ TODO: 4.1 Tech stack and package scaffold
 
 - Node.js 22 + TypeScript
 - Use the create-cli skill(/create-cli) and create the cli using framework and guidelines mentioned there
@@ -280,7 +280,7 @@ Reference: `docs/spec/v1/M4_001_CLI_ZOMBIECTL.md`
 - `openapi-typescript` for typed API client -- is this needed consult the create-cli skill
 - `ora` for spinners, `chalk` for colors -- is this needed consult the create-cli skill
 
-### Directory
+### ⏳ TODO: 4.2 Directory layout
 
 Consult the create-cli skill and follow that guideline,.
 
@@ -306,7 +306,7 @@ cli/
 └── generated/api-types.ts
 ```
 
-### Commands
+### ⏳ TODO: 4.3 Commands
 
 
 ```
@@ -325,7 +325,7 @@ zombiectl doctor                       # Check auth, API, workspaces
 ```
 
 
-### Auth flow
+### ⏳ TODO: 4.4 Auth flow
 
 Device Authorization Grant (RFC 8628):
 
@@ -336,7 +336,7 @@ Device Authorization Grant (RFC 8628):
 
 ---
 
-## Step 5: M4_002 — npm Publish
+## ⏳ PENDING: Step 5 — M4_002 npm Publish
 
 Reference: `docs/spec/v1/M4_002_PUBLISH_CLI.md`
 
@@ -353,7 +353,7 @@ Reference: `docs/done/v1/M3_007_WEBSITE_STATIC.md`
 
 Can be built independently of all backend work.
 
-### Setup
+### ✅ DONE: Setup
 
 ```
 website/
@@ -373,7 +373,7 @@ website/
     └── heartbeat
 ```
 
-### Domains
+### ✅ DONE: Domains
 
 - `usezombie.com` → Vercel (landing + pricing)
 - `usezombie.sh` → Vercel (agent discovery + machine-readable assets)
