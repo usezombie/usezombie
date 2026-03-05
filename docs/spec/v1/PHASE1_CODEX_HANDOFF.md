@@ -26,6 +26,7 @@ M3_001 (Bug Fixes) ────────────────────�
 M3_000 (Secrets/Schema) ────────────────────────┤
                                                 ├──→ M3_004 (Redis Streams) ──→ M4_001 (zombiectl CLI)
 M3_006 (Clerk Auth) ────────────────────────────┤                                    │
+                                                ├──→ M4_003 (Dynamic Agent Topology) ─┘
                                                 │                               M4_002 (npm publish)
 M3_005 (Security Hardening) ←── depends on ─────┘
 M3_007 (Website) ──── independent, parallel ──────────────────────────────────────────
@@ -40,6 +41,7 @@ M3_007 (Website) ──── independent, parallel ─────────�
 | 3 | ⏳ M3_005 | Security hardening (needs Redis + schema done) |
 | 4 | ⏳ M4_001 | zombiectl CLI (needs Clerk + Redis + API hardened) |
 | 5 | ⏳ M4_002 | npm publish |
+| ∥ | ⏳ M4_003 | Dynamic agent topology (not hard-coded Echo/Scout/Warden); start during Part 1 and finish before CLI freeze |
 | ∥ | ✅ M3_007 | Website (independent, can run in parallel with any step) — DONE (Mar 05, 2026) |
 
 ---
@@ -344,6 +346,28 @@ Reference: `docs/spec/v1/M4_002_PUBLISH_CLI.md`
 2. `npm publish --provenance --access public`.
 3. CI: automated publish on tag push (already in `.github/workflows/release.yml`).
 4. Verify: `npx zombiectl --help` works.
+
+---
+
+## ⏳ PENDING: Parallel — M4_003 Dynamic Agent Topology
+
+Reference: `docs/spec/v1/M4_003_DONT_STICK_TO_STATIC_AGENTS.md`
+
+### ⏳ TODO: 4A.1 Agent registry abstraction
+
+Replace static role wiring (`echo`, `scout`, `warden`) with a registry-driven stage pipeline.
+
+### ⏳ TODO: 4A.2 Config-driven stage graph
+
+Load stage definitions from config (`id`, `role`, `prompt`, `tools`, `retry`, `timeout`, `on_pass`, `on_fail`) and execute deterministically.
+
+### ⏳ TODO: 4A.3 Backward-compatible defaults
+
+If no pipeline config is provided, boot with the current 3-stage flow as default profile.
+
+### ⏳ TODO: 4A.4 Observability and state semantics
+
+Preserve transition/audit semantics while allowing new roles and stages to emit metrics/logs without code changes.
 
 ---
 
