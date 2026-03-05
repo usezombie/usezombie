@@ -117,6 +117,87 @@ fn dispatch(r: zap.Request) !void {
         return;
     }
 
+    // Route: /v1/workspaces/{workspace_id}/harness/source
+    if (std.mem.startsWith(u8, path, "/v1/workspaces/") and
+        std.mem.endsWith(u8, path, "/harness/source"))
+    {
+        if (r.methodAsEnum() == .PUT) {
+            const inner = path["/v1/workspaces/".len .. path.len - "/harness/source".len];
+            if (inner.len > 0 and std.mem.indexOfScalar(u8, inner, '/') == null) {
+                handler.handlePutHarnessSource(g_ctx, r, inner);
+                return;
+            }
+        } else {
+            r.setStatus(.method_not_allowed);
+            r.sendBody("") catch {};
+            return;
+        }
+    }
+
+    // Route: /v1/workspaces/{workspace_id}/harness/compile
+    if (std.mem.startsWith(u8, path, "/v1/workspaces/") and
+        std.mem.endsWith(u8, path, "/harness/compile"))
+    {
+        if (r.methodAsEnum() == .POST) {
+            const inner = path["/v1/workspaces/".len .. path.len - "/harness/compile".len];
+            if (inner.len > 0 and std.mem.indexOfScalar(u8, inner, '/') == null) {
+                handler.handleCompileHarness(g_ctx, r, inner);
+                return;
+            }
+        } else {
+            r.setStatus(.method_not_allowed);
+            r.sendBody("") catch {};
+            return;
+        }
+    }
+
+    // Route: /v1/workspaces/{workspace_id}/harness/activate
+    if (std.mem.startsWith(u8, path, "/v1/workspaces/") and
+        std.mem.endsWith(u8, path, "/harness/activate"))
+    {
+        if (r.methodAsEnum() == .POST) {
+            const inner = path["/v1/workspaces/".len .. path.len - "/harness/activate".len];
+            if (inner.len > 0 and std.mem.indexOfScalar(u8, inner, '/') == null) {
+                handler.handleActivateHarness(g_ctx, r, inner);
+                return;
+            }
+        } else {
+            r.setStatus(.method_not_allowed);
+            r.sendBody("") catch {};
+            return;
+        }
+    }
+
+    // Route: /v1/workspaces/{workspace_id}/harness/active
+    if (std.mem.startsWith(u8, path, "/v1/workspaces/") and
+        std.mem.endsWith(u8, path, "/harness/active"))
+    {
+        if (r.methodAsEnum() == .GET) {
+            const inner = path["/v1/workspaces/".len .. path.len - "/harness/active".len];
+            if (inner.len > 0 and std.mem.indexOfScalar(u8, inner, '/') == null) {
+                handler.handleGetHarnessActive(g_ctx, r, inner);
+                return;
+            }
+        } else {
+            r.setStatus(.method_not_allowed);
+            r.sendBody("") catch {};
+            return;
+        }
+    }
+
+    // Route: /v1/workspaces/{workspace_id}/skills/{skill_ref}/secrets/{key_name}
+    if (handler.parseSkillSecretRoute(path)) |route| {
+        switch (r.methodAsEnum()) {
+            .PUT => handler.handlePutWorkspaceSkillSecret(g_ctx, r, route.workspace_id, route.skill_ref_encoded, route.key_name_encoded),
+            .DELETE => handler.handleDeleteWorkspaceSkillSecret(g_ctx, r, route.workspace_id, route.skill_ref_encoded, route.key_name_encoded),
+            else => {
+                r.setStatus(.method_not_allowed);
+                r.sendBody("") catch {};
+            },
+        }
+        return;
+    }
+
     // Route: /v1/workspaces/:workspace_id:sync
     if (std.mem.startsWith(u8, path, "/v1/workspaces/") and
         std.mem.endsWith(u8, path, ":sync"))

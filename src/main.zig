@@ -107,5 +107,6 @@ test {
     _ = @import("state/machine.zig");
     _ = @import("secrets/crypto.zig");
     _ = @import("db/pool.zig");
+    _ = @import("harness/control_plane.zig");
     _ = @import("cli/commands.zig");
 }
