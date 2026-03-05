@@ -12,6 +12,7 @@ const worker = @import("../pipeline/worker.zig");
 const secrets = @import("../secrets/crypto.zig");
 const metrics = @import("../observability/metrics.zig");
 const obs_log = @import("../observability/logging.zig");
+const db = @import("../db/pool.zig");
 const log = std.log.scoped(.http);
 const queue_unavailable_code = "QUEUE_UNAVAILABLE";
 const queue_unavailable_message = "Queue unavailable";
@@ -155,6 +156,29 @@ fn endApiRequest(ctx: *Context) void {
     const prev = ctx.api_in_flight_requests.fetchSub(1, .acq_rel);
     std.debug.assert(prev > 0);
     metrics.setApiInFlightRequests(ctx.api_in_flight_requests.load(.acquire));
+}
+
+fn compensateStartRunQueueFailure(conn: *pg.Conn, run_id: []const u8) void {
+    _ = conn.query(
+        "DELETE FROM runs WHERE run_id = $1 AND state = 'SPEC_QUEUED'",
+        .{run_id},
+    ) catch {};
+}
+
+fn compensateRetryQueueFailure(
+    conn: *pg.Conn,
+    run_id: []const u8,
+    previous_state: []const u8,
+    transition_ts: i64,
+) void {
+    _ = conn.query(
+        "UPDATE runs SET state = $1, updated_at = $2 WHERE run_id = $3",
+        .{ previous_state, std.time.milliTimestamp(), run_id },
+    ) catch {};
+    _ = conn.query(
+        "DELETE FROM run_transitions WHERE run_id = $1 AND reason_code = 'MANUAL_RETRY' AND ts = $2",
+        .{ run_id, transition_ts },
+    ) catch {};
 }
 
 // ── Healthz ───────────────────────────────────────────────────────────────
@@ -416,10 +440,7 @@ pub fn handleStartRun(ctx: *Context, r: zap.Request) void {
                 final_run_id,
                 req.workspace_id,
             });
-            _ = conn.query(
-                "DELETE FROM runs WHERE run_id = $1 AND state = 'SPEC_QUEUED'",
-                .{final_run_id},
-            ) catch {};
+            compensateStartRunQueueFailure(conn, final_run_id);
             errorResponse(r, .service_unavailable, queue_unavailable_code, queue_unavailable_message, req_id);
             return;
         };
@@ -691,14 +712,7 @@ pub fn handleRetryRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
     log.info("run retried run_id={s} reason={s}", .{ run_id, parsed.value.reason });
     ctx.queue.xaddRun(run_id, current.attempt + 1, workspace_id_for_policy) catch |err| {
         obs_log.logWarnErr(.http, err, "queue enqueue failed for retry run_id={s}", .{run_id});
-        _ = conn.query(
-            "UPDATE runs SET state = $1, updated_at = $2 WHERE run_id = $3",
-            .{ current.state.label(), std.time.milliTimestamp(), run_id },
-        ) catch {};
-        _ = conn.query(
-            "DELETE FROM run_transitions WHERE run_id = $1 AND reason_code = 'MANUAL_RETRY' AND ts = $2",
-            .{ run_id, now_ms },
-        ) catch {};
+        compensateRetryQueueFailure(conn, run_id, current.state.label(), now_ms);
         errorResponse(r, .service_unavailable, queue_unavailable_code, queue_unavailable_message, req_id);
         return;
     };
@@ -750,6 +764,131 @@ test "integration: endApiRequest decrements in-flight counter deterministically"
     try std.testing.expect(beginApiRequest(&ctx));
     endApiRequest(&ctx);
     try std.testing.expectEqual(@as(u32, 0), ctx.api_in_flight_requests.load(.acquire));
+}
+
+fn openHandlerTestConn(alloc: std.mem.Allocator) !?struct { pool: *db.Pool, conn: *pg.Conn } {
+    const url = std.process.getEnvVarOwned(alloc, "HANDLER_DB_TEST_URL") catch
+        std.process.getEnvVarOwned(alloc, "DATABASE_URL") catch return null;
+    defer alloc.free(url);
+
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const opts = try db.parseUrl(arena.allocator(), url);
+    const pool = try pg.Pool.init(alloc, opts);
+    errdefer pool.deinit();
+    const conn = try pool.acquire();
+    return .{ .pool = pool, .conn = conn };
+}
+
+test "integration: start-run queue failure compensation removes only SPEC_QUEUED row" {
+    const db_ctx = (try openHandlerTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.release(db_ctx.conn);
+    defer db_ctx.pool.deinit();
+
+    {
+        var q = try db_ctx.conn.query(
+            \\CREATE TEMP TABLE runs (
+            \\  run_id TEXT PRIMARY KEY,
+            \\  state TEXT NOT NULL,
+            \\  updated_at BIGINT NOT NULL
+            \\) ON COMMIT DROP
+        , .{});
+        q.deinit();
+    }
+
+    const now_ms = std.time.milliTimestamp();
+    {
+        var q = try db_ctx.conn.query(
+            "INSERT INTO runs (run_id, state, updated_at) VALUES ($1, 'SPEC_QUEUED', $2)",
+            .{ "run-delete", now_ms },
+        );
+        q.deinit();
+    }
+    {
+        var q = try db_ctx.conn.query(
+            "INSERT INTO runs (run_id, state, updated_at) VALUES ($1, 'RUN_PLANNED', $2)",
+            .{ "run-keep", now_ms },
+        );
+        q.deinit();
+    }
+
+    compensateStartRunQueueFailure(db_ctx.conn, "run-delete");
+    compensateStartRunQueueFailure(db_ctx.conn, "run-keep");
+
+    {
+        var q = try db_ctx.conn.query("SELECT COUNT(*)::BIGINT FROM runs WHERE run_id = 'run-delete'", .{});
+        defer q.deinit();
+        const row = (q.next() catch null) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(i64, 0), row.get(i64, 0) catch -1);
+    }
+    {
+        var q = try db_ctx.conn.query("SELECT COUNT(*)::BIGINT FROM runs WHERE run_id = 'run-keep'", .{});
+        defer q.deinit();
+        const row = (q.next() catch null) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(i64, 1), row.get(i64, 0) catch -1);
+    }
+}
+
+test "integration: retry queue failure compensation restores state and removes retry transition" {
+    const db_ctx = (try openHandlerTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.release(db_ctx.conn);
+    defer db_ctx.pool.deinit();
+
+    {
+        var q = try db_ctx.conn.query(
+            \\CREATE TEMP TABLE runs (
+            \\  run_id TEXT PRIMARY KEY,
+            \\  state TEXT NOT NULL,
+            \\  updated_at BIGINT NOT NULL
+            \\) ON COMMIT DROP
+        , .{});
+        q.deinit();
+    }
+    {
+        var q = try db_ctx.conn.query(
+            \\CREATE TEMP TABLE run_transitions (
+            \\  run_id TEXT NOT NULL,
+            \\  reason_code TEXT NOT NULL,
+            \\  ts BIGINT NOT NULL
+            \\) ON COMMIT DROP
+        , .{});
+        q.deinit();
+    }
+
+    const now_ms = std.time.milliTimestamp();
+    const transition_ts = now_ms + 1;
+    {
+        var q = try db_ctx.conn.query(
+            "INSERT INTO runs (run_id, state, updated_at) VALUES ($1, 'SPEC_QUEUED', $2)",
+            .{ "run-retry", now_ms },
+        );
+        q.deinit();
+    }
+    {
+        var q = try db_ctx.conn.query(
+            "INSERT INTO run_transitions (run_id, reason_code, ts) VALUES ($1, 'MANUAL_RETRY', $2)",
+            .{ "run-retry", transition_ts },
+        );
+        q.deinit();
+    }
+
+    compensateRetryQueueFailure(db_ctx.conn, "run-retry", "RUN_FAILED", transition_ts);
+
+    {
+        var q = try db_ctx.conn.query("SELECT state FROM runs WHERE run_id = $1", .{"run-retry"});
+        defer q.deinit();
+        const row = (q.next() catch null) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("RUN_FAILED", row.get([]const u8, 0) catch "");
+    }
+    {
+        var q = try db_ctx.conn.query(
+            "SELECT COUNT(*)::BIGINT FROM run_transitions WHERE run_id = $1 AND reason_code = 'MANUAL_RETRY' AND ts = $2",
+            .{ "run-retry", transition_ts },
+        );
+        defer q.deinit();
+        const row = (q.next() catch null) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(i64, 0), row.get(i64, 0) catch -1);
+    }
 }
 
 // ── POST /v1/workspaces/:workspace_id:pause ───────────────────────────────
