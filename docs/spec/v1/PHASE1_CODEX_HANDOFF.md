@@ -166,6 +166,14 @@ Create `ArenaAllocator` at start of `executeRun()`, `defer arena.deinit()`. Pass
 - Worker now records agent call durations and end-to-end run wall time into histogram buckets.
 - Remaining: trace/correlation propagation (`request_id`/`run_id`) across all telemetry surfaces.
 
+### ⚠️ PARTIAL: 1.16 Readiness threshold gating (Dimension 18)
+
+**File:** `src/config/runtime.zig` + `src/http/handler.zig` + `src/main.zig`
+
+- Added optional readiness thresholds: `READY_MAX_QUEUE_DEPTH`, `READY_MAX_QUEUE_AGE_MS`.
+- `/readyz` now returns `503` when queue depth/age breaches configured limits (in addition to DB/worker checks).
+- Remaining: migration/dependency-aware readiness checks beyond queue/worker/database signals.
+
 ---
 
 ## ✅ DONE: Step 1 (parallel) — M3_000 Secrets + Schema Separation
@@ -506,6 +514,8 @@ WORKER_CONCURRENCY=1
 LOG_LEVEL=info
 RATE_LIMIT_CAPACITY=30
 RATE_LIMIT_REFILL_PER_SEC=5.0
+READY_MAX_QUEUE_DEPTH=                       # Optional readiness threshold; 503 when queue depth exceeds this value
+READY_MAX_QUEUE_AGE_MS=                      # Optional readiness threshold; 503 when oldest queued age exceeds this value
 
 # Git
 GIT_CACHE_ROOT=/tmp/zombie-git-cache
