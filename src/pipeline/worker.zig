@@ -208,8 +208,18 @@ fn processNextRun(
         }
 
         const classified = err_classify.classify(err, null);
-        log.err("run failed run_id={s}: {}", .{ run_id, err });
-        _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, classified.reason_code, @errorName(err)) catch {};
+        var note_buf: [192]u8 = undefined;
+        const note = std.fmt.bufPrint(&note_buf, "class={s} err={s}", .{
+            @tagName(classified.class),
+            @errorName(err),
+        }) catch @errorName(err);
+        log.err("run failed run_id={s} class={s} retryable={} err={s}", .{
+            run_id,
+            @tagName(classified.class),
+            classified.retryable,
+            @errorName(err),
+        });
+        _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, classified.reason_code, note) catch {};
     };
     return .worked;
 }

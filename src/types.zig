@@ -72,6 +72,8 @@ pub const ReasonCode = enum {
     WORKSPACE_PAUSED,
     AGENT_TIMEOUT,
     AGENT_CRASH,
+    AUTH_FAILED,
+    RATE_LIMITED,
     MISSING_TESTS,
     SPEC_MISMATCH,
 
