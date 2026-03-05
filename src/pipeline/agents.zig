@@ -30,19 +30,20 @@ pub const AgentResult = struct {
 /// duration, and token count. Peak memory is N/A for M1.
 pub fn emitNullclawRunEvent(
     run_id: []const u8,
+    request_id: []const u8,
     attempt: u32,
     actor: types.Actor,
     result: AgentResult,
 ) void {
     log.info(
-        "nullclaw_run event_type=nullclaw_run run_id={s} attempt={d} actor={s} exit_ok={} tokens={d} wall_seconds={d} peak_memory_kb=N/A",
-        .{ run_id, attempt, actor.label(), result.exit_ok, result.token_count, result.wall_seconds },
+        "nullclaw_run event_type=nullclaw_run run_id={s} request_id={s} attempt={d} actor={s} exit_ok={} tokens={d} wall_seconds={d} peak_memory_kb=N/A",
+        .{ run_id, request_id, attempt, actor.label(), result.exit_ok, result.token_count, result.wall_seconds },
     );
     var detail_buf: [192]u8 = undefined;
     const detail = std.fmt.bufPrint(
         &detail_buf,
-        "attempt={d} actor={s} exit_ok={} tokens={d} wall_seconds={d}",
-        .{ attempt, actor.label(), result.exit_ok, result.token_count, result.wall_seconds },
+        "request_id={s} attempt={d} actor={s} exit_ok={} tokens={d} wall_seconds={d}",
+        .{ request_id, attempt, actor.label(), result.exit_ok, result.token_count, result.wall_seconds },
     ) catch "nullclaw_run";
     events.emit("nullclaw_run", run_id, detail);
 }

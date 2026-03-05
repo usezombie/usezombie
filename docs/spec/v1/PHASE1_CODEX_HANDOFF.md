@@ -148,7 +148,7 @@ Create `ArenaAllocator` at start of `executeRun()`, `defer arena.deinit()`. Pass
 
 - `src/main.zig`: logger now emits structured key/value lines (`ts_ms`, `level`, `scope`, JSON-safe `msg`) under runtime `LOG_LEVEL`.
 - `src/pipeline/agents.zig`: NullClaw observer is now env-selectable via `NULLCLAW_OBSERVER=log|noop|verbose` (default `log`) instead of hardcoded `NoopObserver`.
-- Remaining: correlation ID propagation across all layers and durable sink policy (`MultiObserver`/collector).
+- Remaining: correlation model normalization across all event types and durable sink policy (`MultiObserver`/collector).
 
 ### ⚠️ PARTIAL: 1.14 Minimal event bus runtime (Dimension 4)
 
@@ -164,7 +164,16 @@ Create `ArenaAllocator` at start of `executeRun()`, `defer arena.deinit()`. Pass
 
 - Added Prometheus histogram-style series for `zombie_agent_duration_seconds` and `zombie_run_total_wall_seconds`.
 - Worker now records agent call durations and end-to-end run wall time into histogram buckets.
-- Remaining: trace/correlation propagation (`request_id`/`run_id`) across all telemetry surfaces.
+- Remaining: trace/span exporter integration and unified context model across all telemetry surfaces.
+
+### ⚠️ PARTIAL: 1.17 Request correlation propagation (Dimension 19)
+
+**File:** `schema/003_request_correlation.sql` + `src/http/handler.zig` + `src/pipeline/worker.zig` + `src/pipeline/agents.zig`
+
+- Added `runs.request_id` (migration + index) so API correlation survives into worker execution.
+- `handleStartRun` now persists request correlation id, and retry re-queue refreshes it.
+- Worker/agent lifecycle events now include `request_id` alongside `run_id`.
+- Remaining: normalize correlation contract for state/policy events and tracing backends.
 
 ### ⚠️ PARTIAL: 1.16 Readiness threshold gating (Dimension 18)
 
