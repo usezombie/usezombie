@@ -3,11 +3,14 @@
 const std = @import("std");
 const backoff = @import("backoff.zig");
 const classifier = @import("error_classify.zig");
+const metrics = @import("../observability/metrics.zig");
+const log = std.log.scoped(.reliable);
 
 pub const RetryOptions = struct {
     max_retries: u32 = 2,
     base_delay_ms: u64 = 500,
     max_delay_ms: u64 = 30_000,
+    operation_name: ?[]const u8 = null,
 };
 
 pub fn call(
@@ -39,8 +42,22 @@ pub fn callWithDetail(
                 return err;
             }
 
-            const delay_ms = classified.retry_after_ms orelse
+            const retry_after_hint = classified.retry_after_ms;
+            const delay_ms = retry_after_hint orelse
                 backoff.expBackoffJitter(attempt, opts.base_delay_ms, opts.max_delay_ms);
+
+            metrics.incExternalRetry(classified.class);
+            metrics.addBackoffWaitMs(delay_ms);
+            if (retry_after_hint != null) metrics.incRetryAfterHintsApplied();
+
+            log.warn("retrying external call op={s} class={s} attempt={d}/{d} delay_ms={d} retry_after={}", .{
+                opts.operation_name orelse "external_call",
+                @tagName(classified.class),
+                attempt + 1,
+                opts.max_retries,
+                delay_ms,
+                retry_after_hint != null,
+            });
 
             std.Thread.sleep(delay_ms * std.time.ns_per_ms);
             attempt += 1;
@@ -86,5 +103,39 @@ test "reliable call with detail respects retry-after classification path" {
     }.detail, .{ .max_retries = 3, .base_delay_ms = 1, .max_delay_ms = 2 });
 
     try std.testing.expectEqual(@as(i32, 7), result);
+    try std.testing.expectEqual(@as(u32, 3), Ctx.calls);
+}
+
+test "reliable call does not retry non-retryable classified failures" {
+    const Ctx = struct {
+        var calls: u32 = 0;
+    };
+
+    try std.testing.expectError(error.MissingConfig, callWithDetail(i32, {}, struct {
+        fn op(_: @TypeOf({}), _: u32) !i32 {
+            Ctx.calls += 1;
+            return error.MissingConfig;
+        }
+    }.op, struct {
+        fn detail(_: @TypeOf({}), _: anyerror) ?[]const u8 {
+            return null;
+        }
+    }.detail, .{ .max_retries = 3, .base_delay_ms = 1, .max_delay_ms = 2 }));
+
+    try std.testing.expectEqual(@as(u32, 1), Ctx.calls);
+}
+
+test "integration: reliable call retries until max_retries then returns error" {
+    const Ctx = struct {
+        var calls: u32 = 0;
+    };
+
+    try std.testing.expectError(error.CommandTimedOut, call(i32, {}, struct {
+        fn op(_: @TypeOf({}), _: u32) !i32 {
+            Ctx.calls += 1;
+            return error.CommandTimedOut;
+        }
+    }.op, .{ .max_retries = 2, .base_delay_ms = 1, .max_delay_ms = 2 }));
+
     try std.testing.expectEqual(@as(u32, 3), Ctx.calls);
 }
