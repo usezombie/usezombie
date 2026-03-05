@@ -3,40 +3,37 @@
 
 const std = @import("std");
 
+pub const ROLE_ECHO = "echo";
+pub const ROLE_SCOUT = "scout";
+pub const ROLE_WARDEN = "warden";
+
+pub const STAGE_PLAN = "plan";
+pub const STAGE_IMPLEMENT = "implement";
+pub const STAGE_VERIFY = "verify";
+
+pub const TRANSITION_DONE = "done";
+pub const TRANSITION_RETRY = "retry";
+pub const TRANSITION_BLOCKED = "blocked";
+
 pub const TopologyError = error{
     InvalidProfile,
     MissingGateStage,
     GateStageMustBeLast,
-    GateRoleMustBeWarden,
-    FirstStageMustBeEcho,
-    UnknownRole,
+    GateAdapterMustBeWarden,
+    FirstStageAdapterMustBeEcho,
     DuplicateStageId,
-};
-
-pub const StageRole = enum {
-    echo,
-    scout,
-    warden,
-
-    pub fn parse(raw: []const u8) ?StageRole {
-        if (std.ascii.eqlIgnoreCase(raw, "echo")) return .echo;
-        if (std.ascii.eqlIgnoreCase(raw, "scout")) return .scout;
-        if (std.ascii.eqlIgnoreCase(raw, "warden")) return .warden;
-        return null;
-    }
-
-    pub fn label(self: StageRole) []const u8 {
-        return @tagName(self);
-    }
+    InvalidTransitionTarget,
 };
 
 pub const Stage = struct {
     stage_id: []u8,
     role_id: []u8,
-    role: StageRole,
+    adapter_id: []u8,
     artifact_name: []u8,
     commit_message: []u8,
     is_gate: bool,
+    on_pass: ?[]u8,
+    on_fail: ?[]u8,
 };
 
 pub const Profile = struct {
@@ -49,8 +46,11 @@ pub const Profile = struct {
         for (self.stages) |stage| {
             self.alloc.free(stage.stage_id);
             self.alloc.free(stage.role_id);
+            self.alloc.free(stage.adapter_id);
             self.alloc.free(stage.artifact_name);
             self.alloc.free(stage.commit_message);
+            if (stage.on_pass) |value| self.alloc.free(value);
+            if (stage.on_fail) |value| self.alloc.free(value);
         }
         self.alloc.free(self.stages);
     }
@@ -62,14 +62,24 @@ pub const Profile = struct {
     pub fn buildStages(self: *const Profile) []const Stage {
         return self.stages[1 .. self.stages.len - 1];
     }
+
+    pub fn indexOfStage(self: *const Profile, stage_id: []const u8) ?usize {
+        for (self.stages, 0..) |stage, idx| {
+            if (std.mem.eql(u8, stage.stage_id, stage_id)) return idx;
+        }
+        return null;
+    }
 };
 
 const StageDoc = struct {
     stage_id: []const u8,
     role: []const u8,
+    adapter: ?[]const u8 = null,
     artifact_name: ?[]const u8 = null,
     commit_message: ?[]const u8 = null,
     gate: ?bool = null,
+    on_pass: ?[]const u8 = null,
+    on_fail: ?[]const u8 = null,
 };
 
 const ProfileDoc = struct {
@@ -97,28 +107,34 @@ pub fn defaultProfile(alloc: std.mem.Allocator) !Profile {
         .profile_id = try alloc.dupe(u8, "default-v1"),
         .stages = try alloc.dupe(Stage, &[_]Stage{
             .{
-                .stage_id = try alloc.dupe(u8, "plan"),
-                .role_id = try alloc.dupe(u8, "echo"),
-                .role = .echo,
+                .stage_id = try alloc.dupe(u8, STAGE_PLAN),
+                .role_id = try alloc.dupe(u8, ROLE_ECHO),
+                .adapter_id = try alloc.dupe(u8, ROLE_ECHO),
                 .artifact_name = try alloc.dupe(u8, "plan.json"),
                 .commit_message = try alloc.dupe(u8, "echo: add plan.json"),
                 .is_gate = false,
+                .on_pass = null,
+                .on_fail = null,
             },
             .{
-                .stage_id = try alloc.dupe(u8, "implement"),
-                .role_id = try alloc.dupe(u8, "scout"),
-                .role = .scout,
+                .stage_id = try alloc.dupe(u8, STAGE_IMPLEMENT),
+                .role_id = try alloc.dupe(u8, ROLE_SCOUT),
+                .adapter_id = try alloc.dupe(u8, ROLE_SCOUT),
                 .artifact_name = try alloc.dupe(u8, "implementation.md"),
                 .commit_message = try alloc.dupe(u8, "scout: add implementation.md"),
                 .is_gate = false,
+                .on_pass = null,
+                .on_fail = null,
             },
             .{
-                .stage_id = try alloc.dupe(u8, "verify"),
-                .role_id = try alloc.dupe(u8, "warden"),
-                .role = .warden,
+                .stage_id = try alloc.dupe(u8, STAGE_VERIFY),
+                .role_id = try alloc.dupe(u8, ROLE_WARDEN),
+                .adapter_id = try alloc.dupe(u8, ROLE_WARDEN),
                 .artifact_name = try alloc.dupe(u8, "validation.md"),
                 .commit_message = try alloc.dupe(u8, "warden: add validation.md"),
                 .is_gate = true,
+                .on_pass = try alloc.dupe(u8, TRANSITION_DONE),
+                .on_fail = try alloc.dupe(u8, TRANSITION_RETRY),
             },
         }),
         .alloc = alloc,
@@ -136,8 +152,11 @@ fn fromDoc(alloc: std.mem.Allocator, doc: ProfileDoc) !Profile {
         for (stages.items) |stage| {
             alloc.free(stage.stage_id);
             alloc.free(stage.role_id);
+            alloc.free(stage.adapter_id);
             alloc.free(stage.artifact_name);
             alloc.free(stage.commit_message);
+            if (stage.on_pass) |value| alloc.free(value);
+            if (stage.on_fail) |value| alloc.free(value);
         }
         stages.deinit(alloc);
     }
@@ -146,26 +165,19 @@ fn fromDoc(alloc: std.mem.Allocator, doc: ProfileDoc) !Profile {
     defer seen_ids.deinit();
 
     for (doc.stages, 0..) |stage_doc, idx| {
-        const role = StageRole.parse(stage_doc.role) orelse return TopologyError.UnknownRole;
-
         if (stage_doc.stage_id.len == 0) return TopologyError.InvalidProfile;
+        if (stage_doc.role.len == 0) return TopologyError.InvalidProfile;
+
         if (seen_ids.contains(stage_doc.stage_id)) return TopologyError.DuplicateStageId;
         try seen_ids.put(stage_doc.stage_id, {});
 
-        const artifact_default = switch (role) {
-            .echo => "plan.json",
-            .scout => "implementation.md",
-            .warden => "validation.md",
-        };
-        const artifact_name = try alloc.dupe(u8, stage_doc.artifact_name orelse artifact_default);
+        const adapter = stage_doc.adapter orelse stage_doc.role;
+        if (adapter.len == 0) return TopologyError.InvalidProfile;
+
+        const artifact_name = try alloc.dupe(u8, stage_doc.artifact_name orelse defaultArtifactName(adapter));
         errdefer alloc.free(artifact_name);
 
-        const commit_default = switch (role) {
-            .echo => "echo: add plan.json",
-            .scout => "scout: add implementation.md",
-            .warden => "warden: add validation.md",
-        };
-        const commit_message = try alloc.dupe(u8, stage_doc.commit_message orelse commit_default);
+        const commit_message = try alloc.dupe(u8, stage_doc.commit_message orelse defaultCommitMessage(stage_doc.role, adapter));
         errdefer alloc.free(commit_message);
 
         const is_gate = stage_doc.gate orelse (idx == doc.stages.len - 1);
@@ -173,10 +185,12 @@ fn fromDoc(alloc: std.mem.Allocator, doc: ProfileDoc) !Profile {
         try stages.append(alloc, .{
             .stage_id = try alloc.dupe(u8, stage_doc.stage_id),
             .role_id = try alloc.dupe(u8, stage_doc.role),
-            .role = role,
+            .adapter_id = try alloc.dupe(u8, adapter),
             .artifact_name = artifact_name,
             .commit_message = commit_message,
             .is_gate = is_gate,
+            .on_pass = if (stage_doc.on_pass) |target| try alloc.dupe(u8, target) else null,
+            .on_fail = if (stage_doc.on_fail) |target| try alloc.dupe(u8, target) else null,
         });
     }
 
@@ -192,9 +206,24 @@ fn fromDoc(alloc: std.mem.Allocator, doc: ProfileDoc) !Profile {
     };
 }
 
+fn defaultArtifactName(adapter: []const u8) []const u8 {
+    if (std.ascii.eqlIgnoreCase(adapter, ROLE_ECHO)) return "plan.json";
+    if (std.ascii.eqlIgnoreCase(adapter, ROLE_SCOUT)) return "implementation.md";
+    if (std.ascii.eqlIgnoreCase(adapter, ROLE_WARDEN)) return "validation.md";
+    return "output.md";
+}
+
+fn defaultCommitMessage(role_id: []const u8, adapter: []const u8) []const u8 {
+    if (std.ascii.eqlIgnoreCase(adapter, ROLE_ECHO)) return "echo: add plan.json";
+    if (std.ascii.eqlIgnoreCase(adapter, ROLE_SCOUT)) return "scout: add implementation.md";
+    if (std.ascii.eqlIgnoreCase(adapter, ROLE_WARDEN)) return "warden: add validation.md";
+    _ = role_id;
+    return "agent: add output.md";
+}
+
 fn validateProfile(stages: []const Stage) !void {
     if (stages.len < 3) return TopologyError.InvalidProfile;
-    if (stages[0].role != .echo) return TopologyError.FirstStageMustBeEcho;
+    if (!std.ascii.eqlIgnoreCase(stages[0].adapter_id, ROLE_ECHO)) return TopologyError.FirstStageAdapterMustBeEcho;
 
     var gate_count: usize = 0;
     var gate_index: usize = 0;
@@ -207,25 +236,53 @@ fn validateProfile(stages: []const Stage) !void {
 
     if (gate_count != 1) return TopologyError.MissingGateStage;
     if (gate_index != stages.len - 1) return TopologyError.GateStageMustBeLast;
-    if (stages[gate_index].role != .warden) return TopologyError.GateRoleMustBeWarden;
+    if (!std.ascii.eqlIgnoreCase(stages[gate_index].adapter_id, ROLE_WARDEN)) return TopologyError.GateAdapterMustBeWarden;
+
+    for (stages) |stage| {
+        if (stage.on_pass) |target| {
+            try validateTransitionTarget(stages, target);
+        }
+        if (stage.on_fail) |target| {
+            try validateTransitionTarget(stages, target);
+        }
+    }
 }
 
-test "parse role supports known values" {
-    try std.testing.expectEqual(@as(?StageRole, .echo), StageRole.parse("echo"));
-    try std.testing.expectEqual(@as(?StageRole, .scout), StageRole.parse("SCOUT"));
-    try std.testing.expectEqual(@as(?StageRole, .warden), StageRole.parse("warden"));
-    try std.testing.expectEqual(@as(?StageRole, null), StageRole.parse("security"));
+fn validateTransitionTarget(stages: []const Stage, target: []const u8) !void {
+    if (std.ascii.eqlIgnoreCase(target, TRANSITION_DONE)) return;
+    if (std.ascii.eqlIgnoreCase(target, TRANSITION_RETRY)) return;
+    if (std.ascii.eqlIgnoreCase(target, TRANSITION_BLOCKED)) return;
+
+    for (stages) |stage| {
+        if (std.mem.eql(u8, stage.stage_id, target)) return;
+    }
+
+    return TopologyError.InvalidTransitionTarget;
 }
 
-test "integration: custom profile with extra stage is accepted" {
+test "default profile preserves v1 flow" {
+    var profile = try defaultProfile(std.testing.allocator);
+    defer profile.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), profile.stages.len);
+    try std.testing.expectEqualStrings(STAGE_PLAN, profile.stages[0].stage_id);
+    try std.testing.expectEqualStrings(ROLE_ECHO, profile.stages[0].adapter_id);
+    try std.testing.expectEqualStrings(STAGE_IMPLEMENT, profile.stages[1].stage_id);
+    try std.testing.expectEqualStrings(ROLE_SCOUT, profile.stages[1].adapter_id);
+    try std.testing.expectEqualStrings(STAGE_VERIFY, profile.stages[2].stage_id);
+    try std.testing.expectEqualStrings(ROLE_WARDEN, profile.stages[2].adapter_id);
+    try std.testing.expectEqualStrings(TRANSITION_DONE, profile.stages[2].on_pass.?);
+    try std.testing.expectEqualStrings(TRANSITION_RETRY, profile.stages[2].on_fail.?);
+}
+
+test "integration: custom profile with non built-in role and built-in adapter is accepted" {
     const alloc = std.testing.allocator;
     const doc = ProfileDoc{
         .profile_id = "custom-profile",
         .stages = &[_]StageDoc{
             .{ .stage_id = "plan", .role = "echo" },
-            .{ .stage_id = "patch-a", .role = "scout", .artifact_name = "implementation-a.md" },
-            .{ .stage_id = "patch-b", .role = "scout", .artifact_name = "implementation-b.md" },
-            .{ .stage_id = "verify", .role = "warden", .gate = true },
+            .{ .stage_id = "security-review", .role = "security", .adapter = "scout" },
+            .{ .stage_id = "verify", .role = "warden", .gate = true, .on_pass = "done", .on_fail = "retry" },
         },
     };
 
@@ -233,22 +290,35 @@ test "integration: custom profile with extra stage is accepted" {
     defer profile.deinit();
 
     try std.testing.expectEqualStrings("custom-profile", profile.profile_id);
-    try std.testing.expectEqual(@as(usize, 4), profile.stages.len);
-    try std.testing.expectEqualStrings("plan", profile.stages[0].stage_id);
-    try std.testing.expectEqual(StageRole.warden, profile.gateStage().role);
-    try std.testing.expectEqual(@as(usize, 2), profile.buildStages().len);
+    try std.testing.expectEqual(@as(usize, 3), profile.stages.len);
+    try std.testing.expectEqualStrings("security", profile.stages[1].role_id);
+    try std.testing.expectEqualStrings("scout", profile.stages[1].adapter_id);
 }
 
-test "profile requires warden gate as final stage" {
+test "integration: stage transitions validate on_pass/on_fail targets" {
+    const alloc = std.testing.allocator;
+    const bad = ProfileDoc{
+        .profile_id = "bad-transition",
+        .stages = &[_]StageDoc{
+            .{ .stage_id = "plan", .role = "echo" },
+            .{ .stage_id = "implement", .role = "scout", .on_pass = "missing" },
+            .{ .stage_id = "verify", .role = "warden", .gate = true },
+        },
+    };
+
+    try std.testing.expectError(TopologyError.InvalidTransitionTarget, fromDoc(alloc, bad));
+}
+
+test "profile requires final gate adapter to be warden" {
     const alloc = std.testing.allocator;
     const bad = ProfileDoc{
         .profile_id = "bad",
         .stages = &[_]StageDoc{
             .{ .stage_id = "plan", .role = "echo" },
-            .{ .stage_id = "verify", .role = "warden", .gate = true },
-            .{ .stage_id = "patch", .role = "scout" },
+            .{ .stage_id = "implement", .role = "scout" },
+            .{ .stage_id = "verify", .role = "reviewer", .adapter = "scout", .gate = true },
         },
     };
 
-    try std.testing.expectError(TopologyError.GateStageMustBeLast, fromDoc(alloc, bad));
+    try std.testing.expectError(TopologyError.GateAdapterMustBeWarden, fromDoc(alloc, bad));
 }
