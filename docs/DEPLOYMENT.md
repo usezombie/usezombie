@@ -68,6 +68,11 @@ Railway selected for:
 5. Configure separate Redis credentials for API (`api_user`) and worker (`worker_user`).
 6. Store all secrets in environment-specific vault entries (Proton Pass: `CLW_{LOCAL,DEV,PROD}`).
 
+Vault ownership and scope:
+- Runtime vault is `vault.secrets` inside UseZombie Postgres (created by migrations, maintained by UseZombie).
+- Proton Pass stores operator environment secrets; it is not the runtime `vault.secrets` data plane.
+- Current v1 callback implementation runs inside API process. If `/v1/github/callback` writes `github_app_installation_id`, the API DB credential must have vault write access for this path (or callback must be split to a dedicated `callback_accessor` process).
+
 ### 2.3 Redis setup
 
 1. Create Redis stream and consumer group:
@@ -173,7 +178,7 @@ Deploy in sequence.
 1. Provision Postgres 18.2 database for current environment.
 2. Provision Redis 7 with TLS enabled.
 3. Create Postgres roles (`api_accessor`, `worker_accessor`, `callback_accessor`) with grants per M3_000.
-4. Apply DB migrations (`001_initial.sql`, `002_vault_schema.sql`).
+4. Apply all DB migrations in `schema/` (currently `001_initial.sql` through `005_side_effect_outbox.sql`).
 5. Create Redis stream and consumer group. Configure Redis ACLs per section 2.3.
 
 ### Step 3: Authentication (Clerk)
@@ -181,6 +186,7 @@ Deploy in sequence.
 1. Configure Clerk application with device flow (CLI) and JWT verification (API).
 2. Set environment variables: `CLERK_SECRET_KEY`, `CLERK_JWKS_URL`.
 3. Configure GitHub App callback URL: `https://api.usezombie.com/v1/github/callback`.
+4. Canonical auth/install/runtime token flow lives in `docs/USECASE.md` section `0. GitHub Auth + Installation + Runtime Token Flow`.
 
 ### Step 4: Control-plane API (`zombied serve`)
 
@@ -190,7 +196,9 @@ Deploy in sequence.
    - `REDIS_URL_API`
    - `CLERK_SECRET_KEY`
    - `CLERK_JWKS_URL`
+   - `ENCRYPTION_MASTER_KEY`
    - `GITHUB_APP_ID`
+   - `GITHUB_APP_PRIVATE_KEY`
    - `GITHUB_CLIENT_ID`
    - `GITHUB_CLIENT_SECRET`
 3. Verify `/healthz` and `/readyz` endpoints.

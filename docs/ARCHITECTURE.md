@@ -164,6 +164,12 @@ Worker claims run from Redis
 | `worker_accessor` | SELECT, INSERT, UPDATE | SELECT, INSERT, UPDATE |
 | `callback_accessor` | No access | SELECT, INSERT, UPDATE |
 
+Implementation note (Mar 05, 2026):
+- Target model is strict separation above.
+- Current v1 callback path (`/v1/github/callback`) executes in API process; deploy must either:
+  1. route callback handling through a process using `DATABASE_URL_CALLBACK` (`callback_accessor`), or
+  2. grant the API DB credential minimal vault write access for `github_app_installation_id` until callback role split is completed.
+
 ### Redis (ACLs)
 
 - API user: XADD only (enqueue).
@@ -178,20 +184,8 @@ Worker claims run from Redis
 
 #### GitHub App — Implementation Detail
 
-Operator setup:
-1. Register UseZombie as a GitHub App with callback URL `https://api.usezombie.com/v1/github/callback`.
-2. Store `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` in vault-managed env.
-
-Per-workspace install:
-1. Customer authorizes the app.
-2. GitHub redirects to `/v1/github/callback?installation_id=<id>&state=<workspace_id>`.
-3. Callback handler upserts workspace metadata and stores `github_app_installation_id` in `vault.secrets`.
-
-Per-run token flow:
-1. Worker loads installation id from `vault.secrets`.
-2. Worker generates a short-lived GitHub App JWT (`RS256`, signed with `GITHUB_APP_PRIVATE_KEY`).
-3. Worker exchanges JWT for installation access token via GitHub REST API.
-4. Token is used for git push and PR creation, cached in memory, then discarded.
+Moved to [`docs/USECASE.md`](./USECASE.md) under:
+`0. GitHub Auth + Installation + Runtime Token Flow`.
 
 ## Redis Usage Contract
 
