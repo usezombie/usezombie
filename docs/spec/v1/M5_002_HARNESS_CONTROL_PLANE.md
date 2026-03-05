@@ -193,7 +193,7 @@ Prevent cross-tenant profile leakage and enforce per-tenant policy.
 
 **Dimensions:**
 - 6.1 DONE Tenant/workspace scoping on all profile APIs and queries
-- 6.2 PENDING Skill allowlist and quotas per workspace
+- 6.2 PENDING Skill allowlist and quotas per workspace (policy source-of-truth defined in M5_003)
 - 6.3 DONE Immutable audit history for source, compile result, and activation events
 - 6.4 DONE Run-level snapshot pinning (run executes against activated version at start)
 - 6.5 DONE Host vs sandbox env separation for skill secrets (OpenClaw model)
