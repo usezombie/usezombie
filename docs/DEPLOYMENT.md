@@ -7,6 +7,37 @@ Status: Active v1 deployment contract
 
 Deploy a CLI-first UseZombie control plane where API and worker roles are deterministic, Redis-backed, and secure by default. v1 uses NullClaw built-in sandbox and hardened git CLI. v2 adds Firecracker isolation and libgit2.
 
+## 0. Control-Plane Hosting Decision
+
+**Decision Date:** Mar 5, 2026  
+**Decision:** Use **Railway.app** for `zombied` control-plane Docker deployment  
+**Status:** Approved for v1
+
+### Rationale
+
+| Platform | Small Workload (1 vCPU, 1GB) | Medium Workload | Scaling Model |
+|----------|------------------------------|-----------------|---------------|
+| **Railway** ⭐ | ~$5-15/mo | ~$30-60/mo | Auto-scale to zero, pay-per-second |
+| Fly.io | ~$8-13/mo | ~$40-80/mo | Per-second billing, 40% discount with reservations |
+| Render | $0-7/mo | $25-85/mo | Fixed tiers, instances sleep on free tier |
+
+Railway selected for:
+1. **Best cost efficiency** for variable control-plane workloads (scales to zero when idle)
+2. **True auto-scaling** without manual tier upgrades
+3. **Superior DX** with modern dashboard and instant Git/Docker deploys
+4. **$5 free trial** then only $1/month base (Hobby plan)
+
+### Trade-offs
+- Railway: Best for variable workloads, less mature than Fly.io
+- Fly.io: Better for global edge deployment (35+ regions)
+- Render: Free tier available but unsuitable for always-on control plane
+
+### DNS Configuration
+
+| Record | Type | Target |
+|--------|------|--------|
+| `api.usezombie.com` | CNAME | Railway (zombied API) |
+
 ## 1. Prerequisites
 
 - `zig` 0.15.2+, `git`, `curl`, `jq`, `gh` installed
@@ -56,7 +87,7 @@ Deploy a CLI-first UseZombie control plane where API and worker roles are determ
 |---|---|---|
 | `usezombie.com` | CNAME | Vercel (static website) |
 | `usezombie.sh` | CNAME | Vercel (static website) |
-| `api.usezombie.com` | CNAME | Railway/Fly/Render (zombied API) |
+| `api.usezombie.com` | CNAME | Railway (zombied API) — see Section 0 for decision rationale |
 | `docs.usezombie.com` | CNAME | Mintlify |
 | `app.usezombie.com` | — | v2 (not configured for v1) |
 
@@ -95,7 +126,7 @@ Components:
 - Cache: `usezombie-dev` (Upstash Redis, TLS required)
 - Clerk: development instance (`clerk.dev.usezombie.com`)
 - Worker nodes: OVH VM/bare-metal low-cost pool
-- Control-plane host: Railway/Fly/Render (cost-optimized)
+- Control-plane host: Railway (see Section 0 for decision rationale)
 - PostHog project: development
 
 Development expectations:
@@ -113,7 +144,7 @@ Components:
 - Database: `usezombie` (Postgres 18.2 — production instance)
 - Cache: `usezombie-cache` (Upstash Redis, TLS required)
 - Clerk: production instance (`clerk.usezombie.com`)
-- Control-plane host: Railway/Fly/Render (cost + reliability tradeoff)
+- Control-plane host: Railway (see Section 0 for decision rationale)
 - Worker nodes: OVH bare-metal/discounted server pool (M2+ class)
 - PostHog project: production
 - Docs: `docs.usezombie.com` (Mintlify)
