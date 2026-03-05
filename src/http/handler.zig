@@ -13,6 +13,8 @@ const secrets = @import("../secrets/crypto.zig");
 const metrics = @import("../observability/metrics.zig");
 const obs_log = @import("../observability/logging.zig");
 const log = std.log.scoped(.http);
+const queue_unavailable_code = "QUEUE_UNAVAILABLE";
+const queue_unavailable_message = "Queue unavailable";
 
 // ── Handler context (shared across all handlers) ──────────────────────────
 
@@ -414,7 +416,11 @@ pub fn handleStartRun(ctx: *Context, r: zap.Request) void {
                 final_run_id,
                 req.workspace_id,
             });
-            errorResponse(r, .service_unavailable, "QUEUE_UNAVAILABLE", "Queue unavailable", req_id);
+            _ = conn.query(
+                "DELETE FROM runs WHERE run_id = $1 AND state = 'SPEC_QUEUED'",
+                .{final_run_id},
+            ) catch {};
+            errorResponse(r, .service_unavailable, queue_unavailable_code, queue_unavailable_message, req_id);
             return;
         };
         metrics.incRunsCreated();
@@ -685,7 +691,15 @@ pub fn handleRetryRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
     log.info("run retried run_id={s} reason={s}", .{ run_id, parsed.value.reason });
     ctx.queue.xaddRun(run_id, current.attempt + 1, workspace_id_for_policy) catch |err| {
         obs_log.logWarnErr(.http, err, "queue enqueue failed for retry run_id={s}", .{run_id});
-        errorResponse(r, .service_unavailable, "QUEUE_UNAVAILABLE", "Queue unavailable", req_id);
+        _ = conn.query(
+            "UPDATE runs SET state = $1, updated_at = $2 WHERE run_id = $3",
+            .{ current.state.label(), std.time.milliTimestamp(), run_id },
+        ) catch {};
+        _ = conn.query(
+            "DELETE FROM run_transitions WHERE run_id = $1 AND reason_code = 'MANUAL_RETRY' AND ts = $2",
+            .{ run_id, now_ms },
+        ) catch {};
+        errorResponse(r, .service_unavailable, queue_unavailable_code, queue_unavailable_message, req_id);
         return;
     };
 
