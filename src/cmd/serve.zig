@@ -80,8 +80,34 @@ pub fn run(alloc: std.mem.Allocator) !void {
     };
     defer worker_pool.deinit();
 
-    common.runCanonicalMigrations(api_pool) catch |err| {
-        std.debug.print("fatal: schema migration failed: {}\n", .{err});
+    const migrate_on_start = common.migrateOnStartEnabledFromEnv(alloc) catch |err| {
+        std.debug.print(
+            "fatal: invalid MIGRATE_ON_START value: {} (use 0/1/false/true)\n",
+            .{err},
+        );
+        std.process.exit(1);
+    };
+
+    common.enforceServeMigrationSafety(api_pool, migrate_on_start) catch |err| {
+        switch (err) {
+            common.MigrationGuardError.MigrationPending => std.debug.print(
+                "fatal: pending schema migrations; run `zombied migrate` first or set MIGRATE_ON_START=1 for controlled auto-migrate\n",
+                .{},
+            ),
+            common.MigrationGuardError.MigrationFailed => std.debug.print(
+                "fatal: unsafe migration failure state detected; inspect schema_migration_failures and rerun `zombied migrate` before serve restart\n",
+                .{},
+            ),
+            common.MigrationGuardError.MigrationSchemaAhead => std.debug.print(
+                "fatal: database schema version is ahead of this binary; deploy matching binary before serve startup\n",
+                .{},
+            ),
+            common.MigrationGuardError.MigrationLockUnavailable => std.debug.print(
+                "fatal: migration lock unavailable (another node migrating); restart serve after migration finishes\n",
+                .{},
+            ),
+            else => std.debug.print("fatal: schema migration safety check failed: {}\n", .{err}),
+        }
         std.process.exit(1);
     };
 
@@ -208,4 +234,13 @@ test "integration: signalWatcher stops worker and invokes server stop hook" {
 
     try std.testing.expect(!ws.running.load(.acquire));
     try std.testing.expectEqual(@as(u32, 1), stop_calls.load(.acquire));
+}
+
+test "integration: migrate_on_start env parser accepts deterministic values" {
+    const alloc = std.testing.allocator;
+    try std.posix.setenv("MIGRATE_ON_START", "1", true);
+    try std.testing.expect(try common.migrateOnStartEnabledFromEnv(alloc));
+    try std.posix.setenv("MIGRATE_ON_START", "0", true);
+    try std.testing.expect(!try common.migrateOnStartEnabledFromEnv(alloc));
+    try std.posix.unsetenv("MIGRATE_ON_START");
 }
