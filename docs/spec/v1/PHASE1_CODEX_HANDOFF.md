@@ -439,6 +439,9 @@ CLERK_PUBLISHABLE_KEY=
 NULLCLAW_API_KEY=                            # Default LLM key (or BYOK per workspace)
 AGENT_CONFIG_DIR=/app/config
 DEFAULT_MAX_ATTEMPTS=3
+LOG_LEVEL=info
+RATE_LIMIT_CAPACITY=30
+RATE_LIMIT_REFILL_PER_SEC=5.0
 
 # Git
 GIT_CACHE_ROOT=/tmp/zombie-git-cache

@@ -27,7 +27,7 @@
 | 3 | Async / API performance | **High** | Sequential single-thread worker | Multi-worker + concurrent dispatch |
 | 4 | Event bus / actor dispatch | **Medium** | Ad-hoc log lines only | Ring-buffer MPSC bus (`bus.zig`) |
 | 5 | Reliability & retry | **Critical** | `reliable_call` wrappers now cover Scout/Warden + token/push/PR (with PR detail plumbing); no outbox/circuit-breaker yet | `reliable.zig` + outbox + dead-letter |
-| 6 | Rate limiting | **High** | None | Token bucket per tenant/provider |
+| 6 | Rate limiting | **High** | Tenant token-bucket limiter added in worker; provider-level policy still missing | Token bucket per tenant/provider |
 | 7 | Backoff | **Critical** | Jittered exponential backoff added in worker loop and retry path; PR HTTP `Retry-After` is now consumed, other paths still incomplete | Exponential + jitter + Retry-After parsing |
 | 8 | Logging (.env / agent-friendly) | **Medium** | Runtime `LOG_LEVEL` supported; logs still unstructured text | Runtime `LOG_LEVEL`; key=value structured logs |
 | 9 | Logging on errors | **High** | Critical silent catches reduced; richer classification/context remains incomplete | Classification + context + correlation IDs |
@@ -42,7 +42,7 @@
 | 3 | ❌ Open | Still single-worker sequential execution |
 | 4 | ❌ Open | No event bus implementation yet |
 | 5 | ⚠️ Partial | `reliable_call` now wraps Scout/Warden and GitHub token/push/PR paths (with PR response detail plumbing); outbox/dead-letter and circuit breaker are still missing |
-| 6 | ❌ Open | No token bucket or tenant-level throttling |
+| 6 | ⚠️ Partial | Tenant token-bucket throttling now gates Echo/Scout/Warden calls; provider-level quotas and distributed state are still missing |
 | 7 | ⚠️ Partial | Worker loop and run retry now use exponential+jitter backoff; PR HTTP `Retry-After` is plumbed, but provider/API responses are not yet end-to-end |
 | 8 | ⚠️ Partial | Runtime `LOG_LEVEL` is implemented; structured key/value logging and observer wiring are still missing |
 | 9 | ⚠️ Partial | Critical silent catches on worker/http paths are reduced, but full classification/context consistency is still missing |
@@ -260,7 +260,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
 ---
 
 ## 6. Rate limiting
-**Status (Mar 05, 2026): ❌ Open**
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### What nullclaw does well
 - Rate limit detection + API key rotation on 429
@@ -270,8 +270,9 @@ CREATE TABLE IF NOT EXISTS outbox_events (
 
 | File | Line | Issue |
 |------|------|-------|
-| `src/pipeline/worker.zig` | 183–244 | No throttling before agent calls |
-| `src/pipeline/worker.zig` | 43 | `tenant_id` exists in RunContext but unused for limits |
+| `src/pipeline/worker.zig` | 64–116 | In-memory tenant limiter exists, but state is local to a single process (not shared across workers/hosts) |
+| `src/pipeline/worker.zig` | 415–568 | Echo/Scout/Warden are throttled per tenant, but side effects (push/PR/webhook) are not rate-limited |
+| `src/main.zig` | 163–170 | Limits are env-configurable, but there is no per-provider/per-model tuning |
 
 ### Recommendation: token bucket per tenant + provider
 
@@ -296,6 +297,11 @@ pub const TokenBucket = struct {
 ```
 
 Key buckets by `tenant_id` (and optionally `provider/model`).
+
+### Oracle review: remaining scope after this fix
+- Extend throttling to external side effects (GitHub API/webhooks) and provider-specific channels.
+- Move bucket state to shared storage (Redis/Postgres) once multi-worker or multi-host execution is enabled.
+- Add visibility metrics for throttling decisions and wait durations.
 
 ---
 
