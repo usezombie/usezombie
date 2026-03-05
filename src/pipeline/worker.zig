@@ -159,12 +159,14 @@ const TenantRateLimiter = struct {
         now_ms: i64,
     ) !*rate_limit.TokenBucket {
         var key_buf: [256]u8 = undefined;
+        var heap_key: ?[]u8 = null;
         const scoped_key = std.fmt.bufPrint(&key_buf, "{s}::{s}", .{ tenant_id, provider }) catch |err| blk: {
             if (err != error.NoSpaceLeft) return err;
-            break :blk try std.fmt.allocPrint(self.alloc, "{s}::{s}", .{ tenant_id, provider });
+            const allocated = try std.fmt.allocPrint(self.alloc, "{s}::{s}", .{ tenant_id, provider });
+            heap_key = allocated;
+            break :blk allocated;
         };
-        const using_heap_key = @intFromPtr(scoped_key.ptr) != @intFromPtr(&key_buf[0]);
-        defer if (using_heap_key) self.alloc.free(scoped_key);
+        defer if (heap_key) |k| self.alloc.free(k);
 
         if (self.buckets.getPtr(scoped_key)) |bucket| return bucket;
 
@@ -415,12 +417,12 @@ fn isSafeRelativeSpecPath(relative_spec_path: []const u8) bool {
     return true;
 }
 
-fn sideEffectKeyPush(alloc: std.mem.Allocator, branch: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(alloc, "git:push:{s}", .{branch});
+fn sideEffectKeyPush(buf: []u8, branch: []const u8) ![]const u8 {
+    return std.fmt.bufPrint(buf, "git:push:{s}", .{branch});
 }
 
-fn sideEffectKeyPrCreate(alloc: std.mem.Allocator, branch: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(alloc, "pr:create:{s}", .{branch});
+fn sideEffectKeyPrCreate(buf: []u8, branch: []const u8) ![]const u8 {
+    return std.fmt.bufPrint(buf, "pr:create:{s}", .{branch});
 }
 
 fn resolveSpecPath(
@@ -634,7 +636,8 @@ fn tryRecoverPrUrl(
         &detail,
     );
     if (existing) |pr_url| {
-        const side_effect_key = try sideEffectKeyPrCreate(run_alloc, branch);
+        var side_effect_key_buf: [192]u8 = undefined;
+        const side_effect_key = try sideEffectKeyPrCreate(&side_effect_key_buf, branch);
         try state.markSideEffectDone(conn, ctx.run_id, side_effect_key, pr_url);
         return pr_url;
     }
@@ -899,7 +902,8 @@ fn executeRun(
                 );
                 defer run_alloc.free(github_token);
 
-                const push_side_effect_key = try sideEffectKeyPush(run_alloc, branch);
+                var push_side_effect_key_buf: [192]u8 = undefined;
+                const push_side_effect_key = try sideEffectKeyPush(&push_side_effect_key_buf, branch);
                 const push_claimed = try state.claimSideEffect(conn, ctx.run_id, push_side_effect_key, branch);
                 if (push_claimed) {
                     try ensureRunActive(worker_state, deadline_ms);
@@ -917,7 +921,8 @@ fn executeRun(
                     try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key, branch);
                 }
 
-                const pr_side_effect_key = try sideEffectKeyPrCreate(run_alloc, branch);
+                var pr_side_effect_key_buf: [192]u8 = undefined;
+                const pr_side_effect_key = try sideEffectKeyPrCreate(&pr_side_effect_key_buf, branch);
                 const pr_claimed = try state.claimSideEffect(conn, ctx.run_id, pr_side_effect_key, branch);
                 if (!pr_claimed) {
                     pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
@@ -1225,14 +1230,14 @@ test "integration: rate limiter scopes by tenant and provider" {
 }
 
 test "integration: side effect key format for pr create is stable" {
-    const key = try sideEffectKeyPrCreate(std.testing.allocator, "zombie/run-r_abc");
-    defer std.testing.allocator.free(key);
+    var buf: [128]u8 = undefined;
+    const key = try sideEffectKeyPrCreate(&buf, "zombie/run-r_abc");
     try std.testing.expectEqualStrings("pr:create:zombie/run-r_abc", key);
 }
 
 test "integration: side effect key format for push is stable" {
-    const key = try sideEffectKeyPush(std.testing.allocator, "zombie/run-r_abc");
-    defer std.testing.allocator.free(key);
+    var buf: [128]u8 = undefined;
+    const key = try sideEffectKeyPush(&buf, "zombie/run-r_abc");
     try std.testing.expectEqualStrings("git:push:zombie/run-r_abc", key);
 }
 
