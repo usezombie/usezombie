@@ -98,21 +98,30 @@ const TenantRateLimiter = struct {
         self.buckets.deinit();
     }
 
-    fn acquire(self: *TenantRateLimiter, tenant_id: []const u8, cost: f64) !void {
+    fn acquire(self: *TenantRateLimiter, tenant_id: []const u8, provider: []const u8, cost: f64) !void {
         while (true) {
             const now_ms = std.time.milliTimestamp();
-            const bucket = try self.getOrCreateBucket(tenant_id, now_ms);
+            const bucket = try self.getOrCreateBucket(tenant_id, provider, now_ms);
             if (bucket.allow(now_ms, cost)) return;
 
             const wait_ms = @max(bucket.waitMsUntil(now_ms, cost), 1);
+            metrics.addRateLimitWaitMs(wait_ms);
             std.Thread.sleep(wait_ms * std.time.ns_per_ms);
         }
     }
 
-    fn getOrCreateBucket(self: *TenantRateLimiter, tenant_id: []const u8, now_ms: i64) !*rate_limit.TokenBucket {
-        if (self.buckets.getPtr(tenant_id)) |bucket| return bucket;
+    fn getOrCreateBucket(
+        self: *TenantRateLimiter,
+        tenant_id: []const u8,
+        provider: []const u8,
+        now_ms: i64,
+    ) !*rate_limit.TokenBucket {
+        const scoped_key = try std.fmt.allocPrint(self.alloc, "{s}::{s}", .{ tenant_id, provider });
+        defer self.alloc.free(scoped_key);
 
-        const key_copy = try self.alloc.dupe(u8, tenant_id);
+        if (self.buckets.getPtr(scoped_key)) |bucket| return bucket;
+
+        const key_copy = try self.alloc.dupe(u8, scoped_key);
         errdefer self.alloc.free(key_copy);
 
         try self.buckets.put(key_copy, rate_limit.TokenBucket.init(self.capacity, self.refill_per_sec, now_ms));
@@ -531,7 +540,7 @@ fn executeRun(
     const plan_binding = agents.lookupRole(plan_stage.role_id) orelse return WorkerError.InvalidPipelineRole;
 
     try ensureBeforeDeadline(deadline_ms);
-    try tenant_limiter.acquire(ctx.tenant_id, 1.0);
+    try tenant_limiter.acquire(ctx.tenant_id, plan_stage.role_id, 1.0);
     const plan_result = try reliable.call(agents.AgentResult, StageRetryCtx{
         .alloc = run_alloc,
         .binding = plan_binding,
@@ -545,6 +554,7 @@ fn executeRun(
         .max_retries = 1,
         .base_delay_ms = 1_000,
         .max_delay_ms = 8_000,
+        .operation_name = plan_stage.role_id,
     });
     metrics.incAgentEchoCalls();
     metrics.addAgentTokens(plan_result.token_count);
@@ -602,7 +612,7 @@ fn executeRun(
                 attempt,
             });
 
-            try tenant_limiter.acquire(ctx.tenant_id, 1.0);
+            try tenant_limiter.acquire(ctx.tenant_id, stage.role_id, 1.0);
             try ensureBeforeDeadline(deadline_ms);
             const result = try reliable.call(agents.AgentResult, StageRetryCtx{
                 .alloc = run_alloc,
@@ -619,6 +629,7 @@ fn executeRun(
                 .max_retries = 1,
                 .base_delay_ms = 1_000,
                 .max_delay_ms = 8_000,
+                .operation_name = stage.role_id,
             });
 
             switch (binding.actor) {
@@ -654,7 +665,7 @@ fn executeRun(
         _ = try state.transition(conn, ctx.run_id, .VERIFICATION_IN_PROGRESS, .orchestrator, .PATCH_STARTED, null);
 
         try ensureBeforeDeadline(deadline_ms);
-        try tenant_limiter.acquire(ctx.tenant_id, 1.0);
+        try tenant_limiter.acquire(ctx.tenant_id, gate_stage.role_id, 1.0);
         const gate_result = try reliable.call(agents.AgentResult, StageRetryCtx{
             .alloc = run_alloc,
             .binding = gate_binding,
@@ -669,6 +680,7 @@ fn executeRun(
             .max_retries = 1,
             .base_delay_ms = 1_000,
             .max_delay_ms = 8_000,
+            .operation_name = gate_stage.role_id,
         });
         if (gate_binding.actor == .warden) metrics.incAgentWardenCalls();
         metrics.addAgentTokens(gate_result.token_count);
@@ -716,6 +728,7 @@ fn executeRun(
                     const installation_id = try loadInstallationId(run_alloc, conn, ctx.workspace_id);
                     defer run_alloc.free(installation_id);
 
+                    try tenant_limiter.acquire(ctx.tenant_id, "github_installation_token", 1.0);
                     const github_token = try reliable.call([]u8, TokenRetryCtx{
                         .cache = token_cache,
                         .alloc = run_alloc,
@@ -724,9 +737,11 @@ fn executeRun(
                         .max_retries = 2,
                         .base_delay_ms = 500,
                         .max_delay_ms = 5_000,
+                        .operation_name = "github_installation_token",
                     });
                     defer run_alloc.free(github_token);
 
+                    try tenant_limiter.acquire(ctx.tenant_id, "github_push", 1.0);
                     try reliable.call(void, PushRetryCtx{
                         .alloc = run_alloc,
                         .wt_path = wt.path,
@@ -736,6 +751,7 @@ fn executeRun(
                         .max_retries = 2,
                         .base_delay_ms = 1_000,
                         .max_delay_ms = 10_000,
+                        .operation_name = "github_push",
                     });
 
                     const pr_title = try std.fmt.allocPrint(run_alloc, "usezombie: {s}", .{ctx.spec_id});
@@ -749,10 +765,12 @@ fn executeRun(
                         .body = gate_result.content,
                         .github_token = github_token,
                     };
+                    try tenant_limiter.acquire(ctx.tenant_id, "github_pr_create", 1.0);
                     const created_pr = try reliable.callWithDetail([]u8, &pr_retry_ctx, opCreatePr, prDetail, .{
                         .max_retries = 2,
                         .base_delay_ms = 1_000,
                         .max_delay_ms = 10_000,
+                        .operation_name = "github_pr_create",
                     });
                     pr_url = created_pr;
                     try state.markSideEffectDone(conn, ctx.run_id, side_effect_key, created_pr);
@@ -925,4 +943,21 @@ test "integration: default topology roles resolve through registry" {
     for (profile.stages) |stage| {
         try std.testing.expect(agents.lookupRole(stage.role_id) != null);
     }
+}
+
+test "integration: rate limiter scopes by tenant and provider" {
+    var limiter = TenantRateLimiter.init(std.testing.allocator, 1, 1.0);
+    defer limiter.deinit();
+
+    const now_ms = std.time.milliTimestamp();
+    const scout_bucket = try limiter.getOrCreateBucket("tenant-a", "agent_scout", now_ms);
+    const scout_bucket_again = try limiter.getOrCreateBucket("tenant-a", "agent_scout", now_ms);
+    const pr_bucket = try limiter.getOrCreateBucket("tenant-a", "github_pr_create", now_ms);
+
+    try std.testing.expect(scout_bucket == scout_bucket_again);
+    try std.testing.expect(scout_bucket != pr_bucket);
+
+    try std.testing.expect(scout_bucket.allow(now_ms, 1.0));
+    try std.testing.expect(!scout_bucket.allow(now_ms, 1.0));
+    try std.testing.expect(pr_bucket.allow(now_ms, 1.0));
 }
