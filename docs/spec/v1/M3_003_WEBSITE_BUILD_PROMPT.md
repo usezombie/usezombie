@@ -1,8 +1,8 @@
-# M2_006: Website Build Prompt (Humans + Agents, Neon Direction)
+# M3_003: Website Build Prompt (Humans + Agents, Neon Direction)
 
 Date: Mar 2, 2026 (migrated from PENDING2_006)
 Status: PENDING — M2 scope, execute after M1 control plane ships first successful PR
-Depends on: M1_000, M2_004
+Depends on: M1_000, M3_002
 
 Use this prompt in a new build/design session to produce the first production-ready Clawable website.
 
@@ -120,8 +120,8 @@ Must support bottom-up and expansion:
 
 1. Free (individual caps, 1 workspace, low concurrency)
 2. Pro (higher limits + better replay + queue priority)
-3. Team (shared workspaces + RBAC + policy + audit)
-4. Enterprise (SSO, compliance, dedicated isolation, contractual SLA)
+3. Team (shared workspaces + team access control + policy + audit)
+4. Enterprise (compliance, dedicated isolation, contractual SLA)
 
 Pricing model notes (align with `docs/GTM.md`):
 1. BYOK: users provide their own LLM API keys — Clawable never bills for tokens.
@@ -247,7 +247,7 @@ Motion:
 4. Complex animation libraries that hurt performance.
 
 ## Implementation dependency
-Website implementation starts **after** the control plane MVP ships its first successful PR. See `docs/spec/PENDING2_004_WEBSITE_EXECUTION_PLAN.md` for the same constraint.
+Website implementation starts **after** the control plane MVP ships its first successful PR. See `docs/spec/v1/M3_002_WEBSITE_EXECUTION_PLAN.md` for the same constraint.
 
 ## Notes for the next implementer
 

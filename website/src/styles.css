@@ -1,0 +1,228 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-0: #06090f;
+  --bg-1: #0a0f17;
+  --surface-0: #101722;
+  --text-primary: #e8f2ff;
+  --text-muted: #8b97a8;
+  --neon-orange: #ff5a2d;
+  --neon-orange-bright: #ff7a3d;
+  --neon-amber: #ffb020;
+  --neon-cyan: #6ee7ff;
+  --border-subtle: #1a2533;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family: "Space Grotesk", sans-serif;
+  background: radial-gradient(circle at 20% 0%, #1b120d 0%, var(--bg-0) 40%),
+    linear-gradient(180deg, var(--bg-1), var(--bg-0));
+  color: var(--text-primary);
+}
+
+a {
+  color: inherit;
+}
+
+.site-shell {
+  width: min(1120px, 92vw);
+  margin: 0 auto;
+  padding: 1.25rem 0 3rem;
+}
+
+.site-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2rem;
+}
+
+.brand-wrap {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.brand {
+  font-size: 1.45rem;
+  font-weight: 700;
+  text-decoration: none;
+  letter-spacing: 0.03em;
+}
+
+.badge {
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--neon-amber);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.mode-switch {
+  display: inline-flex;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  overflow: hidden;
+  min-height: 44px;
+}
+
+.mode-btn {
+  min-width: 88px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.mode-btn.active {
+  color: var(--bg-0);
+  background: linear-gradient(120deg, var(--neon-orange), var(--neon-amber));
+  font-weight: 700;
+}
+
+.site-nav {
+  display: flex;
+  gap: 1rem;
+}
+
+.site-nav a {
+  text-decoration: none;
+  color: var(--text-muted);
+}
+
+.site-nav a.active {
+  color: var(--text-primary);
+}
+
+.site-main {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.eyebrow {
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--neon-amber);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.8rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(1.9rem, 6vw, 3.4rem);
+  line-height: 1.05;
+}
+
+.lead {
+  color: var(--text-muted);
+  max-width: 70ch;
+}
+
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.cta {
+  min-height: 44px;
+  padding: 0.7rem 1.2rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: linear-gradient(120deg, var(--neon-orange), var(--neon-amber));
+  color: #111;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.cta.ghost {
+  background: transparent;
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.grid {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.grid.two {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.grid.four {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.card {
+  background: color-mix(in srgb, var(--surface-0) 88%, #000);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  padding: 1rem;
+  box-shadow: 0 0 28px rgb(255 90 45 / 8%);
+}
+
+.card h2 {
+  margin-top: 0;
+}
+
+.card p,
+.card li {
+  color: var(--text-muted);
+}
+
+.price {
+  color: var(--neon-orange-bright);
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.terminal {
+  margin: 0;
+  padding: 0.95rem;
+  border-radius: 12px;
+  background: #080d15;
+  border: 1px solid var(--border-subtle);
+  color: var(--neon-cyan);
+  overflow: auto;
+}
+
+code {
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.fine {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+@media (max-width: 720px) {
+  .site-header {
+    align-items: flex-start;
+  }
+
+  .site-nav {
+    width: 100%;
+    justify-content: space-between;
+  }
+}

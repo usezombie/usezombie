@@ -3,17 +3,28 @@
 
 const std = @import("std");
 const pg = @import("pg");
-const types = @import("../types.zig");
 const log = std.log.scoped(.db);
 
 pub const Pool = pg.Pool;
 pub const Conn = pg.Conn;
 pub const Row = pg.Row;
 
+pub const DbRole = enum {
+    default,
+    api,
+    worker,
+    callback,
+};
+
 pub const Config = struct {
     url: []const u8,
     pool_size: u32 = 4,
     timeout_ms: u32 = 10_000,
+};
+
+pub const Migration = struct {
+    version: i32,
+    sql: []const u8,
 };
 
 /// Parse a Postgres connection URL into pg.Pool.Opts.
@@ -69,10 +80,26 @@ pub fn parseUrl(alloc: std.mem.Allocator, url: []const u8) !pg.Pool.Opts {
     };
 }
 
-/// Initialize a pool from DATABASE_URL environment variable.
-pub fn initFromEnv(alloc: std.mem.Allocator) !*Pool {
-    const url = std.process.getEnvVarOwned(alloc, "DATABASE_URL") catch {
-        log.err("DATABASE_URL not set", .{});
+fn resolveDatabaseUrl(alloc: std.mem.Allocator, role: DbRole) ![]const u8 {
+    const primary = switch (role) {
+        .api => "DATABASE_URL_API",
+        .worker => "DATABASE_URL_WORKER",
+        .callback => "DATABASE_URL_CALLBACK",
+        .default => "DATABASE_URL",
+    };
+
+    if (std.process.getEnvVarOwned(alloc, primary)) |url| {
+        return url;
+    } else |_| {
+        if (role == .default) return error.MissingDatabaseUrl;
+        return std.process.getEnvVarOwned(alloc, "DATABASE_URL") catch error.MissingDatabaseUrl;
+    }
+}
+
+/// Initialize a pool using DATABASE_URL for the selected role.
+pub fn initFromEnvForRole(alloc: std.mem.Allocator, role: DbRole) !*Pool {
+    const url = resolveDatabaseUrl(alloc, role) catch {
+        log.err("database url not set for role={s}", .{@tagName(role)});
         return error.MissingDatabaseUrl;
     };
     defer alloc.free(url);
@@ -87,27 +114,138 @@ pub fn initFromEnv(alloc: std.mem.Allocator) !*Pool {
     defer alloc.free(host_copy);
 
     const pool = try pg.Pool.init(alloc, opts);
-    log.info("database pool initialized size=4 host={s}", .{host_copy});
+    log.info("database pool initialized role={s} size=4 host={s}", .{ @tagName(role), host_copy });
     return pool;
 }
 
-/// Execute schema migrations from the SQL file.
-pub fn runMigrations(pool: *Pool, sql: []const u8) !void {
-    var conn = try pool.acquire();
-    defer pool.release(conn);
+/// Backward-compatible default initializer.
+pub fn initFromEnv(alloc: std.mem.Allocator) !*Pool {
+    return initFromEnvForRole(alloc, .default);
+}
 
-    // Split by `;` and execute each statement
-    var it = std.mem.splitSequence(u8, sql, ";\n");
+fn ensureSchemaMigrationsTable(conn: *Conn) !void {
+    var result = try conn.query(
+        \\CREATE TABLE IF NOT EXISTS schema_migrations (
+        \\    version     INTEGER PRIMARY KEY,
+        \\    applied_at  BIGINT NOT NULL
+        \\)
+    , .{});
+    result.deinit();
+}
+
+fn isMigrationApplied(conn: *Conn, version: i32) !bool {
+    var result = try conn.query(
+        "SELECT 1 FROM schema_migrations WHERE version = $1",
+        .{version},
+    );
+    defer result.deinit();
+    return (try result.next()) != null;
+}
+
+fn applySqlStatements(conn: *Conn, sql: []const u8) !u32 {
+    var start: usize = 0;
+    var i: usize = 0;
+    var in_single_quote = false;
+    var in_dollar_quote = false;
     var count: u32 = 0;
-    while (it.next()) |stmt| {
-        const trimmed = std.mem.trim(u8, stmt, " \t\r\n");
-        if (trimmed.len == 0) continue;
-        var result = conn.query(trimmed, .{}) catch |err| {
-            log.warn("migration statement error (may be expected on re-run): {}", .{err});
+
+    while (i < sql.len) : (i += 1) {
+        const ch = sql[i];
+
+        if (!in_dollar_quote and ch == '\'') {
+            // Skip escaped single quote inside string literal.
+            if (in_single_quote and i + 1 < sql.len and sql[i + 1] == '\'') {
+                i += 1;
+                continue;
+            }
+            in_single_quote = !in_single_quote;
             continue;
-        };
+        }
+
+        if (!in_single_quote and i + 1 < sql.len and sql[i] == '$' and sql[i + 1] == '$') {
+            in_dollar_quote = !in_dollar_quote;
+            i += 1;
+            continue;
+        }
+
+        if (ch != ';' or in_single_quote or in_dollar_quote) continue;
+
+        const stmt = std.mem.trim(u8, sql[start..i], " \t\r\n");
+        if (stmt.len > 0) {
+            var result = try conn.query(stmt, .{});
+            result.deinit();
+            count += 1;
+        }
+
+        start = i + 1;
+    }
+
+    const tail = std.mem.trim(u8, sql[start..], " \t\r\n");
+    if (tail.len > 0) {
+        var result = try conn.query(tail, .{});
         result.deinit();
         count += 1;
     }
-    log.info("migrations applied statements={d}", .{count});
+
+    return count;
+}
+
+fn beginTx(conn: *Conn) !void {
+    var tx = try conn.query("BEGIN", .{});
+    tx.deinit();
+}
+
+fn commitTx(conn: *Conn) !void {
+    var tx = try conn.query("COMMIT", .{});
+    tx.deinit();
+}
+
+fn rollbackTx(conn: *Conn) void {
+    var tx = conn.query("ROLLBACK", .{}) catch return;
+    tx.deinit();
+}
+
+/// Execute versioned schema migrations, once each, in order.
+pub fn runMigrations(pool: *Pool, migrations: []const Migration) !void {
+    var conn = try pool.acquire();
+    defer pool.release(conn);
+
+    try ensureSchemaMigrationsTable(conn);
+
+    for (migrations) |migration| {
+        if (try isMigrationApplied(conn, migration.version)) {
+            continue;
+        }
+
+        try beginTx(conn);
+        errdefer rollbackTx(conn);
+
+        const statements = try applySqlStatements(conn, migration.sql);
+
+        var insert = try conn.query(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)",
+            .{ migration.version, std.time.milliTimestamp() },
+        );
+        insert.deinit();
+
+        try commitTx(conn);
+        log.info("migration applied version={d} statements={d}", .{ migration.version, statements });
+    }
+}
+
+test "parseUrl parses host, port, db, credentials" {
+    const alloc = std.testing.allocator;
+    const opts = try parseUrl(alloc, "postgres://alice:secret@localhost:5433/usezombiedb");
+    defer alloc.free(opts.connect.host.?);
+    defer alloc.free(opts.auth.username);
+    const password = opts.auth.password.?;
+    defer alloc.free(password);
+    const database = opts.auth.database.?;
+    defer alloc.free(database);
+
+    try std.testing.expectEqualStrings("localhost", opts.connect.host.?);
+    try std.testing.expectEqual(@as(u16, 5433), opts.connect.port.?);
+    try std.testing.expectEqualStrings("alice", opts.auth.username);
+    try std.testing.expectEqualStrings("secret", password);
+    try std.testing.expectEqualStrings("usezombiedb", database);
 }

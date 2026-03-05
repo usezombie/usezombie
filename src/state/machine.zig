@@ -17,13 +17,17 @@ pub const TransitionError = error{
 /// Allowed transitions (from → to). Encodes the state machine contract.
 const ALLOWED = [_][2]types.RunState{
     .{ .SPEC_QUEUED, .RUN_PLANNED },
+    .{ .RUN_PLANNED, .BLOCKED },
     .{ .RUN_PLANNED, .PATCH_IN_PROGRESS },
+    .{ .PATCH_IN_PROGRESS, .BLOCKED },
     .{ .PATCH_IN_PROGRESS, .PATCH_READY },
+    .{ .PATCH_READY, .BLOCKED },
     .{ .PATCH_READY, .VERIFICATION_IN_PROGRESS },
     .{ .VERIFICATION_IN_PROGRESS, .PR_PREPARED },
     .{ .VERIFICATION_IN_PROGRESS, .VERIFICATION_FAILED },
     .{ .VERIFICATION_IN_PROGRESS, .BLOCKED },
     .{ .VERIFICATION_FAILED, .PATCH_IN_PROGRESS },
+    .{ .VERIFICATION_FAILED, .BLOCKED },
     .{ .PR_PREPARED, .PR_OPENED },
     .{ .PR_OPENED, .NOTIFIED },
     .{ .NOTIFIED, .DONE },
@@ -101,12 +105,24 @@ pub fn transition(
         r.deinit();
     }
 
-    // Update run state
+    // CAS update run state: fail if another worker moved the state first.
     {
         var r = try conn.query(
-            \\UPDATE runs SET state = $1, updated_at = $2 WHERE run_id = $3
-        , .{ to.label(), now_ms, run_id });
-        r.deinit();
+            \\UPDATE runs
+            \\SET state = $1, updated_at = $2
+            \\WHERE run_id = $3 AND state = $4
+            \\RETURNING attempt
+        , .{ to.label(), now_ms, run_id, current.state.label() });
+        defer r.deinit();
+
+        _ = try r.next() orelse {
+            log.err("cas transition failed run_id={s} expected={s} to={s}", .{
+                run_id,
+                current.state.label(),
+                to.label(),
+            });
+            return TransitionError.InvalidTransition;
+        };
     }
 
     log.info("transition run_id={s} {s}→{s} actor={s}", .{
@@ -189,16 +205,20 @@ pub fn registerArtifact(
     r.deinit();
 }
 
-test "isAllowed covers all 12 transitions" {
+test "isAllowed covers all configured transitions" {
     const valid = [_][2]types.RunState{
         .{ .SPEC_QUEUED, .RUN_PLANNED },
+        .{ .RUN_PLANNED, .BLOCKED },
         .{ .RUN_PLANNED, .PATCH_IN_PROGRESS },
+        .{ .PATCH_IN_PROGRESS, .BLOCKED },
         .{ .PATCH_IN_PROGRESS, .PATCH_READY },
+        .{ .PATCH_READY, .BLOCKED },
         .{ .PATCH_READY, .VERIFICATION_IN_PROGRESS },
         .{ .VERIFICATION_IN_PROGRESS, .PR_PREPARED },
         .{ .VERIFICATION_IN_PROGRESS, .VERIFICATION_FAILED },
         .{ .VERIFICATION_IN_PROGRESS, .BLOCKED },
         .{ .VERIFICATION_FAILED, .PATCH_IN_PROGRESS },
+        .{ .VERIFICATION_FAILED, .BLOCKED },
         .{ .PR_PREPARED, .PR_OPENED },
         .{ .PR_OPENED, .NOTIFIED },
         .{ .NOTIFIED, .DONE },

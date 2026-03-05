@@ -4,9 +4,10 @@
 const std = @import("std");
 const zap = @import("zap");
 const pg = @import("pg");
-const types = @import("../types.zig");
 const state = @import("../state/machine.zig");
 const policy = @import("../state/policy.zig");
+const worker = @import("../pipeline/worker.zig");
+const secrets = @import("../secrets/crypto.zig");
 const log = std.log.scoped(.http);
 
 // ── Handler context (shared across all handlers) ──────────────────────────
@@ -15,6 +16,7 @@ pub const Context = struct {
     pool: *pg.Pool,
     alloc: std.mem.Allocator,
     api_key: []const u8, // expected API key from env
+    worker_state: *const worker.WorkerState,
 };
 
 // ── JSON helpers ──────────────────────────────────────────────────────────
@@ -62,12 +64,51 @@ fn authenticate(r: zap.Request, ctx: *Context) bool {
 
 // ── Healthz ───────────────────────────────────────────────────────────────
 
-pub fn handleHealthz(_: *Context, r: zap.Request) void {
-    r.setStatus(.ok);
-    r.setContentType(.JSON) catch {};
-    r.sendBody(
-        \\{"status":"ok","service":"zombied","version":"0.1.0"}
-    ) catch {};
+fn databaseHealthy(ctx: *Context) bool {
+    var conn = ctx.pool.acquire() catch return false;
+    defer ctx.pool.release(conn);
+
+    var ping = conn.query("SELECT 1", .{}) catch return false;
+    defer ping.deinit();
+
+    return (ping.next() catch null) != null;
+}
+
+pub fn handleHealthz(ctx: *Context, r: zap.Request) void {
+    const db_ok = databaseHealthy(ctx);
+    if (!db_ok) {
+        writeJson(r, .service_unavailable, .{
+            .status = "degraded",
+            .service = "zombied",
+            .database = "down",
+        });
+        return;
+    }
+
+    writeJson(r, .ok, .{
+        .status = "ok",
+        .service = "zombied",
+        .database = "up",
+    });
+}
+
+pub fn handleReadyz(ctx: *Context, r: zap.Request) void {
+    const db_ok = databaseHealthy(ctx);
+    const worker_ok = ctx.worker_state.running.load(.acquire);
+    if (!db_ok or !worker_ok) {
+        writeJson(r, .service_unavailable, .{
+            .ready = false,
+            .database = db_ok,
+            .worker = worker_ok,
+        });
+        return;
+    }
+
+    writeJson(r, .ok, .{
+        .ready = true,
+        .database = true,
+        .worker = true,
+    });
 }
 
 // ── POST /v1/runs ─────────────────────────────────────────────────────────
@@ -110,11 +151,11 @@ pub fn handleStartRun(ctx: *Context, r: zap.Request) void {
     };
     defer ctx.pool.release(conn);
 
-    // Idempotency: check if this key already exists
+    // Idempotency: scoped by workspace.
     {
         var check = conn.query(
-            "SELECT run_id FROM runs WHERE idempotency_key = $1",
-            .{req.idempotency_key},
+            "SELECT run_id FROM runs WHERE workspace_id = $1 AND idempotency_key = $2",
+            .{ req.workspace_id, req.idempotency_key },
         ) catch {
             errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Database error", req_id);
             return;
@@ -665,6 +706,95 @@ pub fn handleSyncSpecs(ctx: *Context, r: zap.Request, workspace_id: []const u8) 
         .synced_count = @as(i64, 0),
         .total_pending = total_pending,
         .specs = &[_]u8{},
+        .request_id = req_id,
+    });
+}
+
+// ── GET /v1/github/callback ───────────────────────────────────────────────
+
+pub fn handleGitHubCallback(ctx: *Context, r: zap.Request) void {
+    var arena = std.heap.ArenaAllocator.init(ctx.alloc);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const req_id = requestId(alloc);
+
+    const installation_id = r.getParamStr(alloc, "installation_id") catch null orelse {
+        errorResponse(r, .bad_request, "INVALID_REQUEST", "installation_id query param required", req_id);
+        return;
+    };
+    defer alloc.free(installation_id);
+
+    const workspace_id = r.getParamStr(alloc, "state") catch null orelse {
+        errorResponse(r, .bad_request, "INVALID_REQUEST", "state query param required", req_id);
+        return;
+    };
+    defer alloc.free(workspace_id);
+
+    var conn = ctx.pool.acquire() catch {
+        errorResponse(r, .service_unavailable, "INTERNAL_ERROR", "Database unavailable", req_id);
+        return;
+    };
+    defer ctx.pool.release(conn);
+
+    const now_ms = std.time.milliTimestamp();
+
+    // Bootstrap a synthetic tenant/workspace pair for callback-only flows.
+    {
+        var t = conn.query(
+            \\INSERT INTO tenants (tenant_id, name, api_key_hash, created_at)
+            \\VALUES ('github_app', 'GitHub App', 'callback', $1)
+            \\ON CONFLICT (tenant_id) DO NOTHING
+        , .{now_ms}) catch {
+            errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to upsert tenant", req_id);
+            return;
+        };
+        t.deinit();
+    }
+
+    {
+        const repo_url_opt = r.getParamStr(alloc, "repo_url") catch null;
+        const repo_url = repo_url_opt orelse "https://github.com/unknown/unknown";
+        defer if (repo_url_opt) |v| alloc.free(v);
+
+        const default_branch_opt = r.getParamStr(alloc, "default_branch") catch null;
+        const default_branch = default_branch_opt orelse "main";
+        defer if (default_branch_opt) |v| alloc.free(v);
+
+        var w = conn.query(
+            \\INSERT INTO workspaces
+            \\  (workspace_id, tenant_id, repo_url, default_branch, paused, version, created_at, updated_at)
+            \\VALUES ($1, 'github_app', $2, $3, false, 1, $4, $4)
+            \\ON CONFLICT (workspace_id) DO UPDATE
+            \\SET repo_url = EXCLUDED.repo_url,
+            \\    default_branch = EXCLUDED.default_branch,
+            \\    updated_at = EXCLUDED.updated_at
+        , .{ workspace_id, repo_url, default_branch, now_ms }) catch {
+            errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to upsert workspace", req_id);
+            return;
+        };
+        w.deinit();
+    }
+
+    const kek = secrets.loadKek(alloc) catch {
+        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "ENCRYPTION_MASTER_KEY is missing", req_id);
+        return;
+    };
+
+    secrets.store(
+        alloc,
+        conn,
+        workspace_id,
+        "github_app_installation_id",
+        installation_id,
+        kek,
+    ) catch {
+        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to store installation secret", req_id);
+        return;
+    };
+
+    writeJson(r, .ok, .{
+        .workspace_id = workspace_id,
+        .installation_id = installation_id,
         .request_id = req_id,
     });
 }

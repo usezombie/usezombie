@@ -96,7 +96,7 @@ Enforced by NullClaw vtable — not application-level checks.
 Each stage commits and pushes to the feature branch:
 
 ```
-clawable binary
+zombie binary
     ├── git fetch + worktree add
     ├── nullclaw.agent.run(echo) → commit plan.json → push
     ├── nullclaw.agent.run(scout) → commit code → push

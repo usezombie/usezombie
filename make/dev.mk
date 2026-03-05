@@ -2,26 +2,29 @@
 # DEV — local development
 # =============================================================================
 
-.PHONY: dev up down logs db-shell migrate
+.PHONY: dev up down _clean
 
 VERSION ?= $(shell cat VERSION 2>/dev/null || echo "0.1.0")
 
-dev: ## Start local Postgres + run zombied serve
-	@docker compose up -d db
-	@sleep 1
-	@zig build run -- serve
-
-up: ## Start all services via docker compose
+up:  ## Start all services and tail app logs
+	@echo "Starting UseZombie..."
 	@docker compose up -d
+	@echo ""
+	@echo "Services:"
+	@echo "  API:       http://localhost:3000"
+	@echo "  Postgres:  localhost:5432"
+	@echo ""
+	@if [ "$${FOLLOW_LOGS:-1}" = "1" ]; then \
+		docker compose logs -f zombied; \
+	fi
 
-down: ## Stop all services
-	@docker compose down
+dev: up  ## Alias for 'make up'
 
-logs: ## Tail docker compose logs
-	@docker compose logs -f
+down:  ## Stop all services, remove volumes, and cleanup
+	@echo "Stopping all services..."
+	@docker compose down --volumes
+	@$(MAKE) _clean --no-print-directory
+	@echo "Cleanup complete."
 
-db-shell: ## Open psql to local Postgres
-	@psql "$$DATABASE_URL"
-
-migrate: ## Apply schema migrations manually
-	@psql "$$DATABASE_URL" < schema/001_initial.sql && echo "migrations applied"
+_clean:
+	@rm -rf zig-out zig-cache .zig-cache

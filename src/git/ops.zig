@@ -1,6 +1,5 @@
 //! Git operations — bare clone + worktree, commit + push per stage,
 //! PR creation via GitHub REST API.
-//! Uses libgit2 for git clone/push operations — native calls, no subprocess.
 
 const std = @import("std");
 const log = std.log.scoped(.git);
@@ -14,6 +13,8 @@ pub const GitError = error{
     PrFailed,
     InvalidGitHubUrl,
     MissingGitHubPat,
+    CommandFailed,
+    CommandTimedOut,
 };
 
 pub const WorktreeHandle = struct {
@@ -25,29 +26,53 @@ pub const WorktreeHandle = struct {
     }
 };
 
-fn run(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[]const u8) ![]const u8 {
+fn run(
+    alloc: std.mem.Allocator,
+    argv: []const []const u8,
+    cwd: ?[]const u8,
+    timeout_ms: u64,
+) ![]const u8 {
     var child = std.process.Child.init(argv, alloc);
     child.cwd = cwd;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     try child.spawn();
 
-    const stdout = try child.stdout.?.readToEndAlloc(alloc, 1024 * 1024);
-    const stderr = try child.stderr.?.readToEndAlloc(alloc, 1024 * 1024);
+    const start_ms = std.time.milliTimestamp();
+    const term = while (true) {
+        if (try child.tryWait()) |t| break t;
+
+        if (std.time.milliTimestamp() - start_ms > @as(i64, @intCast(timeout_ms))) {
+            _ = child.kill() catch {};
+            _ = child.wait() catch {};
+            return GitError.CommandTimedOut;
+        }
+
+        std.Thread.sleep(50 * std.time.ns_per_ms);
+    };
+
+    const stdout = if (child.stdout) |*s|
+        try s.readToEndAlloc(alloc, 1024 * 1024)
+    else
+        try alloc.dupe(u8, "");
+    const stderr = if (child.stderr) |*s|
+        try s.readToEndAlloc(alloc, 1024 * 1024)
+    else
+        try alloc.dupe(u8, "");
     defer alloc.free(stderr);
 
-    const term = try child.wait();
     switch (term) {
         .Exited => |code| if (code != 0) {
-            log.err("git command failed code={d} stderr={s}", .{ code, stderr });
+            log.err("command failed code={d} argv[0]={s} stderr={s}", .{ code, argv[0], stderr });
             alloc.free(stdout);
-            return GitError.CommitFailed;
+            return GitError.CommandFailed;
         },
         else => {
             alloc.free(stdout);
-            return GitError.CommitFailed;
+            return GitError.CommandFailed;
         },
     }
+
     return stdout;
 }
 
@@ -62,17 +87,25 @@ pub fn ensureBareClone(
 
     if (std.fs.accessAbsolute(bare_path, .{})) |_| {
         // Already exists — fetch latest
-        const out = try run(alloc, &.{ "git", "fetch", "--all", "--prune" }, bare_path);
+        const out = run(
+            alloc,
+            &.{ "git", "-c", "core.hooksPath=/dev/null", "fetch", "--all", "--prune" },
+            bare_path,
+            120_000,
+        ) catch return GitError.FetchFailed;
         alloc.free(out);
         log.info("git fetch workspace_id={s}", .{workspace_id});
     } else |_| {
         // Clone bare
         try std.fs.makeDirAbsolute(bare_path);
-        const argv = &[_][]const u8{ "git", "clone", "--bare", repo_url, bare_path };
-        const out = try run(alloc, argv, null);
+        const argv = &[_][]const u8{
+            "git", "-c", "core.hooksPath=/dev/null", "clone", "--bare", repo_url, bare_path,
+        };
+        const out = run(alloc, argv, null, 120_000) catch return GitError.CloneFailed;
         alloc.free(out);
         log.info("git clone bare workspace_id={s}", .{workspace_id});
     }
+
     return bare_path;
 }
 
@@ -92,9 +125,9 @@ pub fn createWorktree(
 
     // Create worktree with new branch based on base_branch
     const argv = &[_][]const u8{
-        "git", "worktree", "add", "-b", branch, wt_path, base_branch,
+        "git", "-c", "core.hooksPath=/dev/null", "worktree", "add", "-b", branch, wt_path, base_branch,
     };
-    const out = try run(alloc, argv, bare_path);
+    const out = run(alloc, argv, bare_path, 120_000) catch return GitError.WorktreeFailed;
     alloc.free(out);
     log.info("worktree created path={s} branch={s}", .{ wt_path, branch });
 
@@ -107,12 +140,23 @@ pub fn removeWorktree(
     bare_path: []const u8,
     wt_path: []const u8,
 ) void {
-    const out1 = run(alloc, &.{ "git", "worktree", "remove", "--force", wt_path }, bare_path) catch {
+    const out1 = run(
+        alloc,
+        &.{ "git", "-c", "core.hooksPath=/dev/null", "worktree", "remove", "--force", wt_path },
+        bare_path,
+        30_000,
+    ) catch {
         log.warn("worktree remove failed path={s}", .{wt_path});
         return;
     };
     alloc.free(out1);
-    const out2 = run(alloc, &.{ "git", "worktree", "prune" }, bare_path) catch return;
+
+    const out2 = run(
+        alloc,
+        &.{ "git", "-c", "core.hooksPath=/dev/null", "worktree", "prune" },
+        bare_path,
+        30_000,
+    ) catch return;
     alloc.free(out2);
 }
 
@@ -143,28 +187,70 @@ pub fn commitFile(
     try file.writeAll(content);
 
     // git add + commit
-    const add_out = try run(alloc, &.{ "git", "add", rel_path }, wt_path);
+    const add_out = run(
+        alloc,
+        &.{ "git", "-c", "core.hooksPath=/dev/null", "add", rel_path },
+        wt_path,
+        30_000,
+    ) catch return GitError.CommitFailed;
     alloc.free(add_out);
 
-    // Configure git author for this commit via env (passed to child process in future enhancement)
-    _ = author_name;
-    _ = author_email;
+    const cfg_name = try std.fmt.allocPrint(alloc, "user.name={s}", .{author_name});
+    defer alloc.free(cfg_name);
+    const cfg_email = try std.fmt.allocPrint(alloc, "user.email={s}", .{author_email});
+    defer alloc.free(cfg_email);
 
-    const commit_out = try run(alloc, &.{ "git", "commit", "-m", message }, wt_path);
+    const commit_out = run(
+        alloc,
+        &.{ "git", "-c", "core.hooksPath=/dev/null", "-c", cfg_name, "-c", cfg_email, "commit", "-m", message },
+        wt_path,
+        30_000,
+    ) catch |err| switch (err) {
+        GitError.CommandFailed => {
+            // Idempotent artifact writes can re-run with identical content.
+            const status = run(
+                alloc,
+                &.{ "git", "-c", "core.hooksPath=/dev/null", "status", "--porcelain", "--", rel_path },
+                wt_path,
+                10_000,
+            ) catch return GitError.CommitFailed;
+            defer alloc.free(status);
+            if (status.len == 0) return;
+            return GitError.CommitFailed;
+        },
+        else => return GitError.CommitFailed,
+    };
     alloc.free(commit_out);
 
     log.info("committed file={s} msg={s}", .{ rel_path, message });
 }
 
 /// Push the feature branch to origin.
-pub fn push(alloc: std.mem.Allocator, wt_path: []const u8, branch: []const u8) !void {
+pub fn push(
+    alloc: std.mem.Allocator,
+    wt_path: []const u8,
+    branch: []const u8,
+    github_token: ?[]const u8,
+) !void {
     const refspec = try std.fmt.allocPrint(alloc, "HEAD:refs/heads/{s}", .{branch});
     defer alloc.free(refspec);
 
-    const out = run(alloc, &.{ "git", "push", "origin", refspec }, wt_path) catch |err| {
-        log.err("git push failed branch={s}", .{branch});
-        return err;
-    };
+    const out = if (github_token) |token| blk: {
+        const header = try std.fmt.allocPrint(alloc, "http.extraheader=Authorization: Bearer {s}", .{token});
+        defer alloc.free(header);
+        break :blk run(
+            alloc,
+            &.{ "git", "-c", "core.hooksPath=/dev/null", "-c", header, "push", "origin", refspec },
+            wt_path,
+            60_000,
+        ) catch return GitError.PushFailed;
+    } else run(
+        alloc,
+        &.{ "git", "-c", "core.hooksPath=/dev/null", "push", "origin", refspec },
+        wt_path,
+        60_000,
+    ) catch return GitError.PushFailed;
+
     alloc.free(out);
     log.info("pushed branch={s}", .{branch});
 }
@@ -178,7 +264,7 @@ pub fn createPullRequest(
     base_branch: []const u8,
     title: []const u8,
     body: []const u8,
-    github_pat: []const u8,
+    github_token: []const u8,
 ) ![]const u8 {
     // Parse owner/repo from URL
     // e.g. https://github.com/owner/repo.git → owner/repo
@@ -200,15 +286,20 @@ pub fn createPullRequest(
     }, .{});
     defer alloc.free(payload);
 
-    const auth_header = try std.fmt.allocPrint(alloc, "Authorization: Bearer {s}", .{github_pat});
+    const auth_header = try std.fmt.allocPrint(alloc, "Authorization: Bearer {s}", .{github_token});
     defer alloc.free(auth_header);
 
-    const result = try run(alloc, &.{
-        "curl",  "-s",                             "-X", "POST",
-        "-H",    "Content-Type: application/json", "-H", "Accept: application/vnd.github+json",
-        "-H",    auth_header,                      "-d", payload,
-        api_url,
-    }, null);
+    const result = run(alloc, &.{
+        "curl",                                "-sS",
+        "--connect-timeout",                   "10",
+        "--max-time",                          "30",
+        "--fail-with-body",                    "-X",
+        "POST",                                "-H",
+        "Content-Type: application/json",      "-H",
+        "Accept: application/vnd.github+json", "-H",
+        auth_header,                           "-d",
+        payload,                               api_url,
+    }, null, 30_000) catch return GitError.PrFailed;
     defer alloc.free(result);
 
     // Parse pr.html_url from response
@@ -218,6 +309,7 @@ pub fn createPullRequest(
     if (parsed.value.object.get("html_url")) |url_val| {
         return alloc.dupe(u8, url_val.string);
     }
+
     log.err("PR creation response missing html_url: {s}", .{result});
     return GitError.PrFailed;
 }

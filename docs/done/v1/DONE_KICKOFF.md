@@ -1,4 +1,4 @@
-# KICKOFF — Build UseZombie M1
+# DONE_KICKOFF — Build UseZombie M1
 
 Date: Mar 2, 2026
 Status: M1 COMPLETE — all three milestones filed to docs/done/v1/ ✅
@@ -163,10 +163,6 @@ When a milestone spec is fully implemented and verified:
 - ✅ `DONE_M1_000_CONTROL_PLANE_NULLCLAW_BASELINE.md` — Zig binary, NullClaw integration, HTTP API, state machine, agent pipeline
 - ✅ `DONE_M1_002_API_AND_EVENTS_CONTRACTS.md` — API contracts, artifact schema, event envelope (all 4 gaps closed Mar 3, 2026)
 - ✅ `DONE_M1_003_OBSERVABILITY_AND_POLICY.md` — Observability events, SLOs, policy guardrails (all 5 gaps closed Mar 3, 2026)
-
-#### M2 — Website + Agent Readiness
-- [ ] `M2_004_WEBSITE_EXECUTION_PLAN.md` — Route plan, machine-readable assets, human/agent boundaries
-- [ ] `M2_006_WEBSITE_BUILD_PROMPT.md` — Website design and implementation prompt
 
 ## Decisions Locked
 
