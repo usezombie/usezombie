@@ -33,6 +33,7 @@ pub const WorkerConfig = struct {
     github_app_id: []const u8,
     github_app_private_key: []const u8,
     pipeline_profile_path: []const u8,
+    adapter_registry: ?*const agents.AdapterRegistry = null,
     max_attempts: u32 = 3,
     run_timeout_ms: u64 = 300_000,
     poll_interval_ms: u64 = 2_000,
@@ -767,6 +768,39 @@ fn opCommitArtifact(ctx: CommitRetryCtx, _: u32) !void {
     return git.commitFile(ctx.alloc, ctx.wt_path, ctx.rel_path, ctx.content, ctx.msg, "UseZombie Bot", "bot@usezombie.dev");
 }
 
+const StageTransition = union(enum) {
+    stage_index: usize,
+    done,
+    retry,
+    blocked,
+};
+
+fn resolveBinding(cfg: WorkerConfig, role_id: []const u8, adapter_id: []const u8) ?agents.RoleBinding {
+    if (cfg.adapter_registry) |registry| {
+        if (agents.resolveRoleWithRegistry(registry, role_id, adapter_id)) |binding| return binding;
+    }
+    return agents.resolveRole(role_id, adapter_id);
+}
+
+fn resolveStageTransition(profile: *const topology.Profile, current_index: usize, passed: bool) !StageTransition {
+    const stage = profile.stages[current_index];
+    const explicit_target = if (passed) stage.on_pass else stage.on_fail;
+
+    if (explicit_target) |target| {
+        if (std.ascii.eqlIgnoreCase(target, topology.TRANSITION_DONE)) return .done;
+        if (std.ascii.eqlIgnoreCase(target, topology.TRANSITION_RETRY)) return .retry;
+        if (std.ascii.eqlIgnoreCase(target, topology.TRANSITION_BLOCKED)) return .blocked;
+        if (profile.indexOfStage(target)) |index| return .{ .stage_index = index };
+        return WorkerError.InvalidPipelineProfile;
+    }
+
+    if (passed) {
+        if (current_index + 1 < profile.stages.len) return .{ .stage_index = current_index + 1 };
+        return .done;
+    }
+    return .retry;
+}
+
 fn executeRun(
     alloc: std.mem.Allocator,
     cfg: WorkerConfig,
@@ -863,10 +897,7 @@ fn executeRun(
         ctx.attempt,
     );
 
-    const gate_stage = profile.gateStage();
-    const gate_binding = agents.lookupRole(gate_stage.role_id) orelse return WorkerError.InvalidPipelineRole;
-    const build_stages = profile.buildStages();
-    if (build_stages.len == 0) return WorkerError.InvalidPipelineProfile;
+    if (profile.stages.len < 2) return WorkerError.InvalidPipelineProfile;
 
     var attempt = ctx.attempt;
     var defects: ?[]const u8 = null;
@@ -877,12 +908,26 @@ fn executeRun(
     while (attempt <= cfg.max_attempts) : (attempt += 1) {
         try ensureRunActive(worker_state, deadline_ms);
 
-        // ── Build stages (one or more) ───────────────────────────────────
+        // ── Execute stage graph from stage index 1 ───────────────────────
         _ = try state.transition(conn, ctx.run_id, .PATCH_IN_PROGRESS, .orchestrator, .PATCH_STARTED, null);
 
         var latest_build_output: []const u8 = plan_result.content;
-        for (build_stages) |stage| {
-            const binding = agents.lookupRole(stage.role_id) orelse return WorkerError.InvalidPipelineRole;
+        var current_stage_index: usize = 1;
+        var verification_started = false;
+        var final_stage_output: []const u8 = plan_result.content;
+        var final_stage_actor: types.Actor = .orchestrator;
+        var terminal = StageTransition.retry;
+
+        while (true) {
+            const stage = profile.stages[current_stage_index];
+            const binding = resolveBinding(cfg, stage.role_id, stage.adapter_id) orelse return WorkerError.InvalidPipelineRole;
+
+            if (stage.is_gate and !verification_started) {
+                _ = try state.transition(conn, ctx.run_id, .PATCH_READY, .scout, .PATCH_COMMITTED, null);
+                _ = try state.transition(conn, ctx.run_id, .VERIFICATION_IN_PROGRESS, .orchestrator, .PATCH_STARTED, null);
+                verification_started = true;
+            }
+
             log.info("stage start run_id={s} stage_id={s} role={s} attempt={d}", .{
                 ctx.run_id,
                 stage.stage_id,
@@ -892,7 +937,7 @@ fn executeRun(
 
             try tenant_limiter.acquireCancelable(ctx.tenant_id, stage.role_id, 1.0, worker_state, deadline_ms);
             try ensureRunActive(worker_state, deadline_ms);
-            const result = try reliable.call(agents.AgentResult, StageRetryCtx{
+            const stage_result = try reliable.call(agents.AgentResult, StageRetryCtx{
                 .alloc = run_alloc,
                 .binding = binding,
                 .input = .{
@@ -903,7 +948,7 @@ fn executeRun(
                     .defects_content = defects,
                     .implementation_summary = latest_build_output,
                 },
-            }, opRunStage, retryOptionsForRun(worker_state, deadline_ms, 1, 1_000, 8_000, stage.role_id));
+            }, opRunStage, retryOptionsForRun(worker_state, deadline_ms, 1, 1_000, 8_000, stage.adapter_id));
 
             switch (binding.actor) {
                 .echo => metrics.incAgentEchoCalls(),
@@ -911,8 +956,8 @@ fn executeRun(
                 .warden => metrics.incAgentWardenCalls(),
                 .orchestrator => {},
             }
-            metrics.addAgentTokens(result.token_count);
-            metrics.observeAgentDurationSeconds(result.wall_seconds);
+            metrics.addAgentTokens(stage_result.token_count);
+            metrics.observeAgentDurationSeconds(stage_result.wall_seconds);
 
             agents.emitNullclawRunEvent(
                 ctx.run_id,
@@ -921,187 +966,181 @@ fn executeRun(
                 stage.stage_id,
                 stage.role_id,
                 binding.actor,
-                result,
+                stage_result,
             );
-            total_tokens += result.token_count;
-            total_wall_seconds += result.wall_seconds;
-            try state.writeUsage(conn, ctx.run_id, attempt, binding.actor, result.token_count, result.wall_seconds);
+            total_tokens += stage_result.token_count;
+            total_wall_seconds += stage_result.wall_seconds;
+            try state.writeUsage(conn, ctx.run_id, attempt, binding.actor, stage_result.token_count, stage_result.wall_seconds);
 
             const stage_path = try std.fmt.allocPrint(run_alloc, "docs/runs/{s}/{s}", .{ ctx.run_id, stage.artifact_name });
-            try commitArtifact(run_alloc, conn, ctx, &wt, worker_state, deadline_ms, stage_path, result.content, stage.commit_message, binding.actor, attempt);
-            latest_build_output = result.content;
-        }
+            try commitArtifact(run_alloc, conn, ctx, &wt, worker_state, deadline_ms, stage_path, stage_result.content, stage.commit_message, binding.actor, attempt);
+            latest_build_output = stage_result.content;
+            final_stage_output = stage_result.content;
+            final_stage_actor = binding.actor;
 
-        _ = try state.transition(conn, ctx.run_id, .PATCH_READY, .scout, .PATCH_COMMITTED, null);
-
-        // ── Gate stage: final verification ───────────────────────────────
-        _ = try state.transition(conn, ctx.run_id, .VERIFICATION_IN_PROGRESS, .orchestrator, .PATCH_STARTED, null);
-
-        try ensureRunActive(worker_state, deadline_ms);
-        try tenant_limiter.acquireCancelable(ctx.tenant_id, gate_stage.role_id, 1.0, worker_state, deadline_ms);
-        const gate_result = try reliable.call(agents.AgentResult, StageRetryCtx{
-            .alloc = run_alloc,
-            .binding = gate_binding,
-            .input = .{
-                .workspace_path = wt.path,
-                .prompts = prompts,
-                .spec_content = spec_content,
-                .plan_content = plan_result.content,
-                .implementation_summary = latest_build_output,
-            },
-        }, opRunStage, retryOptionsForRun(worker_state, deadline_ms, 1, 1_000, 8_000, gate_stage.role_id));
-        if (gate_binding.actor == .warden) metrics.incAgentWardenCalls();
-        metrics.addAgentTokens(gate_result.token_count);
-        metrics.observeAgentDurationSeconds(gate_result.wall_seconds);
-
-        agents.emitNullclawRunEvent(
-            ctx.run_id,
-            ctx.request_id,
-            attempt,
-            gate_stage.stage_id,
-            gate_stage.role_id,
-            gate_binding.actor,
-            gate_result,
-        );
-        total_tokens += gate_result.token_count;
-        total_wall_seconds += gate_result.wall_seconds;
-        try state.writeUsage(conn, ctx.run_id, attempt, gate_binding.actor, gate_result.token_count, gate_result.wall_seconds);
-
-        const gate_path = try std.fmt.allocPrint(run_alloc, "docs/runs/{s}/{s}", .{ ctx.run_id, gate_stage.artifact_name });
-        try commitArtifact(run_alloc, conn, ctx, &wt, worker_state, deadline_ms, gate_path, gate_result.content, gate_stage.commit_message, gate_binding.actor, attempt);
-
-        const observations = try agents.extractObservations(run_alloc, gate_result.content);
-        if (observations.len > 0) {
-            _ = try memory.saveFromWarden(conn, ctx.workspace_id, ctx.run_id, observations);
-        }
-
-        const passed = agents.parseWardenVerdict(gate_result.content);
-
-        if (passed) {
-            // ── PASS: create PR ──────────────────────────────────────────
-            _ = try state.transition(conn, ctx.run_id, .PR_PREPARED, .warden, .VALIDATION_PASSED, null);
-
-            var pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
-            if (pr_url == null) {
-                try ensureRunActive(worker_state, deadline_ms);
-                const installation_id = try loadInstallationId(run_alloc, conn, ctx.workspace_id);
-                defer run_alloc.free(installation_id);
-
-                try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_installation_token", 1.0, worker_state, deadline_ms);
-                var token_retry_ctx = TokenRetryCtx{
-                    .cache = token_cache,
-                    .alloc = run_alloc,
-                    .installation_id = installation_id,
-                };
-                defer if (token_retry_ctx.last_error_detail) |d| run_alloc.free(d);
-                const github_token = try reliable.callWithDetail(
-                    []u8,
-                    &token_retry_ctx,
-                    opGetInstallationToken,
-                    tokenDetail,
-                    retryOptionsForRun(worker_state, deadline_ms, 2, 500, 5_000, "github_installation_token"),
-                );
-                defer run_alloc.free(github_token);
-
-                var push_side_effect_key_buf: [192]u8 = undefined;
-                const push_side_effect_key = try sideEffectKeyPush(run_alloc, &push_side_effect_key_buf, branch);
-                defer push_side_effect_key.deinit(run_alloc);
-                const push_claimed = try state.claimSideEffect(conn, ctx.run_id, push_side_effect_key.value, branch);
-                if (push_claimed) {
-                    try ensureRunActive(worker_state, deadline_ms);
-                    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_push", 1.0, worker_state, deadline_ms);
-                    try reliable.call(void, PushRetryCtx{
-                        .alloc = run_alloc,
-                        .wt_path = wt.path,
-                        .branch = branch,
-                        .github_token = github_token,
-                    }, opPushBranch, retryOptionsForRun(worker_state, deadline_ms, 2, 1_000, 10_000, "github_push"));
-                    try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key.value, branch);
-                } else {
-                    const already_pushed = try git.remoteBranchExists(run_alloc, wt.path, branch, github_token);
-                    if (!already_pushed) return WorkerError.SideEffectClaimedNoResult;
-                    try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key.value, branch);
+            const passed = if (binding.actor == .warden) agents.parseWardenVerdict(stage_result.content) else true;
+            if (binding.actor == .warden) {
+                const observations = try agents.extractObservations(run_alloc, stage_result.content);
+                if (observations.len > 0) {
+                    _ = try memory.saveFromWarden(conn, ctx.workspace_id, ctx.run_id, observations);
                 }
+            }
 
-                var pr_side_effect_key_buf: [192]u8 = undefined;
-                const pr_side_effect_key = try sideEffectKeyPrCreate(run_alloc, &pr_side_effect_key_buf, branch);
-                defer pr_side_effect_key.deinit(run_alloc);
-                const pr_claimed = try state.claimSideEffect(conn, ctx.run_id, pr_side_effect_key.value, branch);
-                if (!pr_claimed) {
-                    pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
+            terminal = try resolveStageTransition(profile, current_stage_index, passed);
+            switch (terminal) {
+                .stage_index => |next_index| {
+                    current_stage_index = next_index;
+                    continue;
+                },
+                else => break,
+            }
+        }
+
+        switch (terminal) {
+            .done => {
+                // ── PASS: create PR ──────────────────────────────────────────
+                _ = try state.transition(conn, ctx.run_id, .PR_PREPARED, final_stage_actor, .VALIDATION_PASSED, null);
+
+                var pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
+                if (pr_url == null) {
+                    try ensureRunActive(worker_state, deadline_ms);
+                    const installation_id = try loadInstallationId(run_alloc, conn, ctx.workspace_id);
+                    defer run_alloc.free(installation_id);
+
+                    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_installation_token", 1.0, worker_state, deadline_ms);
+                    var token_retry_ctx = TokenRetryCtx{
+                        .cache = token_cache,
+                        .alloc = run_alloc,
+                        .installation_id = installation_id,
+                    };
+                    defer if (token_retry_ctx.last_error_detail) |d| run_alloc.free(d);
+                    const github_token = try reliable.callWithDetail(
+                        []u8,
+                        &token_retry_ctx,
+                        opGetInstallationToken,
+                        tokenDetail,
+                        retryOptionsForRun(worker_state, deadline_ms, 2, 500, 5_000, "github_installation_token"),
+                    );
+                    defer run_alloc.free(github_token);
+
+                    var push_side_effect_key_buf: [192]u8 = undefined;
+                    const push_side_effect_key = try sideEffectKeyPush(run_alloc, &push_side_effect_key_buf, branch);
+                    defer push_side_effect_key.deinit(run_alloc);
+                    const push_claimed = try state.claimSideEffect(conn, ctx.run_id, push_side_effect_key.value, branch);
+                    if (push_claimed) {
+                        try ensureRunActive(worker_state, deadline_ms);
+                        try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_push", 1.0, worker_state, deadline_ms);
+                        try reliable.call(void, PushRetryCtx{
+                            .alloc = run_alloc,
+                            .wt_path = wt.path,
+                            .branch = branch,
+                            .github_token = github_token,
+                        }, opPushBranch, retryOptionsForRun(worker_state, deadline_ms, 2, 1_000, 10_000, "github_push"));
+                        try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key.value, branch);
+                    } else {
+                        const already_pushed = try git.remoteBranchExists(run_alloc, wt.path, branch, github_token);
+                        if (!already_pushed) return WorkerError.SideEffectClaimedNoResult;
+                        try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key.value, branch);
+                    }
+
+                    var pr_side_effect_key_buf: [192]u8 = undefined;
+                    const pr_side_effect_key = try sideEffectKeyPrCreate(run_alloc, &pr_side_effect_key_buf, branch);
+                    defer pr_side_effect_key.deinit(run_alloc);
+                    const pr_claimed = try state.claimSideEffect(conn, ctx.run_id, pr_side_effect_key.value, branch);
+                    if (!pr_claimed) {
+                        pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
+                        if (pr_url == null) {
+                            pr_url = try tryRecoverPrUrl(run_alloc, conn, token_cache, tenant_limiter, worker_state, deadline_ms, ctx, branch);
+                            if (pr_url == null) return WorkerError.SideEffectClaimedNoResult;
+                        }
+                    }
+
                     if (pr_url == null) {
-                        pr_url = try tryRecoverPrUrl(run_alloc, conn, token_cache, tenant_limiter, worker_state, deadline_ms, ctx, branch);
-                        if (pr_url == null) return WorkerError.SideEffectClaimedNoResult;
+                        try ensureRunActive(worker_state, deadline_ms);
+                        const pr_title = try std.fmt.allocPrint(run_alloc, "usezombie: {s}", .{ctx.spec_id});
+
+                        var pr_retry_ctx = PrRetryCtx{
+                            .alloc = run_alloc,
+                            .repo_url = ctx.repo_url,
+                            .branch = branch,
+                            .base_branch = ctx.default_branch,
+                            .title = pr_title,
+                            .body = final_stage_output,
+                            .github_token = github_token,
+                        };
+                        try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_pr_create", 1.0, worker_state, deadline_ms);
+                        const created_pr = try reliable.callWithDetail(
+                            []u8,
+                            &pr_retry_ctx,
+                            opCreatePr,
+                            prDetail,
+                            retryOptionsForRun(worker_state, deadline_ms, 2, 1_000, 10_000, "github_pr_create"),
+                        );
+                        pr_url = created_pr;
+                        try state.markSideEffectDone(conn, ctx.run_id, pr_side_effect_key.value, created_pr);
                     }
                 }
 
-                if (pr_url == null) {
-                    try ensureRunActive(worker_state, deadline_ms);
-                    const pr_title = try std.fmt.allocPrint(run_alloc, "usezombie: {s}", .{ctx.spec_id});
+                const pr_final = pr_url orelse return git.GitError.PrFailed;
 
-                    var pr_retry_ctx = PrRetryCtx{
-                        .alloc = run_alloc,
-                        .repo_url = ctx.repo_url,
-                        .branch = branch,
-                        .base_branch = ctx.default_branch,
-                        .title = pr_title,
-                        .body = gate_result.content,
-                        .github_token = github_token,
-                    };
-                    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_pr_create", 1.0, worker_state, deadline_ms);
-                    const created_pr = try reliable.callWithDetail(
-                        []u8,
-                        &pr_retry_ctx,
-                        opCreatePr,
-                        prDetail,
-                        retryOptionsForRun(worker_state, deadline_ms, 2, 1_000, 10_000, "github_pr_create"),
+                // Update run with PR URL
+                {
+                    const now_ms = std.time.milliTimestamp();
+                    var r = try conn.query(
+                        "UPDATE runs SET pr_url = $1, updated_at = $2 WHERE run_id = $3",
+                        .{ pr_final, now_ms, ctx.run_id },
                     );
-                    pr_url = created_pr;
-                    try state.markSideEffectDone(conn, ctx.run_id, pr_side_effect_key.value, created_pr);
+                    r.deinit();
                 }
-            }
 
-            const pr_final = pr_url orelse return git.GitError.PrFailed;
+                _ = try state.transition(conn, ctx.run_id, .PR_OPENED, .orchestrator, .PR_CREATED, pr_final);
+                _ = try state.transition(conn, ctx.run_id, .NOTIFIED, .orchestrator, .NOTIFICATION_SENT, null);
+                _ = try state.transition(conn, ctx.run_id, .DONE, .orchestrator, .NOTIFICATION_SENT, null);
 
-            // Update run with PR URL
-            {
-                const now_ms = std.time.milliTimestamp();
-                var r = try conn.query(
-                    "UPDATE runs SET pr_url = $1, updated_at = $2 WHERE run_id = $3",
-                    .{ pr_final, now_ms, ctx.run_id },
-                );
-                r.deinit();
-            }
+                const summary_content = std.fmt.allocPrint(
+                    run_alloc,
+                    "# Run Summary\n\n" ++
+                        "- **run_id**: {s}\n" ++
+                        "- **spec_id**: {s}\n" ++
+                        "- **final_state**: DONE\n" ++
+                        "- **attempt**: {d}\n" ++
+                        "- **pr_url**: {s}\n" ++
+                        "- **total_tokens**: {d}\n" ++
+                        "- **total_wall_seconds**: {d}\n" ++
+                        "\n## Artifacts\n\n" ++
+                        "- plan.json (echo)\n" ++
+                        "- implementation.md (scout)\n" ++
+                        "- validation.md (warden)\n" ++
+                        "- run_summary.md (orchestrator)\n",
+                    .{
+                        ctx.run_id,
+                        ctx.spec_id,
+                        attempt,
+                        pr_final,
+                        total_tokens,
+                        total_wall_seconds,
+                    },
+                ) catch |err| {
+                    obs_log.logWarnErr(.worker, err, "run_summary.md alloc failed (non-fatal) run_id={s}", .{ctx.run_id});
+                    log.info("run completed run_id={s} pr_url={s}", .{ ctx.run_id, pr_final });
+                    var done_detail: [160]u8 = undefined;
+                    const done_detail_slice = std.fmt.bufPrint(
+                        &done_detail,
+                        "request_id={s} state=done total_wall_seconds={d}",
+                        .{ ctx.request_id, total_wall_seconds },
+                    ) catch "run_done";
+                    events.emit("run_done", ctx.run_id, done_detail_slice);
+                    metrics.observeRunTotalWallSeconds(total_wall_seconds);
+                    metrics.incRunsCompleted();
+                    return;
+                };
 
-            _ = try state.transition(conn, ctx.run_id, .PR_OPENED, .orchestrator, .PR_CREATED, pr_final);
-            _ = try state.transition(conn, ctx.run_id, .NOTIFIED, .orchestrator, .NOTIFICATION_SENT, null);
-            _ = try state.transition(conn, ctx.run_id, .DONE, .orchestrator, .NOTIFICATION_SENT, null);
+                const summary_path = try std.fmt.allocPrint(run_alloc, "docs/runs/{s}/run_summary.md", .{ctx.run_id});
 
-            const summary_content = std.fmt.allocPrint(
-                run_alloc,
-                "# Run Summary\n\n" ++
-                    "- **run_id**: {s}\n" ++
-                    "- **spec_id**: {s}\n" ++
-                    "- **final_state**: DONE\n" ++
-                    "- **attempt**: {d}\n" ++
-                    "- **pr_url**: {s}\n" ++
-                    "- **total_tokens**: {d}\n" ++
-                    "- **total_wall_seconds**: {d}\n" ++
-                    "\n## Artifacts\n\n" ++
-                    "- plan.json (echo)\n" ++
-                    "- implementation.md (scout)\n" ++
-                    "- validation.md (warden)\n" ++
-                    "- run_summary.md (orchestrator)\n",
-                .{
-                    ctx.run_id,
-                    ctx.spec_id,
-                    attempt,
-                    pr_final,
-                    total_tokens,
-                    total_wall_seconds,
-                },
-            ) catch |err| {
-                obs_log.logWarnErr(.worker, err, "run_summary.md alloc failed (non-fatal) run_id={s}", .{ctx.run_id});
+                commitArtifact(run_alloc, conn, ctx, &wt, worker_state, deadline_ms, summary_path, summary_content, "orchestrator: add run_summary.md", .orchestrator, attempt) catch |err| {
+                    obs_log.logWarnErr(.worker, err, "run_summary.md commit failed (non-fatal) run_id={s}", .{ctx.run_id});
+                };
+
                 log.info("run completed run_id={s} pr_url={s}", .{ ctx.run_id, pr_final });
                 var done_detail: [160]u8 = undefined;
                 const done_detail_slice = std.fmt.bufPrint(
@@ -1113,53 +1152,44 @@ fn executeRun(
                 metrics.observeRunTotalWallSeconds(total_wall_seconds);
                 metrics.incRunsCompleted();
                 return;
-            };
+            },
+            .blocked => {
+                _ = try state.transition(conn, ctx.run_id, .BLOCKED, .orchestrator, .VALIDATION_FAILED, "blocked by stage transition graph");
+                _ = try state.transition(conn, ctx.run_id, .NOTIFIED_BLOCKED, .orchestrator, .NOTIFICATION_SENT, null);
+                metrics.observeRunTotalWallSeconds(total_wall_seconds);
+                metrics.incRunsBlocked();
+                return;
+            },
+            .retry => {
+                // ── FAIL: prepare for retry if budget remains ───────────────
+                _ = try state.transition(conn, ctx.run_id, .VERIFICATION_FAILED, final_stage_actor, .VALIDATION_FAILED, null);
 
-            const summary_path = try std.fmt.allocPrint(run_alloc, "docs/runs/{s}/run_summary.md", .{ctx.run_id});
+                if (attempt >= cfg.max_attempts) break;
 
-            commitArtifact(run_alloc, conn, ctx, &wt, worker_state, deadline_ms, summary_path, summary_content, "orchestrator: add run_summary.md", .orchestrator, attempt) catch |err| {
-                obs_log.logWarnErr(.worker, err, "run_summary.md commit failed (non-fatal) run_id={s}", .{ctx.run_id});
-            };
+                // Commit defects file and retry from graph entry stage.
+                const defects_path = try std.fmt.allocPrint(
+                    run_alloc,
+                    "docs/runs/{s}/attempt_{d}_defects.md",
+                    .{ ctx.run_id, attempt },
+                );
+                try commitArtifact(run_alloc, conn, ctx, &wt, worker_state, deadline_ms, defects_path, final_stage_output, "warden: add defects", final_stage_actor, attempt);
 
-            log.info("run completed run_id={s} pr_url={s}", .{ ctx.run_id, pr_final });
-            var done_detail: [160]u8 = undefined;
-            const done_detail_slice = std.fmt.bufPrint(
-                &done_detail,
-                "request_id={s} state=done total_wall_seconds={d}",
-                .{ ctx.request_id, total_wall_seconds },
-            ) catch "run_done";
-            events.emit("run_done", ctx.run_id, done_detail_slice);
-            metrics.observeRunTotalWallSeconds(total_wall_seconds);
-            metrics.incRunsCompleted();
-            return;
+                defects = try run_alloc.dupe(u8, final_stage_output);
+
+                // Increment attempt counter in DB
+                _ = try state.incrementAttempt(conn, ctx.run_id);
+
+                // Adaptive retry delay with jitter.
+                const retry_index = attempt - ctx.attempt;
+                const delay_ms = backoff.expBackoffJitter(retry_index, 1_000, 30_000);
+                metrics.incRunRetries();
+                metrics.addBackoffWaitMs(delay_ms);
+                try sleepCooperative(delay_ms, worker_state, deadline_ms);
+
+                log.info("retrying run_id={s} attempt={d}", .{ ctx.run_id, attempt + 1 });
+            },
+            .stage_index => unreachable,
         }
-
-        // ── FAIL: prepare for retry if budget remains ──────────────────
-        _ = try state.transition(conn, ctx.run_id, .VERIFICATION_FAILED, .warden, .VALIDATION_FAILED, null);
-
-        if (attempt >= cfg.max_attempts) break;
-
-        // Commit defects file and retry Scout
-        const defects_path = try std.fmt.allocPrint(
-            run_alloc,
-            "docs/runs/{s}/attempt_{d}_defects.md",
-            .{ ctx.run_id, attempt },
-        );
-        try commitArtifact(run_alloc, conn, ctx, &wt, worker_state, deadline_ms, defects_path, gate_result.content, "warden: add defects", .warden, attempt);
-
-        defects = try run_alloc.dupe(u8, gate_result.content);
-
-        // Increment attempt counter in DB
-        _ = try state.incrementAttempt(conn, ctx.run_id);
-
-        // Adaptive retry delay with jitter.
-        const retry_index = attempt - ctx.attempt;
-        const delay_ms = backoff.expBackoffJitter(retry_index, 1_000, 30_000);
-        metrics.incRunRetries();
-        metrics.addBackoffWaitMs(delay_ms);
-        try sleepCooperative(delay_ms, worker_state, deadline_ms);
-
-        log.info("retrying run_id={s} attempt={d}", .{ ctx.run_id, attempt + 1 });
     }
 
     // Retries exhausted → BLOCKED
@@ -1311,8 +1341,26 @@ test "integration: default topology roles resolve through registry" {
     defer profile.deinit();
 
     for (profile.stages) |stage| {
-        try std.testing.expect(agents.lookupRole(stage.role_id) != null);
+        try std.testing.expect(resolveBinding(.{}, stage.role_id, stage.adapter_id) != null);
     }
+}
+
+test "integration: stage transition graph executes pass branch to done" {
+    var profile = try topology.defaultProfile(std.testing.allocator);
+    defer profile.deinit();
+
+    const verify_idx = profile.indexOfStage(topology.STAGE_VERIFY) orelse return error.TestExpectedEqual;
+    const transition = try resolveStageTransition(&profile, verify_idx, true);
+    try std.testing.expectEqual(StageTransition.done, transition);
+}
+
+test "integration: stage transition graph executes fail branch to retry" {
+    var profile = try topology.defaultProfile(std.testing.allocator);
+    defer profile.deinit();
+
+    const verify_idx = profile.indexOfStage(topology.STAGE_VERIFY) orelse return error.TestExpectedEqual;
+    const transition = try resolveStageTransition(&profile, verify_idx, false);
+    try std.testing.expectEqual(StageTransition.retry, transition);
 }
 
 test "integration: rate limiter scopes by tenant and provider" {

@@ -58,22 +58,34 @@ pub const PromptFiles = struct {
     warden: []const u8,
 };
 
-pub const RoleKind = enum {
+pub const AdapterKind = enum {
     echo,
     scout,
     warden,
+    custom,
+};
+
+pub const CustomAdapterFn = *const fn (std.mem.Allocator, RoleBinding, RoleInput) anyerror!AgentResult;
+
+pub const AdapterBinding = struct {
+    adapter_id: []const u8,
+    actor: types.Actor,
+    kind: AdapterKind,
+    custom_runner: ?CustomAdapterFn = null,
 };
 
 pub const RoleBinding = struct {
     role_id: []const u8,
+    adapter_id: []const u8,
     actor: types.Actor,
-    kind: RoleKind,
+    kind: AdapterKind,
+    custom_runner: ?CustomAdapterFn = null,
 };
 
-const ROLE_REGISTRY = [_]RoleBinding{
-    .{ .role_id = "echo", .actor = .echo, .kind = .echo },
-    .{ .role_id = "scout", .actor = .scout, .kind = .scout },
-    .{ .role_id = "warden", .actor = .warden, .kind = .warden },
+const BUILTIN_ADAPTERS = [_]AdapterBinding{
+    .{ .adapter_id = "echo", .actor = .echo, .kind = .echo },
+    .{ .adapter_id = "scout", .actor = .scout, .kind = .scout },
+    .{ .adapter_id = "warden", .actor = .warden, .kind = .warden },
 };
 
 pub const RoleInput = struct {
@@ -89,11 +101,91 @@ pub const RoleInput = struct {
 pub const RoleError = error{
     UnknownRole,
     MissingRoleInput,
+    MissingCustomRunner,
 };
 
 pub fn lookupRole(role_id: []const u8) ?RoleBinding {
-    for (ROLE_REGISTRY) |binding| {
-        if (std.ascii.eqlIgnoreCase(role_id, binding.role_id)) return binding;
+    return resolveRole(role_id, role_id);
+}
+
+pub fn resolveRole(role_id: []const u8, adapter_id: []const u8) ?RoleBinding {
+    for (BUILTIN_ADAPTERS) |adapter| {
+        if (!std.ascii.eqlIgnoreCase(adapter_id, adapter.adapter_id)) continue;
+        return .{
+            .role_id = role_id,
+            .adapter_id = adapter.adapter_id,
+            .actor = adapter.actor,
+            .kind = adapter.kind,
+            .custom_runner = null,
+        };
+    }
+    return null;
+}
+
+pub const AdapterRegistryError = error{
+    InvalidAdapterId,
+    DuplicateAdapterId,
+};
+
+pub const AdapterRegistry = struct {
+    alloc: std.mem.Allocator,
+    custom_adapters: std.ArrayList(AdapterBinding),
+
+    pub fn init(alloc: std.mem.Allocator) AdapterRegistry {
+        return .{
+            .alloc = alloc,
+            .custom_adapters = std.ArrayList(AdapterBinding).empty,
+        };
+    }
+
+    pub fn deinit(self: *AdapterRegistry) void {
+        for (self.custom_adapters.items) |adapter| {
+            self.alloc.free(adapter.adapter_id);
+        }
+        self.custom_adapters.deinit(self.alloc);
+    }
+
+    pub fn registerCustom(
+        self: *AdapterRegistry,
+        adapter_id: []const u8,
+        actor: types.Actor,
+        runner: CustomAdapterFn,
+    ) AdapterRegistryError!void {
+        if (adapter_id.len == 0) return AdapterRegistryError.InvalidAdapterId;
+        if (resolveBuiltInAdapter(adapter_id) != null) return AdapterRegistryError.DuplicateAdapterId;
+        if (self.resolveAdapter(adapter_id) != null) return AdapterRegistryError.DuplicateAdapterId;
+
+        try self.custom_adapters.append(self.alloc, .{
+            .adapter_id = try self.alloc.dupe(u8, adapter_id),
+            .actor = actor,
+            .kind = .custom,
+            .custom_runner = runner,
+        });
+    }
+
+    pub fn resolveAdapter(self: *const AdapterRegistry, adapter_id: []const u8) ?AdapterBinding {
+        for (self.custom_adapters.items) |adapter| {
+            if (std.ascii.eqlIgnoreCase(adapter_id, adapter.adapter_id)) return adapter;
+        }
+        return null;
+    }
+};
+
+pub fn resolveRoleWithRegistry(registry: *const AdapterRegistry, role_id: []const u8, adapter_id: []const u8) ?RoleBinding {
+    if (resolveRole(role_id, adapter_id)) |built_in| return built_in;
+    const adapter = registry.resolveAdapter(adapter_id) orelse return null;
+    return .{
+        .role_id = role_id,
+        .adapter_id = adapter.adapter_id,
+        .actor = adapter.actor,
+        .kind = adapter.kind,
+        .custom_runner = adapter.custom_runner,
+    };
+}
+
+fn resolveBuiltInAdapter(adapter_id: []const u8) ?AdapterBinding {
+    for (BUILTIN_ADAPTERS) |adapter| {
+        if (std.ascii.eqlIgnoreCase(adapter_id, adapter.adapter_id)) return adapter;
     }
     return null;
 }
@@ -122,6 +214,10 @@ pub fn runByRole(alloc: std.mem.Allocator, binding: RoleBinding, input: RoleInpu
             input.plan_content orelse return RoleError.MissingRoleInput,
             input.implementation_summary orelse return RoleError.MissingRoleInput,
         ),
+        .custom => {
+            const runner = binding.custom_runner orelse return RoleError.MissingCustomRunner;
+            return runner(alloc, binding, input);
+        },
     };
 }
 
@@ -525,13 +621,49 @@ test "parseObserverBackend supports known values" {
 test "lookupRole resolves built-in role ids" {
     const echo = lookupRole("echo") orelse return error.TestExpectedRole;
     try std.testing.expectEqual(types.Actor.echo, echo.actor);
-    try std.testing.expectEqual(RoleKind.echo, echo.kind);
+    try std.testing.expectEqual(AdapterKind.echo, echo.kind);
 
     const scout = lookupRole("SCOUT") orelse return error.TestExpectedRole;
     try std.testing.expectEqual(types.Actor.scout, scout.actor);
-    try std.testing.expectEqual(RoleKind.scout, scout.kind);
+    try std.testing.expectEqual(AdapterKind.scout, scout.kind);
 
     try std.testing.expectEqual(@as(?RoleBinding, null), lookupRole("security"));
+}
+
+fn testCustomAdapter(
+    alloc: std.mem.Allocator,
+    binding: RoleBinding,
+    input: RoleInput,
+) !AgentResult {
+    _ = alloc;
+    _ = input;
+    return .{
+        .content = binding.role_id,
+        .token_count = 1,
+        .wall_seconds = 0,
+        .exit_ok = true,
+    };
+}
+
+test "custom adapter registration and dispatch works for non built-in role" {
+    var registry = AdapterRegistry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    try registry.registerCustom("security-reviewer", .orchestrator, testCustomAdapter);
+    const binding = resolveRoleWithRegistry(&registry, "security", "security-reviewer") orelse return error.TestExpectedRole;
+    try std.testing.expectEqual(AdapterKind.custom, binding.kind);
+    try std.testing.expectEqual(types.Actor.orchestrator, binding.actor);
+
+    const fake_prompts = PromptFiles{
+        .echo = "echo prompt",
+        .scout = "scout prompt",
+        .warden = "warden prompt",
+    };
+    const result = try runByRole(std.testing.allocator, binding, .{
+        .workspace_path = "/tmp",
+        .prompts = &fake_prompts,
+    });
+    try std.testing.expectEqualStrings("security", result.content);
 }
 
 test "runByRole validates required stage input fields" {
