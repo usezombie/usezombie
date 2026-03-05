@@ -45,7 +45,7 @@
 | 6 | ⚠️ Partial | Tenant token-bucket throttling now gates Echo/Scout/Warden calls; provider-level quotas and distributed state are still missing |
 | 7 | ⚠️ Partial | Worker loop and run retry now use exponential+jitter backoff; PR HTTP `Retry-After` is plumbed, but provider/API responses are not yet end-to-end |
 | 8 | ⚠️ Partial | Structured key/value logger and LogObserver wiring are in place; correlation IDs and durable log sink strategy are still missing |
-| 9 | ⚠️ Partial | Critical silent catches on worker/http paths are reduced, but full classification/context consistency is still missing |
+| 9 | ⚠️ Partial | Shared error-context helper now covers key worker/http catch boundaries; full classification/context consistency is still missing |
 | 10 | ⚠️ Partial | `error_classify` drives worker failure mapping with explicit auth/quota reason codes; richer provider payload parsing and HTTP/API harmonization are still missing |
 | 11 | ⚠️ Partial | Path canonicalization + hook disable done; env scrubbing/sandbox hardening still pending |
 | 12 | ⚠️ Partial | Signal handling + join done; stale worktree startup cleanup still missing |
@@ -348,12 +348,10 @@ Apply in:
 
 | File | Line | Issue |
 |------|------|-------|
-| `src/pipeline/worker.zig` | 121 | `result.drain() catch {}` — silently swallowed |
-| `src/pipeline/worker.zig` | 139 | Transition failure on crash path ignored |
-| `src/http/handler.zig` | 25–33 | JSON stringify failure returns `{}` silently |
+| `src/http/handler.zig` + `src/pipeline/worker.zig` | key catch paths | Shared `observability/logging.zig` helper now logs contextual `err={name}` records, but not all callsites are normalized yet |
 | `src/git/ops.zig` | 41–50 | Returns generic `GitError.CommitFailed` for all failure modes, stderr logged but not propagated |
 
-### Recommendation: error context helper
+### Recommendation: complete helper rollout
 
 ```zig
 pub fn logErr(
@@ -366,7 +364,7 @@ pub fn logErr(
 }
 ```
 
-Replace all `catch {}` at critical boundaries with at least `log.warn` + context.
+Use the helper at all critical `catch` boundaries for consistent context format.
 
 For git failures: include stderr + command + exit code in logs, classify retryability.
 

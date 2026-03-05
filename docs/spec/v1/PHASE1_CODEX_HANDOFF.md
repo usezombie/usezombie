@@ -175,6 +175,14 @@ Create `ArenaAllocator` at start of `executeRun()`, `defer arena.deinit()`. Pass
 - Worker/agent lifecycle events now include `request_id` alongside `run_id`.
 - Remaining: normalize correlation contract for state/policy events and tracing backends.
 
+### ⚠️ PARTIAL: 1.18 Error-context logging normalization (Dimension 9)
+
+**File:** `src/observability/logging.zig` + `src/http/handler.zig` + `src/pipeline/worker.zig`
+
+- Added shared logging helpers that append error names (`err={...}`) with stable contextual formatting.
+- Wired helper usage into key HTTP send/format catch paths and worker claim/transition catch paths.
+- Remaining: expand helper usage to remaining critical boundaries (notably git op error classification paths).
+
 ### ⚠️ PARTIAL: 1.16 Readiness threshold gating (Dimension 18)
 
 **File:** `src/config/runtime.zig` + `src/http/handler.zig` + `src/main.zig`
