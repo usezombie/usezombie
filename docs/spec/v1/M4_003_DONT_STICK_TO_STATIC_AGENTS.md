@@ -2,8 +2,16 @@
 
 Date: Mar 5, 2026
 Status: PENDING
-Priority: P0.5 (must be started in Part 1, complete before CLI freeze)
+Priority: P0 — must start before Redis/CLI to avoid control-flow rework
 Depends on: M3_001 reliability hardening baseline
+
+---
+
+## Execution Position Recommendation
+
+- Start this before M3_004 implementation hardens queue semantics so worker control flow is not reworked twice.
+- Keep default profile behavior stable (`echo -> scout -> warden`) while introducing config-driven topology.
+- Require completion before M4_001 CLI behavior is frozen.
 
 ---
 

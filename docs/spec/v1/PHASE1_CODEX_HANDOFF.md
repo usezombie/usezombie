@@ -22,14 +22,15 @@ If the M3_xxx is fully done, then move it to `docs/done/v1/` and keep the origin
 ## v1 Milestone Dependency Graph
 
 ```
-M3_001 (Bug Fixes) ─────────────────────────────┐
-M3_000 (Secrets/Schema) ────────────────────────┤
-                                                ├──→ M3_004 (Redis Streams) ──→ M4_001 (zombiectl CLI)
-M3_006 (Clerk Auth) ────────────────────────────┤                                    │
-                                                ├──→ M4_003 (Dynamic Agent Topology) ─┘
-                                                │                               M4_002 (npm publish)
-M3_005 (Security Hardening) ←── depends on ─────┘
-M3_007 (Website) ──── independent, parallel ──────────────────────────────────────────
+M3_001 (Bug Fixes, CLOSED) ─────────────────────┐
+M3_000 (Secrets/Schema, DONE) ──────────────────┤
+                                                ├──→ M4_004 (High-Leverage Guardrails) ─┐
+M3_006 (Clerk Auth) ────────────────────────────┤                                         ├──→ M4_001 (zombiectl CLI) ─→ M4_002 (npm publish)
+                                                ├──→ M4_003 (Dynamic Agent Topology) ─────┘
+                                                ├──→ M3_004 (Redis Streams) ───────┐
+                                                │                                   └──→ M3_005 (Security Hardening completion)
+                                                └──→ M4_005 (Deferred events/obs/config, lower priority)
+M3_007 (Website) ──── independent, parallel ─────────────────────────────────────────────────────────────────────────────
 ```
 
 **Execution order:**
@@ -37,18 +38,18 @@ M3_007 (Website) ──── independent, parallel ─────────�
 | Step | Milestones (parallel) | What |
 |------|----------------------|------|
 | 1 | ✅ M3_001 + ✅ M3_000 | Critical bug fixes + secrets schema separation — DONE (Mar 05, 2026) |
-| 2 | ⏳ M3_004 + M3_006 | Redis streams + Clerk auth |
-| 3 | ⏳ M3_005 | Security hardening (needs Redis + schema done) |
-| 4 | ⏳ M4_001 | zombiectl CLI (needs Clerk + Redis + API hardened) |
+| 2 | ⏳ M4_004 + M4_003 + M3_006 | Guardrail closure + dynamic topology + Clerk auth (start before Redis to avoid refactor churn) |
+| 3 | ⏳ M3_004 + M3_005 | Redis streams, then complete security hardening controls that require Redis ACL/URLs |
+| 4 | ⏳ M4_001 | zombiectl CLI (needs Clerk + Redis + core guardrails done) |
 | 5 | ⏳ M4_002 | npm publish |
-| ∥ | ⏳ M4_003 | Dynamic agent topology (not hard-coded Echo/Scout/Warden); start during Part 1 and finish before CLI freeze |
+| ∥ | ⏳ M4_005 | Lower-priority deferred D4/D8/D19/D20 follow-on (collector/eventing/config maturity) |
 | ∥ | ✅ M3_007 | Website (independent, can run in parallel with any step) — DONE (Mar 05, 2026) |
 
 ---
 
 ## ✅ DONE: Step 1 — M3_001 Critical Bug Fixes
 
-Reference: `docs/spec/v1/M3_001_ORACLE_HEAD_TO_HEAD.md` (dimensions 1, 5, 7, 10, 11-20)
+Reference: `docs/done/v1/M3_001_ORACLE_HEAD_TO_HEAD.md` (closure snapshot includes done vs deferred dimensions and follow-on spec links)
 
 ### ✅ DONE: 1.1 Transaction wrapping for run claiming
 
@@ -253,7 +254,7 @@ Return raw bytes from `encrypt()`. Accept raw bytes in `decrypt()`. Use BYTEA pa
 
 ---
 
-## ⏳ PENDING: Step 2 — M3_004 Redis Streams
+## ⏳ PENDING: Step 3 — M3_004 Redis Streams
 
 Reference: `docs/spec/v1/M3_004_REDIS_STREAMS.md`
 
@@ -326,6 +327,24 @@ After JWT verification: check that requested workspace belongs to user's tenant.
 **File:** `src/http/handler.zig` + `src/http/server.zig`
 
 Add `GET /v1/github/callback` route. Handles GitHub App installation callback: `installation_id` + `setup_action`. Creates workspace row.
+
+---
+
+## ⏳ PENDING: Step 2 (parallel) — M4_004 High-Leverage Guardrails
+
+Reference: `docs/spec/v1/M4_004_HIGH_LEVERAGE_GUARDRAILS.md`
+
+### ⏳ TODO: 2B.1 Reliability guardrail closure
+
+Close deferred D5/D6/D7/D9/D10 with complete retry/classification coverage and deterministic logging.
+
+### ⏳ TODO: 2B.2 Safety guardrail closure
+
+Close deferred D11–D18 with exactly-once guarantees, side-effect idempotency ledger, cancellation/shutdown hardening, and migration/readiness guardrails.
+
+### ⏳ TODO: 2B.3 Coverage guardrail closure
+
+Close deferred D21 by enforcing measurable coverage + module-level unit/integration depth for critical flows.
 
 ---
 
@@ -436,7 +455,7 @@ Reference: `docs/spec/v1/M4_002_PUBLISH_CLI.md`
 
 ---
 
-## ⏳ PENDING: Parallel — M4_003 Dynamic Agent Topology
+## ⏳ PENDING: Step 2 (parallel) — M4_003 Dynamic Agent Topology
 
 Reference: `docs/spec/v1/M4_003_DONT_STICK_TO_STATIC_AGENTS.md`
 
@@ -455,6 +474,24 @@ If no pipeline config is provided, boot with the current 3-stage flow as default
 ### ⏳ TODO: 4A.4 Observability and state semantics
 
 Preserve transition/audit semantics while allowing new roles and stages to emit metrics/logs without code changes.
+
+---
+
+## ⏳ PENDING: Parallel — M4_005 Deferred D4/D8/D19/D20
+
+Reference: `docs/spec/v1/M4_005_DEFERRED_EVENTS_OBSERVABILITY_CONFIG.md`
+
+### ⏳ TODO: P.1 Eventing durability
+
+Move in-process bus-only semantics to durable/replay-capable model (D4).
+
+### ⏳ TODO: P.2 Observability maturity
+
+Finalize structured observer sink strategy and trace-context normalization (D8 + D19).
+
+### ⏳ TODO: P.3 Config/secret maturity
+
+Finalize versioned secret envelope and rotation-friendly config hygiene model (D20).
 
 ---
 
