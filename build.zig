@@ -65,6 +65,7 @@ pub fn build(b: *std.Build) void {
 
     // ── Test step ─────────────────────────────────────────────────────────────
     const tests = b.addTest(.{
+        .name = "zombied-tests",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -78,4 +79,10 @@ pub fn build(b: *std.Build) void {
         }),
     });
     b.step("test", "Run unit tests").dependOn(&b.addRunArtifact(tests).step);
+
+    // Installable backend test binary for coverage tooling (kcov/codecov).
+    const install_tests = b.addInstallArtifact(tests, .{
+        .dest_sub_path = "zombied-tests",
+    });
+    b.step("test-bin", "Build/install backend test binary for coverage").dependOn(&install_tests.step);
 }

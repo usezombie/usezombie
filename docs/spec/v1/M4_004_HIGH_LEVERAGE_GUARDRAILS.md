@@ -57,7 +57,7 @@ This workstream contains the must-have reliability and safety guardrails deferre
 ### 2.3 Verification Track
 
 **Dimensions:**
-- 2.3.1 IN_PROGRESS Add coverage instrumentation and minimum thresholds (test-depth thresholds live; line-coverage threshold pending)
+- 2.3.1 DONE Add coverage instrumentation and minimum thresholds (test-depth thresholds + backend kcov line-coverage gate + CI Codecov artifact upload)
 - 2.3.2 DONE Expand unit tests for pure logic modules
 - 2.3.3 DONE Add integration tests for claim/transition/idempotency flows
 
