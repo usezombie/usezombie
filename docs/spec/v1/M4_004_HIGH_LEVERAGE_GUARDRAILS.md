@@ -52,7 +52,7 @@ This workstream contains the must-have reliability and safety guardrails deferre
 **Dimensions:**
 - 2.2.1 DONE Close execution-boundary gaps (path/ref/env validation across worker + git + github auth boundaries)
 - 2.2.2 DONE Complete exactly-once + idempotency protections for all side effects (PR + push side-effect claim/recovery/done ledger coverage)
-- 2.2.3 DONE Enforce shutdown, cancellation, and thread/allocator correctness invariants (cooperative waits + stale cleanup + thread/allocator guardrails)
+- 2.2.3 DONE Enforce shutdown, cancellation, and thread/allocator correctness invariants (cooperative waits + stale cleanup + thread/allocator guardrails + pre-event in-flight tracking boundary + cancel-flip retry abort coverage)
 
 ### 2.3 Verification Track
 

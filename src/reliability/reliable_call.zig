@@ -199,3 +199,41 @@ test "integration: reliable call aborts during retry backoff on deadline" {
     }));
     try std.testing.expect(Ctx.calls >= 1);
 }
+
+const CancelFlipCtx = struct {
+    running: *std.atomic.Value(bool),
+    delay_ms: u64,
+};
+
+fn flipCancelFlagAfterDelay(ctx: CancelFlipCtx) void {
+    std.Thread.sleep(ctx.delay_ms * std.time.ns_per_ms);
+    ctx.running.store(false, .release);
+}
+
+test "integration: reliable call aborts during retry backoff when cancel flag flips" {
+    const Ctx = struct {
+        var calls: u32 = 0;
+    };
+    Ctx.calls = 0;
+
+    var running = std.atomic.Value(bool).init(true);
+    const flipper = try std.Thread.spawn(.{}, flipCancelFlagAfterDelay, .{CancelFlipCtx{
+        .running = &running,
+        .delay_ms = 20,
+    }});
+    defer flipper.join();
+
+    try std.testing.expectError(error.ShutdownRequested, call(i32, {}, struct {
+        fn op(_: @TypeOf({}), _: u32) !i32 {
+            Ctx.calls += 1;
+            return error.CommandTimedOut;
+        }
+    }.op, .{
+        .max_retries = 5,
+        .base_delay_ms = 200,
+        .max_delay_ms = 200,
+        .cancel_flag = &running,
+    }));
+    try std.testing.expect(Ctx.calls >= 1);
+    try std.testing.expect(Ctx.calls <= 2);
+}
