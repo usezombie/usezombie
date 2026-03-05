@@ -247,3 +247,24 @@ The worker loop should load and expose these values; enforcement/alerting can be
 - [ ] Extend `AgentResult` with `exit_ok: bool`, populate after `runSingle()`
 - [ ] Emit `nullclaw_run` event (DB row or structured log) after each agent call
 - [ ] `GET /v1/runs` — include `policy_events[]` array (shared fix with M1_002)
+
+---
+
+## Runtime Guardrail Instrumentation (Mar 05, 2026)
+
+Thread/allocator guardrails now expose explicit worker-runtime signals:
+
+1. `zombie_worker_in_flight_runs` (gauge)
+   - Current number of runs actively executing across worker threads.
+   - Updated at run begin/end boundaries in worker orchestration.
+   - Shutdown expectation: converge to `0` before process exit.
+
+2. `zombie_worker_allocator_leaks_total` (counter)
+   - Incremented when worker `GeneralPurposeAllocator` reports `.leak` on teardown.
+   - Used to detect allocator lifecycle regressions on shutdown/error paths.
+
+Operational use:
+
+1. During deploy drain/restart, verify in-flight gauge trends to zero.
+2. Treat allocator leak counter increments as release-blocking until triaged.
+3. Correlate with `run_id`/request logs when in-flight is non-zero at exit.
