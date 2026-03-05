@@ -338,11 +338,35 @@ fn isWithinPath(base: []const u8, candidate: []const u8) bool {
     return candidate[base.len] == std.fs.path.sep;
 }
 
+fn isSafeRelativeSpecPath(relative_spec_path: []const u8) bool {
+    if (relative_spec_path.len == 0) return false;
+    if (std.fs.path.isAbsolute(relative_spec_path)) return false;
+
+    var it = std.mem.splitScalar(u8, relative_spec_path, '/');
+    while (it.next()) |segment| {
+        if (segment.len == 0) return false;
+        if (std.mem.eql(u8, segment, ".") or std.mem.eql(u8, segment, "..")) return false;
+    }
+    return true;
+}
+
+fn sideEffectKeyPush(alloc: std.mem.Allocator, branch: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(alloc, "git:push:{s}", .{branch});
+}
+
+fn sideEffectKeyPrCreate(alloc: std.mem.Allocator, branch: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(alloc, "pr:create:{s}", .{branch});
+}
+
 fn resolveSpecPath(
     alloc: std.mem.Allocator,
     worktree_path: []const u8,
     relative_spec_path: []const u8,
 ) ![]const u8 {
+    if (!isSafeRelativeSpecPath(relative_spec_path)) {
+        return WorkerError.PathTraversal;
+    }
+
     const joined = try std.fs.path.join(alloc, &.{ worktree_path, relative_spec_path });
     defer alloc.free(joined);
 
@@ -541,7 +565,7 @@ fn tryRecoverPrUrl(
         &detail,
     );
     if (existing) |pr_url| {
-        const side_effect_key = try std.fmt.allocPrint(run_alloc, "pr:create:{s}", .{branch});
+        const side_effect_key = try sideEffectKeyPrCreate(run_alloc, branch);
         try state.markSideEffectDone(conn, ctx.run_id, side_effect_key, pr_url);
         return pr_url;
     }
@@ -810,37 +834,28 @@ fn executeRun(
 
             var pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
             if (pr_url == null) {
-                const side_effect_key = try std.fmt.allocPrint(run_alloc, "pr:create:{s}", .{branch});
-                const claimed = try state.claimSideEffect(conn, ctx.run_id, side_effect_key, branch);
+                try ensureBeforeDeadline(deadline_ms);
+                const installation_id = try loadInstallationId(run_alloc, conn, ctx.workspace_id);
+                defer run_alloc.free(installation_id);
 
-                if (!claimed) {
-                    pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
-                    if (pr_url == null) {
-                        pr_url = try tryRecoverPrUrl(run_alloc, conn, token_cache, tenant_limiter, ctx, branch);
-                        if (pr_url == null) return WorkerError.SideEffectClaimedNoResult;
-                    }
-                }
+                try tenant_limiter.acquire(ctx.tenant_id, "github_installation_token", 1.0);
+                var token_retry_ctx = TokenRetryCtx{
+                    .cache = token_cache,
+                    .alloc = run_alloc,
+                    .installation_id = installation_id,
+                };
+                defer if (token_retry_ctx.last_error_detail) |d| run_alloc.free(d);
+                const github_token = try reliable.callWithDetail([]u8, &token_retry_ctx, opGetInstallationToken, tokenDetail, .{
+                    .max_retries = 2,
+                    .base_delay_ms = 500,
+                    .max_delay_ms = 5_000,
+                    .operation_name = "github_installation_token",
+                });
+                defer run_alloc.free(github_token);
 
-                if (pr_url == null) {
-                    try ensureBeforeDeadline(deadline_ms);
-                    const installation_id = try loadInstallationId(run_alloc, conn, ctx.workspace_id);
-                    defer run_alloc.free(installation_id);
-
-                    try tenant_limiter.acquire(ctx.tenant_id, "github_installation_token", 1.0);
-                    var token_retry_ctx = TokenRetryCtx{
-                        .cache = token_cache,
-                        .alloc = run_alloc,
-                        .installation_id = installation_id,
-                    };
-                    defer if (token_retry_ctx.last_error_detail) |d| run_alloc.free(d);
-                    const github_token = try reliable.callWithDetail([]u8, &token_retry_ctx, opGetInstallationToken, tokenDetail, .{
-                        .max_retries = 2,
-                        .base_delay_ms = 500,
-                        .max_delay_ms = 5_000,
-                        .operation_name = "github_installation_token",
-                    });
-                    defer run_alloc.free(github_token);
-
+                const push_side_effect_key = try sideEffectKeyPush(run_alloc, branch);
+                const push_claimed = try state.claimSideEffect(conn, ctx.run_id, push_side_effect_key, branch);
+                if (push_claimed) {
                     try tenant_limiter.acquire(ctx.tenant_id, "github_push", 1.0);
                     try reliable.call(void, PushRetryCtx{
                         .alloc = run_alloc,
@@ -853,7 +868,24 @@ fn executeRun(
                         .max_delay_ms = 10_000,
                         .operation_name = "github_push",
                     });
+                    try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key, branch);
+                } else {
+                    const already_pushed = try git.remoteBranchExists(run_alloc, wt.path, branch, github_token);
+                    if (!already_pushed) return WorkerError.SideEffectClaimedNoResult;
+                    try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key, branch);
+                }
 
+                const pr_side_effect_key = try sideEffectKeyPrCreate(run_alloc, branch);
+                const pr_claimed = try state.claimSideEffect(conn, ctx.run_id, pr_side_effect_key, branch);
+                if (!pr_claimed) {
+                    pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
+                    if (pr_url == null) {
+                        pr_url = try tryRecoverPrUrl(run_alloc, conn, token_cache, tenant_limiter, ctx, branch);
+                        if (pr_url == null) return WorkerError.SideEffectClaimedNoResult;
+                    }
+                }
+
+                if (pr_url == null) {
                     const pr_title = try std.fmt.allocPrint(run_alloc, "usezombie: {s}", .{ctx.spec_id});
 
                     var pr_retry_ctx = PrRetryCtx{
@@ -873,7 +905,7 @@ fn executeRun(
                         .operation_name = "github_pr_create",
                     });
                     pr_url = created_pr;
-                    try state.markSideEffectDone(conn, ctx.run_id, side_effect_key, created_pr);
+                    try state.markSideEffectDone(conn, ctx.run_id, pr_side_effect_key, created_pr);
                 }
             }
 
@@ -1047,6 +1079,39 @@ test "isWithinPath respects directory boundaries" {
     try std.testing.expect(!isWithinPath("/tmp/wt", "/tmp/other/spec.md"));
 }
 
+test "isSafeRelativeSpecPath rejects absolute and traversal paths" {
+    try std.testing.expect(isSafeRelativeSpecPath("docs/spec.md"));
+    try std.testing.expect(isSafeRelativeSpecPath("nested/path/spec.md"));
+    try std.testing.expect(!isSafeRelativeSpecPath(""));
+    try std.testing.expect(!isSafeRelativeSpecPath("/etc/passwd"));
+    try std.testing.expect(!isSafeRelativeSpecPath("../spec.md"));
+    try std.testing.expect(!isSafeRelativeSpecPath("docs/../spec.md"));
+    try std.testing.expect(!isSafeRelativeSpecPath("docs//spec.md"));
+}
+
+test "integration: resolveSpecPath enforces relative path boundary" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("repo/docs");
+    {
+        var f = try tmp.dir.createFile("repo/docs/spec.md", .{});
+        defer f.close();
+        try f.writeAll("# spec");
+    }
+
+    const worktree_path = try tmp.dir.realpathAlloc(std.testing.allocator, "repo");
+    defer std.testing.allocator.free(worktree_path);
+
+    const resolved = try resolveSpecPath(std.testing.allocator, worktree_path, "docs/spec.md");
+    defer std.testing.allocator.free(resolved);
+    try std.testing.expect(std.mem.startsWith(u8, resolved, worktree_path));
+    try std.testing.expectError(
+        WorkerError.PathTraversal,
+        resolveSpecPath(std.testing.allocator, worktree_path, "../etc/passwd"),
+    );
+}
+
 test "integration: default topology roles resolve through registry" {
     var profile = try topology.defaultProfile(std.testing.allocator);
     defer profile.deinit();
@@ -1074,7 +1139,13 @@ test "integration: rate limiter scopes by tenant and provider" {
 }
 
 test "integration: side effect key format for pr create is stable" {
-    const key = try std.fmt.allocPrint(std.testing.allocator, "pr:create:{s}", .{"zombie/run-r_abc"});
+    const key = try sideEffectKeyPrCreate(std.testing.allocator, "zombie/run-r_abc");
     defer std.testing.allocator.free(key);
     try std.testing.expectEqualStrings("pr:create:zombie/run-r_abc", key);
+}
+
+test "integration: side effect key format for push is stable" {
+    const key = try sideEffectKeyPush(std.testing.allocator, "zombie/run-r_abc");
+    defer std.testing.allocator.free(key);
+    try std.testing.expectEqualStrings("git:push:zombie/run-r_abc", key);
 }

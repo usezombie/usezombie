@@ -19,6 +19,8 @@ pub const GitError = error{
     PrAuthFailed,
     PrInvalidRequest,
     PrServerError,
+    InvalidIdentifier,
+    InvalidGitRef,
 };
 
 pub const WorktreeHandle = struct {
@@ -103,6 +105,30 @@ fn copyEnvIfPresent(alloc: std.mem.Allocator, env: *std.process.EnvMap, key: []c
     try env.put(key, value);
 }
 
+fn isSafeIdentifierSegment(value: []const u8) bool {
+    if (value.len == 0) return false;
+    for (value) |c| {
+        if (std.ascii.isAlphanumeric(c)) continue;
+        if (c == '-' or c == '_' or c == '.') continue;
+        return false;
+    }
+    return true;
+}
+
+fn isSafeGitRef(ref: []const u8) bool {
+    if (ref.len == 0) return false;
+    if (ref[0] == '/' or ref[0] == '.' or ref[0] == '-') return false;
+    if (ref[ref.len - 1] == '/' or ref[ref.len - 1] == '.') return false;
+    if (std.mem.endsWith(u8, ref, ".lock")) return false;
+    if (std.mem.indexOf(u8, ref, "..") != null) return false;
+    if (std.mem.indexOf(u8, ref, "//") != null) return false;
+    for (ref) |c| {
+        if (c <= 0x20 or c == 0x7f) return false;
+        if (c == '~' or c == '^' or c == ':' or c == '?' or c == '*' or c == '[' or c == '\\') return false;
+    }
+    return true;
+}
+
 fn run(
     alloc: std.mem.Allocator,
     argv: []const []const u8,
@@ -150,6 +176,7 @@ pub fn ensureBareClone(
     workspace_id: []const u8,
     repo_url: []const u8,
 ) ![]const u8 {
+    if (!isSafeIdentifierSegment(workspace_id)) return GitError.InvalidIdentifier;
     const bare_path = try std.fmt.allocPrint(alloc, "{s}/{s}.git", .{ cache_root, workspace_id });
 
     if (std.fs.accessAbsolute(bare_path, .{})) |_| {
@@ -185,8 +212,12 @@ pub fn createWorktree(
     run_id: []const u8,
     base_branch: []const u8,
 ) !WorktreeHandle {
+    if (!isSafeIdentifierSegment(run_id)) return GitError.InvalidIdentifier;
+    if (!isSafeGitRef(base_branch)) return GitError.InvalidGitRef;
+
     const branch = try std.fmt.allocPrint(alloc, "zombie/run-{s}", .{run_id});
     defer alloc.free(branch);
+    if (!isSafeGitRef(branch)) return GitError.InvalidGitRef;
 
     const wt_path = try std.fmt.allocPrint(alloc, "/tmp/zombie-wt-{s}", .{run_id});
 
@@ -299,6 +330,8 @@ pub fn push(
     branch: []const u8,
     github_token: ?[]const u8,
 ) !void {
+    if (!isSafeGitRef(branch)) return GitError.InvalidGitRef;
+
     const refspec = try std.fmt.allocPrint(alloc, "HEAD:refs/heads/{s}", .{branch});
     defer alloc.free(refspec);
 
@@ -320,6 +353,38 @@ pub fn push(
 
     alloc.free(out);
     log.info("pushed branch={s}", .{branch});
+}
+
+pub fn remoteBranchExists(
+    alloc: std.mem.Allocator,
+    wt_path: []const u8,
+    branch: []const u8,
+    github_token: ?[]const u8,
+) !bool {
+    if (!isSafeGitRef(branch)) return GitError.InvalidGitRef;
+
+    const remote_ref = try std.fmt.allocPrint(alloc, "refs/heads/{s}", .{branch});
+    defer alloc.free(remote_ref);
+
+    const out = if (github_token) |token| blk: {
+        const header = try std.fmt.allocPrint(alloc, "http.extraheader=Authorization: Bearer {s}", .{token});
+        defer alloc.free(header);
+        break :blk run(
+            alloc,
+            &.{ "git", "-c", "core.hooksPath=/dev/null", "-c", header, "ls-remote", "--heads", "origin", remote_ref },
+            wt_path,
+            30_000,
+        ) catch return GitError.FetchFailed;
+    } else run(
+        alloc,
+        &.{ "git", "-c", "core.hooksPath=/dev/null", "ls-remote", "--heads", "origin", remote_ref },
+        wt_path,
+        30_000,
+    ) catch return GitError.FetchFailed;
+    defer alloc.free(out);
+
+    const trimmed = std.mem.trim(u8, out, " \r\n\t");
+    return trimmed.len > 0;
 }
 
 /// Create a GitHub pull request via REST API.
@@ -534,6 +599,32 @@ test "integration: sanitizedChildEnv keeps minimal allowlist" {
     try std.testing.expect(env.get("GIT_DIR") == null);
     try std.testing.expect(env.get("GIT_WORK_TREE") == null);
     try std.testing.expect(env.get("GITHUB_TOKEN") == null);
+}
+
+test "isSafeIdentifierSegment accepts bounded identifiers" {
+    try std.testing.expect(isSafeIdentifierSegment("ws_123"));
+    try std.testing.expect(isSafeIdentifierSegment("run-abc.42"));
+    try std.testing.expect(!isSafeIdentifierSegment(""));
+    try std.testing.expect(!isSafeIdentifierSegment("../ws"));
+    try std.testing.expect(!isSafeIdentifierSegment("ws/123"));
+    try std.testing.expect(!isSafeIdentifierSegment("ws 123"));
+}
+
+test "isSafeGitRef blocks traversal-like and invalid ref chars" {
+    try std.testing.expect(isSafeGitRef("main"));
+    try std.testing.expect(isSafeGitRef("zombie/run-r_abc123"));
+    try std.testing.expect(!isSafeGitRef(".."));
+    try std.testing.expect(!isSafeGitRef("../main"));
+    try std.testing.expect(!isSafeGitRef("heads//main"));
+    try std.testing.expect(!isSafeGitRef("main.lock"));
+    try std.testing.expect(!isSafeGitRef("feature bad"));
+}
+
+test "integration: remoteBranchExists rejects invalid refs" {
+    try std.testing.expectError(
+        GitError.InvalidGitRef,
+        remoteBranchExists(std.testing.allocator, "/tmp", "../main", null),
+    );
 }
 
 fn parseGitHubOwnerRepo(alloc: std.mem.Allocator, repo_url: []const u8) ![]const u8 {
