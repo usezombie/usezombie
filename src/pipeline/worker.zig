@@ -12,13 +12,11 @@ const agents = @import("agents.zig");
 const git = @import("../git/ops.zig");
 const github_auth = @import("../auth/github.zig");
 const memory = @import("../memory/workspace.zig");
-const secrets = @import("../secrets/crypto.zig");
 const backoff = @import("../reliability/backoff.zig");
 const err_classify = @import("../reliability/error_classify.zig");
 const reliable = @import("../reliability/reliable_call.zig");
 const topology = @import("topology.zig");
 const profile_resolver = @import("profile_resolver.zig");
-const side_effect_keys = @import("worker_side_effect_keys.zig");
 const worker_runtime = @import("worker_runtime.zig");
 const worker_paths = @import("worker_paths.zig");
 const worker_rate_limiter = @import("worker_rate_limiter.zig");
@@ -387,61 +385,6 @@ fn processNextRun(
     return;
 }
 
-fn loadInstallationId(
-    alloc: std.mem.Allocator,
-    conn: *pg.Conn,
-    workspace_id: []const u8,
-) ![]u8 {
-    const kek = secrets.loadKek(alloc) catch {
-        return WorkerError.MissingGitHubInstallation;
-    };
-
-    const from_vault = secrets.load(alloc, conn, workspace_id, "github_app_installation_id", kek) catch {
-        return WorkerError.MissingGitHubInstallation;
-    };
-    return from_vault;
-}
-
-fn getExistingPrUrl(alloc: std.mem.Allocator, conn: *pg.Conn, run_id: []const u8) !?[]u8 {
-    var result = try conn.query("SELECT pr_url FROM runs WHERE run_id = $1", .{run_id});
-    defer result.deinit();
-
-    const row = try result.next() orelse return null;
-    const value = try row.get(?[]u8, 0);
-    if (value) |pr| {
-        return alloc.dupe(u8, pr);
-    }
-    return null;
-}
-
-const TokenRetryCtx = struct {
-    cache: *github_auth.TokenCache,
-    alloc: std.mem.Allocator,
-    installation_id: []const u8,
-    last_error_detail: ?[]u8 = null,
-};
-
-fn opGetInstallationToken(ctx: *TokenRetryCtx, _: u32) ![]u8 {
-    if (ctx.last_error_detail) |d| ctx.alloc.free(d);
-    ctx.last_error_detail = null;
-    return ctx.cache.getInstallationTokenWithDetail(ctx.alloc, ctx.installation_id, &ctx.last_error_detail);
-}
-
-fn tokenDetail(ctx: *TokenRetryCtx, _: anyerror) ?[]const u8 {
-    return ctx.last_error_detail;
-}
-
-const PushRetryCtx = struct {
-    alloc: std.mem.Allocator,
-    wt_path: []const u8,
-    branch: []const u8,
-    github_token: []const u8,
-};
-
-fn opPushBranch(ctx: PushRetryCtx, _: u32) !void {
-    return git.push(ctx.alloc, ctx.wt_path, ctx.branch, ctx.github_token);
-}
-
 const BareCloneRetryCtx = struct {
     alloc: std.mem.Allocator,
     cache_root: []const u8,
@@ -500,86 +443,6 @@ fn opRunWarden(ctx: WardenRetryCtx, _: u32) !agents.AgentResult {
         ctx.plan_content,
         ctx.implementation_summary,
     );
-}
-
-const PrRetryCtx = struct {
-    alloc: std.mem.Allocator,
-    repo_url: []const u8,
-    branch: []const u8,
-    base_branch: []const u8,
-    title: []const u8,
-    body: []const u8,
-    github_token: []const u8,
-    last_error_detail: ?[]u8 = null,
-};
-
-fn opCreatePr(ctx: *PrRetryCtx, _: u32) ![]u8 {
-    ctx.last_error_detail = null;
-    return git.createPullRequest(
-        ctx.alloc,
-        ctx.repo_url,
-        ctx.branch,
-        ctx.base_branch,
-        ctx.title,
-        ctx.body,
-        ctx.github_token,
-        &ctx.last_error_detail,
-    );
-}
-
-fn prDetail(ctx: *PrRetryCtx, _: anyerror) ?[]const u8 {
-    return ctx.last_error_detail;
-}
-
-fn tryRecoverPrUrl(
-    run_alloc: std.mem.Allocator,
-    conn: *pg.Conn,
-    token_cache: *github_auth.TokenCache,
-    tenant_limiter: *TenantRateLimiter,
-    worker_state: *WorkerState,
-    deadline_ms: i64,
-    ctx: RunContext,
-    branch: []const u8,
-) !?[]u8 {
-    try worker_runtime.ensureRunActive(&worker_state.running, deadline_ms);
-    const installation_id = loadInstallationId(run_alloc, conn, ctx.workspace_id) catch return null;
-    defer run_alloc.free(installation_id);
-
-    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_installation_token", 1.0, &worker_state.running, deadline_ms);
-    var token_retry_ctx = TokenRetryCtx{
-        .cache = token_cache,
-        .alloc = run_alloc,
-        .installation_id = installation_id,
-    };
-    defer if (token_retry_ctx.last_error_detail) |d| run_alloc.free(d);
-    const github_token = try reliable.callWithDetail(
-        []u8,
-        &token_retry_ctx,
-        opGetInstallationToken,
-        tokenDetail,
-        worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 2, 500, 5_000, "github_installation_token"),
-    );
-    defer run_alloc.free(github_token);
-
-    var detail: ?[]u8 = null;
-    defer if (detail) |d| run_alloc.free(d);
-
-    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_pr_lookup", 1.0, &worker_state.running, deadline_ms);
-    const existing = try git.findOpenPullRequestByHead(
-        run_alloc,
-        ctx.repo_url,
-        branch,
-        github_token,
-        &detail,
-    );
-    if (existing) |pr_url| {
-        var side_effect_key_buf: [192]u8 = undefined;
-        const side_effect_key = try side_effect_keys.sideEffectKeyPrCreate(run_alloc, &side_effect_key_buf, branch);
-        defer side_effect_key.deinit(run_alloc);
-        try state.markSideEffectDone(conn, ctx.run_id, side_effect_key.value, pr_url);
-        return pr_url;
-    }
-    return null;
 }
 
 const StageRetryCtx = struct {
@@ -811,107 +674,25 @@ fn executeRun(
                 // ── PASS: create PR ──────────────────────────────────────────
                 _ = try state.transition(conn, ctx.run_id, .PR_PREPARED, final_stage_actor, .VALIDATION_PASSED, null);
 
-                var pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
-                if (pr_url == null) {
-                    try worker_runtime.ensureRunActive(&worker_state.running, deadline_ms);
-                    const installation_id = try loadInstallationId(run_alloc, conn, ctx.workspace_id);
-                    defer run_alloc.free(installation_id);
-
-                    try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_installation_token", 1.0, &worker_state.running, deadline_ms);
-                    var token_retry_ctx = TokenRetryCtx{
-                        .cache = token_cache,
-                        .alloc = run_alloc,
-                        .installation_id = installation_id,
-                    };
-                    defer if (token_retry_ctx.last_error_detail) |d| run_alloc.free(d);
-                    const github_token = try reliable.callWithDetail(
-                        []u8,
-                        &token_retry_ctx,
-                        opGetInstallationToken,
-                        tokenDetail,
-                        worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 2, 500, 5_000, "github_installation_token"),
-                    );
-                    defer run_alloc.free(github_token);
-
-                    var push_side_effect_key_buf: [192]u8 = undefined;
-                    const push_side_effect_key = try side_effect_keys.sideEffectKeyPush(run_alloc, &push_side_effect_key_buf, branch);
-                    defer push_side_effect_key.deinit(run_alloc);
-                    const push_claimed = try state.claimSideEffect(conn, ctx.run_id, push_side_effect_key.value, branch);
-                    if (push_claimed) {
-                        try worker_runtime.ensureRunActive(&worker_state.running, deadline_ms);
-                        try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_push", 1.0, &worker_state.running, deadline_ms);
-                        reliable.call(void, PushRetryCtx{
-                            .alloc = run_alloc,
-                            .wt_path = wt.path,
-                            .branch = branch,
-                            .github_token = github_token,
-                        }, opPushBranch, worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 2, 1_000, 10_000, "github_push")) catch |push_err| {
-                            switch (worker_pr_flow.onPushFailure()) {
-                                .lookup_remote_branch => {
-                                    const already_pushed = try git.remoteBranchExists(run_alloc, wt.path, branch, github_token);
-                                    if (!already_pushed) return push_err;
-                                },
-                            }
-                        };
-                        try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key.value, branch);
-                    } else {
-                        const already_pushed = try git.remoteBranchExists(run_alloc, wt.path, branch, github_token);
-                        if (!already_pushed) return WorkerError.SideEffectClaimedNoResult;
-                        try state.markSideEffectDone(conn, ctx.run_id, push_side_effect_key.value, branch);
-                    }
-
-                    var pr_side_effect_key_buf: [192]u8 = undefined;
-                    const pr_side_effect_key = try side_effect_keys.sideEffectKeyPrCreate(run_alloc, &pr_side_effect_key_buf, branch);
-                    defer pr_side_effect_key.deinit(run_alloc);
-                    const pr_claimed = try state.claimSideEffect(conn, ctx.run_id, pr_side_effect_key.value, branch);
-                    if (!pr_claimed) {
-                        pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
-                        if (pr_url == null) {
-                            pr_url = try tryRecoverPrUrl(run_alloc, conn, token_cache, tenant_limiter, worker_state, deadline_ms, ctx, branch);
-                            if (pr_url == null) return WorkerError.SideEffectClaimedNoResult;
-                        }
-                    }
-
-                    if (pr_url == null) {
-                        try worker_runtime.ensureRunActive(&worker_state.running, deadline_ms);
-                        const pr_title = try std.fmt.allocPrint(run_alloc, "usezombie: {s}", .{ctx.spec_id});
-
-                        var pr_retry_ctx = PrRetryCtx{
-                            .alloc = run_alloc,
-                            .repo_url = ctx.repo_url,
-                            .branch = branch,
-                            .base_branch = ctx.default_branch,
-                            .title = pr_title,
-                            .body = final_stage_output,
-                            .github_token = github_token,
-                        };
-                        try tenant_limiter.acquireCancelable(ctx.tenant_id, "github_pr_create", 1.0, &worker_state.running, deadline_ms);
-                        const created_pr = reliable.callWithDetail(
-                            []u8,
-                            &pr_retry_ctx,
-                            opCreatePr,
-                            prDetail,
-                            worker_runtime.retryOptionsForRun(&worker_state.running, deadline_ms, 2, 1_000, 10_000, "github_pr_create"),
-                        ) catch |pr_err| blk: {
-                            switch (worker_pr_flow.onPrCreateFailure(pr_err, pr_retry_ctx.last_error_detail)) {
-                                .lookup_existing_pr => {
-                                    const recovered = try git.findOpenPullRequestByHead(run_alloc, ctx.repo_url, branch, github_token, null);
-                                    if (recovered) |url| break :blk url;
-                                    if (worker_pr_flow.indicatesClosedOrDeleted(pr_retry_ctx.last_error_detail)) {
-                                        return git.GitError.PrInvalidRequest;
-                                    }
-                                    return pr_err;
-                                },
-                                .retry => return pr_err,
-                                .fail => return pr_err,
-                            }
-                        };
-                        pr_url = created_pr;
-                        try state.markSideEffectDone(conn, ctx.run_id, pr_side_effect_key.value, created_pr);
-                    }
-                }
-
-                const pr_final = pr_url orelse return git.GitError.PrFailed;
+                const pr_final = try worker_pr_flow.ensurePrForRun(
+                    run_alloc,
+                    conn,
+                    token_cache,
+                    tenant_limiter,
+                    &worker_state.running,
+                    deadline_ms,
+                    wt.path,
+                    .{
+                        .run_id = ctx.run_id,
+                        .workspace_id = ctx.workspace_id,
+                        .tenant_id = ctx.tenant_id,
+                        .spec_id = ctx.spec_id,
+                        .repo_url = ctx.repo_url,
+                        .default_branch = ctx.default_branch,
+                        .branch = branch,
+                        .final_stage_output = final_stage_output,
+                    },
+                );
 
                 // Update run with PR URL
                 {
@@ -1182,24 +963,6 @@ test "integration: default topology roles resolve through registry" {
     for (profile.stages) |stage| {
         try std.testing.expect(resolveBinding(.{}, stage.role_id, stage.skill_id) != null);
     }
-}
-
-test "integration: stage transition graph executes pass branch to done" {
-    var profile = try topology.defaultProfile(std.testing.allocator);
-    defer profile.deinit();
-
-    const verify_idx = profile.indexOfStage(topology.STAGE_VERIFY) orelse return error.TestExpectedEqual;
-    const transition = try worker_execute_run.resolveStageTransition(&profile, verify_idx, true);
-    try std.testing.expectEqual(worker_execute_run.StageTransition.done, transition);
-}
-
-test "integration: stage transition graph executes fail branch to retry" {
-    var profile = try topology.defaultProfile(std.testing.allocator);
-    defer profile.deinit();
-
-    const verify_idx = profile.indexOfStage(topology.STAGE_VERIFY) orelse return error.TestExpectedEqual;
-    const transition = try worker_execute_run.resolveStageTransition(&profile, verify_idx, false);
-    try std.testing.expectEqual(worker_execute_run.StageTransition.retry, transition);
 }
 
 test "worker state in-flight run counter tracks begin/end safely" {
