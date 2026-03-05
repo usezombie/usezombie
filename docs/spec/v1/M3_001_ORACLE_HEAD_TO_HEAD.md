@@ -26,7 +26,7 @@
 | 2 | Allocation best practices | **Medium** | Single GPA for worker; many manual frees | Per-run ArenaAllocator; bounded buffers |
 | 3 | Async / API performance | **High** | Sequential single-thread worker | Multi-worker + concurrent dispatch |
 | 4 | Event bus / actor dispatch | **Medium** | Ad-hoc log lines only | Ring-buffer MPSC bus (`bus.zig`) |
-| 5 | Reliability & retry | **Critical** | `reliable_call` wrappers added for token/push/PR with PR error-detail plumbing; no outbox/circuit-breaker yet | `reliable.zig` + outbox + dead-letter |
+| 5 | Reliability & retry | **Critical** | `reliable_call` wrappers now cover Scout/Warden + token/push/PR (with PR detail plumbing); no outbox/circuit-breaker yet | `reliable.zig` + outbox + dead-letter |
 | 6 | Rate limiting | **High** | None | Token bucket per tenant/provider |
 | 7 | Backoff | **Critical** | Jittered exponential backoff added in worker loop and retry path; PR HTTP `Retry-After` is now consumed, other paths still incomplete | Exponential + jitter + Retry-After parsing |
 | 8 | Logging (.env / agent-friendly) | **Medium** | Compile-time level; unstructured text | Runtime `LOG_LEVEL`; key=value structured logs |
@@ -41,7 +41,7 @@
 | 2 | ⚠️ Partial | Per-run arena added in worker, but allocator/thread model not fully normalized |
 | 3 | ❌ Open | Still single-worker sequential execution |
 | 4 | ❌ Open | No event bus implementation yet |
-| 5 | ⚠️ Partial | `reliable_call` is added for GitHub token fetch, `git push`, and PR creation, including PR response detail plumbing; outbox/dead-letter and circuit breaker are still missing |
+| 5 | ⚠️ Partial | `reliable_call` now wraps Scout/Warden and GitHub token/push/PR paths (with PR response detail plumbing); outbox/dead-letter and circuit breaker are still missing |
 | 6 | ❌ Open | No token bucket or tenant-level throttling |
 | 7 | ⚠️ Partial | Worker loop and run retry now use exponential+jitter backoff; PR HTTP `Retry-After` is plumbed, but provider/API responses are not yet end-to-end |
 | 8 | ❌ Open | No runtime `LOG_LEVEL` or structured key/value logging |
@@ -215,7 +215,7 @@ pub const Bus = struct {
 | File | Line | Issue |
 |------|------|-------|
 | `src/reliability/reliable_call.zig` | 1–93 | Generic retry wrapper now supports detail-aware classification via `callWithDetail`, but most call sites still use error-name-only path |
-| `src/pipeline/worker.zig` | 446–511 | Token fetch, `git.push`, and PR creation are wrapped (PR includes detail path), but Scout/Warden agent calls are still outside the wrapper |
+| `src/pipeline/worker.zig` | 410–568 | Scout/Warden and token/push/PR are wrapped with call-level retries, but run-level reliability still lacks durable outbox/dead-letter semantics |
 | `src/pipeline/worker.zig` | 214–220 | Run-level retry still applies for full pipeline failures; there is no dead-letter/outbox ledger |
 | `src/git/ops.zig` | 28–52 | Core subprocess abstraction still lacks a single reusable timeout+classification contract |
 
@@ -253,7 +253,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
 ```
 
 ### Oracle review: remaining scope after this fix
-- Add reliable wrappers around Scout/Warden model calls and callback/webhook network operations.
+- Add reliable wrappers for callback/webhook network operations and any remaining external side effects.
 - Add durable outbox/dead-letter tracking for side effects (push/PR/create-installation updates).
 - Add circuit-breaker state for repeated provider outages to avoid retry storms.
 
