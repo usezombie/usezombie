@@ -1,5 +1,5 @@
 //! Worker loop — Thread 2.
-//! Reads Redis stream queue messages for run claims (with polling fallback).
+//! Reads Redis stream queue messages for run claims (fail-closed when queue is unavailable).
 //! Executes pipeline stages from a topology profile (default: Echo → Scout → Warden).
 //! Commits stage artifacts to git branch. Runs sequentially per run.
 
@@ -92,16 +92,6 @@ const WorkerError = error{
     InvalidPipelineRole,
     InvalidPipelineProfile,
     SideEffectClaimedNoResult,
-};
-
-const ProcessOutcome = enum {
-    idle,
-    worked,
-};
-
-const QueueMode = enum {
-    stream,
-    polling_fallback,
 };
 
 const WorkerAllocator = std.heap.GeneralPurposeAllocator(.{});
@@ -225,52 +215,57 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
     var tenant_limiter = TenantRateLimiter.init(alloc, cfg.rate_limit_capacity, cfg.rate_limit_refill_per_sec);
     defer tenant_limiter.deinit();
 
-    var queue_client: ?queue_redis.Client = queue_redis.Client.connectFromEnv(alloc, .worker) catch |err| blk: {
-        obs_log.logWarnErr(.worker, err, "redis queue unavailable; falling back to polling mode", .{});
-        break :blk null;
+    var queue_client = queue_redis.Client.connectFromEnv(alloc, .worker) catch |err| {
+        obs_log.logErr(.worker, err, "redis queue unavailable; worker exiting (fail-closed)", .{});
+        return;
     };
-    defer if (queue_client) |*q| q.deinit();
-    if (queue_client) |*q| {
-        q.ensureConsumerGroup() catch |err| {
-            obs_log.logWarnErr(.worker, err, "redis queue group setup failed; using polling fallback", .{});
-            q.deinit();
-            queue_client = null;
-        };
-    }
+    defer queue_client.deinit();
 
-    const queue_mode: QueueMode = if (queue_client != null) .stream else .polling_fallback;
-    const consumer_id = if (queue_mode == .stream)
-        queue_redis.makeConsumerId(alloc) catch "worker-local"
-    else
-        "";
-    defer if (queue_mode == .stream and !std.mem.eql(u8, consumer_id, "worker-local")) alloc.free(consumer_id);
+    queue_client.ensureConsumerGroup() catch |err| {
+        obs_log.logErr(.worker, err, "redis queue group setup failed; worker exiting (fail-closed)", .{});
+        return;
+    };
+
+    const consumer_id = queue_redis.makeConsumerId(alloc) catch "worker-local";
+    defer if (!std.mem.eql(u8, consumer_id, "worker-local")) alloc.free(consumer_id);
     var last_reclaim_ms: i64 = std.time.milliTimestamp();
 
     var consecutive_errors: u32 = 0;
     while (worker_state.running.load(.acquire)) {
-        var queued_message: ?queue_redis.QueueMessage = blk: {
-            if (queue_mode != .stream) break :blk null;
-            if (queue_client == null) break :blk null;
-            const now_ms = std.time.milliTimestamp();
-            if (now_ms - last_reclaim_ms >= queue_consts.reclaim_interval_ms) {
-                last_reclaim_ms = now_ms;
-                if (queue_client.?.xautoclaimOne(consumer_id) catch null) |claimed| {
-                    break :blk claimed;
-                }
-            }
-
-            const msg = queue_client.?.xreadgroupOne(consumer_id) catch |err| {
-                obs_log.logWarnErr(.worker, err, "xreadgroup failed; no message this cycle", .{});
-                break :blk null;
+        var queued_message: ?queue_redis.QueueMessage = null;
+        const now_ms = std.time.milliTimestamp();
+        if (now_ms - last_reclaim_ms >= queue_consts.reclaim_interval_ms) {
+            last_reclaim_ms = now_ms;
+            queued_message = queue_client.xautoclaimOne(consumer_id) catch |err| {
+                obs_log.logErr(.worker, err, "xautoclaim failed", .{});
+                metrics.incWorkerErrors();
+                consecutive_errors += 1;
+                const max_delay_ms = std.math.mul(u64, cfg.poll_interval_ms, 8) catch cfg.poll_interval_ms;
+                const delay_ms = backoff.expBackoffJitter(consecutive_errors - 1, cfg.poll_interval_ms, max_delay_ms);
+                sleepWhileRunning(worker_state, delay_ms);
+                continue;
             };
-            if (msg) |message| {
-                break :blk message;
-            }
-            break :blk null;
-        };
-        defer if (queued_message) |*m| m.deinit(alloc);
+        }
 
-        const outcome = processNextRun(
+        if (queued_message == null) {
+            queued_message = queue_client.xreadgroupOne(consumer_id) catch |err| {
+                obs_log.logErr(.worker, err, "xreadgroup failed", .{});
+                metrics.incWorkerErrors();
+                consecutive_errors += 1;
+                const max_delay_ms = std.math.mul(u64, cfg.poll_interval_ms, 8) catch cfg.poll_interval_ms;
+                const delay_ms = backoff.expBackoffJitter(consecutive_errors - 1, cfg.poll_interval_ms, max_delay_ms);
+                sleepWhileRunning(worker_state, delay_ms);
+                continue;
+            };
+        }
+
+        defer if (queued_message) |*m| m.deinit(alloc);
+        const queued = queued_message orelse {
+            consecutive_errors = 0;
+            continue;
+        };
+
+        processNextRun(
             alloc,
             cfg,
             worker_state,
@@ -278,7 +273,7 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
             &profile,
             &token_cache,
             &tenant_limiter,
-            if (queued_message) |m| m.run_id else null,
+            queued.run_id,
         ) catch |err| {
             if (err != WorkerError.ShutdownRequested) {
                 obs_log.logErr(.worker, err, "run processing error", .{});
@@ -293,18 +288,11 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
         };
         consecutive_errors = 0;
 
-        if (queued_message) |m| {
-            queue_client.?.xack(m.message_id) catch |err| {
-                obs_log.logWarnErr(.worker, err, "xack failed message_id={s}", .{m.message_id});
-            };
-        }
+        queue_client.xack(queued.message_id) catch |err| {
+            obs_log.logWarnErr(.worker, err, "xack failed message_id={s}", .{queued.message_id});
+        };
 
         if (!worker_state.running.load(.acquire)) break;
-
-        switch (outcome) {
-            .idle => sleepWhileRunning(worker_state, cfg.poll_interval_ms),
-            .worked => sleepWhileRunning(worker_state, @min(cfg.poll_interval_ms, 200)),
-        }
     }
 
     log.info("worker stopped", .{});
@@ -349,8 +337,8 @@ fn processNextRun(
     profile: *const topology.Profile,
     token_cache: *github_auth.TokenCache,
     tenant_limiter: *TenantRateLimiter,
-    queued_run_id: ?[]const u8,
-) !ProcessOutcome {
+    queued_run_id: []const u8,
+) !void {
     var claim_arena = std.heap.ArenaAllocator.init(alloc);
     defer claim_arena.deinit();
     const claim_alloc = claim_arena.allocator();
@@ -363,37 +351,23 @@ fn processNextRun(
     errdefer if (tx_open) rollbackTx(conn);
 
     // Claim a queued run under transaction.
-    var result = if (queued_run_id) |target_run_id|
-        try conn.query(
-            \\SELECT r.run_id, r.workspace_id, r.spec_id, r.tenant_id, r.attempt, r.request_id,
-            \\       w.repo_url, w.default_branch,
-            \\       s.file_path
-            \\FROM runs r
-            \\JOIN workspaces w ON w.workspace_id = r.workspace_id
-            \\JOIN specs s ON s.spec_id = r.spec_id
-            \\WHERE r.run_id = $1 AND r.state = 'SPEC_QUEUED' AND w.paused = false
-            \\LIMIT 1
-            \\FOR UPDATE OF r SKIP LOCKED
-        , .{target_run_id})
-    else
-        try conn.query(
-            \\SELECT r.run_id, r.workspace_id, r.spec_id, r.tenant_id, r.attempt, r.request_id,
-            \\       w.repo_url, w.default_branch,
-            \\       s.file_path
-            \\FROM runs r
-            \\JOIN workspaces w ON w.workspace_id = r.workspace_id
-            \\JOIN specs s ON s.spec_id = r.spec_id
-            \\WHERE r.state = 'SPEC_QUEUED' AND w.paused = false
-            \\ORDER BY r.created_at ASC
-            \\LIMIT 1
-            \\FOR UPDATE OF r SKIP LOCKED
-        , .{});
+    var result = try conn.query(
+        \\SELECT r.run_id, r.workspace_id, r.spec_id, r.tenant_id, r.attempt, r.request_id,
+        \\       w.repo_url, w.default_branch,
+        \\       s.file_path
+        \\FROM runs r
+        \\JOIN workspaces w ON w.workspace_id = r.workspace_id
+        \\JOIN specs s ON s.spec_id = r.spec_id
+        \\WHERE r.run_id = $1 AND r.state = 'SPEC_QUEUED' AND w.paused = false
+        \\LIMIT 1
+        \\FOR UPDATE OF r SKIP LOCKED
+    , .{queued_run_id});
     defer result.deinit();
 
     const row = (try result.next()) orelse {
         try commitTx(conn);
         tx_open = false;
-        return .idle;
+        return;
     };
 
     const run_id = try claim_alloc.dupe(u8, try row.get([]u8, 0));
@@ -476,7 +450,7 @@ fn processNextRun(
         };
         metrics.incRunsBlocked();
     };
-    return .worked;
+    return;
 }
 
 fn isWithinPath(base: []const u8, candidate: []const u8) bool {

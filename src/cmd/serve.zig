@@ -92,6 +92,16 @@ pub fn run(alloc: std.mem.Allocator) !void {
         std.process.exit(1);
     };
 
+    var worker_queue_check = queue_redis.Client.connectFromEnv(alloc, .worker) catch |err| {
+        std.debug.print("fatal: redis queue init failed for worker role: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer worker_queue_check.deinit();
+    worker_queue_check.ensureConsumerGroup() catch |err| {
+        std.debug.print("fatal: redis queue group init failed for worker role: {}\n", .{err});
+        std.process.exit(1);
+    };
+
     const migrate_on_start = common.migrateOnStartEnabledFromEnv(alloc) catch |err| {
         std.debug.print(
             "fatal: invalid MIGRATE_ON_START value: {} (use 0/1/false/true)\n",
