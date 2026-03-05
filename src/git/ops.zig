@@ -33,6 +33,7 @@ pub const WorktreeHandle = struct {
 const CommandResources = struct {
     child: std.process.Child,
     alloc: std.mem.Allocator,
+    env: std.process.EnvMap,
     stdout: ?[]u8 = null,
     stderr: ?[]u8 = null,
 
@@ -45,8 +46,11 @@ const CommandResources = struct {
         child.cwd = cwd;
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
+        var env = try sanitizedChildEnv(alloc);
+        errdefer env.deinit();
+        child.env_map = &env;
         try child.spawn();
-        return .{ .child = child, .alloc = alloc };
+        return .{ .child = child, .alloc = alloc, .env = env };
     }
 
     fn readOutput(self: *CommandResources) !void {
@@ -76,9 +80,28 @@ const CommandResources = struct {
     fn deinit(self: *CommandResources) void {
         if (self.stdout) |b| self.alloc.free(b);
         if (self.stderr) |b| self.alloc.free(b);
+        self.env.deinit();
         self.child.deinit();
     }
 };
+
+fn sanitizedChildEnv(alloc: std.mem.Allocator) !std.process.EnvMap {
+    var env = std.process.EnvMap.init(alloc);
+    errdefer env.deinit();
+
+    try copyEnvIfPresent(alloc, &env, "PATH");
+    try copyEnvIfPresent(alloc, &env, "HOME");
+    try copyEnvIfPresent(alloc, &env, "TMPDIR");
+    try copyEnvIfPresent(alloc, &env, "SSL_CERT_FILE");
+    try copyEnvIfPresent(alloc, &env, "SSL_CERT_DIR");
+    return env;
+}
+
+fn copyEnvIfPresent(alloc: std.mem.Allocator, env: *std.process.EnvMap, key: []const u8) !void {
+    const value = std.process.getEnvVarOwned(alloc, key) catch return;
+    defer alloc.free(value);
+    try env.put(key, value);
+}
 
 fn run(
     alloc: std.mem.Allocator,
@@ -381,6 +404,73 @@ pub fn createPullRequest(
     return GitError.PrFailed;
 }
 
+/// Find an already-open pull request URL for owner:branch.
+/// Returns null when no PR exists.
+pub fn findOpenPullRequestByHead(
+    alloc: std.mem.Allocator,
+    repo_url: []const u8,
+    branch: []const u8,
+    github_token: []const u8,
+    error_detail_out: ?*?[]u8,
+) !?[]const u8 {
+    if (error_detail_out) |out| out.* = null;
+
+    const owner_repo = try parseGitHubOwnerRepo(alloc, repo_url);
+    defer alloc.free(owner_repo);
+
+    const slash = std.mem.indexOfScalar(u8, owner_repo, '/') orelse return GitError.InvalidGitHubUrl;
+    const owner = owner_repo[0..slash];
+
+    const head_selector = try std.fmt.allocPrint(alloc, "head={s}:{s}", .{ owner, branch });
+    defer alloc.free(head_selector);
+
+    const api_url = try std.fmt.allocPrint(
+        alloc,
+        "https://api.github.com/repos/{s}/pulls",
+        .{owner_repo},
+    );
+    defer alloc.free(api_url);
+
+    const auth_header = try std.fmt.allocPrint(alloc, "Authorization: Bearer {s}", .{github_token});
+    defer alloc.free(auth_header);
+
+    const result = run(alloc, &.{
+        "curl",              "-sS",
+        "--connect-timeout", "10",
+        "--max-time",        "30",
+        "-i",                "-G",
+        "-H",                "Accept: application/vnd.github+json",
+        "-H",                auth_header,
+        "--data-urlencode",  "state=open",
+        "--data-urlencode",  head_selector,
+        api_url,
+    }, null, 30_000) catch return GitError.PrFailed;
+    defer alloc.free(result);
+
+    const parsed_response = splitHttpResponse(result);
+    const status = parseHttpStatus(parsed_response.headers) orelse return GitError.PrFailed;
+    if (status >= 400) {
+        if (error_detail_out) |out| out.* = alloc.dupe(u8, result) catch null;
+        return switch (status) {
+            429 => GitError.PrRateLimited,
+            401, 403 => GitError.PrAuthFailed,
+            400, 404, 422 => GitError.PrInvalidRequest,
+            500...599 => GitError.PrServerError,
+            else => GitError.PrFailed,
+        };
+    }
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, alloc, parsed_response.body, .{});
+    defer parsed.deinit();
+    if (parsed.value != .array or parsed.value.array.items.len == 0) return null;
+
+    const first = parsed.value.array.items[0];
+    if (first != .object) return null;
+    const html_url = first.object.get("html_url") orelse return null;
+    if (html_url != .string) return null;
+    return alloc.dupe(u8, html_url.string);
+}
+
 const HttpResponseParts = struct {
     headers: []const u8,
     body: []const u8,
@@ -431,6 +521,19 @@ test "splitHttpResponse separates headers and body" {
     const parts = splitHttpResponse(raw);
     try std.testing.expect(std.mem.containsAtLeast(u8, parts.headers, 1, "HTTP/2 201"));
     try std.testing.expect(std.mem.eql(u8, parts.body, "{\"html_url\":\"https://x\"}"));
+}
+
+test "integration: sanitizedChildEnv keeps minimal allowlist" {
+    var env = try sanitizedChildEnv(std.testing.allocator);
+    defer env.deinit();
+
+    if (std.process.getEnvVarOwned(std.testing.allocator, "PATH")) |value| {
+        defer std.testing.allocator.free(value);
+        try std.testing.expect(env.get("PATH") != null);
+    } else |_| {}
+    try std.testing.expect(env.get("GIT_DIR") == null);
+    try std.testing.expect(env.get("GIT_WORK_TREE") == null);
+    try std.testing.expect(env.get("GITHUB_TOKEN") == null);
 }
 
 fn parseGitHubOwnerRepo(alloc: std.mem.Allocator, repo_url: []const u8) ![]const u8 {
