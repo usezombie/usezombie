@@ -483,6 +483,7 @@ fn executeRun(
     );
     metrics.incAgentEchoCalls();
     metrics.addAgentTokens(echo_result.token_count);
+    metrics.observeAgentDurationSeconds(echo_result.wall_seconds);
 
     agents.emitNullclawRunEvent(ctx.run_id, ctx.attempt, .echo, echo_result);
     try state.writeUsage(conn, ctx.run_id, ctx.attempt, .echo, echo_result.token_count, echo_result.wall_seconds);
@@ -518,6 +519,7 @@ fn executeRun(
         });
         metrics.incAgentScoutCalls();
         metrics.addAgentTokens(scout_result.token_count);
+        metrics.observeAgentDurationSeconds(scout_result.wall_seconds);
 
         agents.emitNullclawRunEvent(ctx.run_id, attempt, .scout, scout_result);
         total_tokens += scout_result.token_count;
@@ -548,6 +550,7 @@ fn executeRun(
         });
         metrics.incAgentWardenCalls();
         metrics.addAgentTokens(warden_result.token_count);
+        metrics.observeAgentDurationSeconds(warden_result.wall_seconds);
 
         agents.emitNullclawRunEvent(ctx.run_id, attempt, .warden, warden_result);
         total_tokens += warden_result.token_count;
@@ -658,6 +661,7 @@ fn executeRun(
             ) catch |err| {
                 log.warn("run_summary.md alloc failed (non-fatal): {}", .{err});
                 log.info("run completed run_id={s} pr_url={s}", .{ ctx.run_id, pr_final });
+                metrics.observeRunTotalWallSeconds(total_wall_seconds);
                 metrics.incRunsCompleted();
                 return;
             };
@@ -669,6 +673,7 @@ fn executeRun(
             };
 
             log.info("run completed run_id={s} pr_url={s}", .{ ctx.run_id, pr_final });
+            metrics.observeRunTotalWallSeconds(total_wall_seconds);
             metrics.incRunsCompleted();
             return;
         }
@@ -706,6 +711,7 @@ fn executeRun(
     _ = try state.transition(conn, ctx.run_id, .NOTIFIED_BLOCKED, .orchestrator, .NOTIFICATION_SENT, null);
 
     log.warn("run blocked (retries exhausted) run_id={s}", .{ctx.run_id});
+    metrics.observeRunTotalWallSeconds(total_wall_seconds);
     metrics.incRunsBlocked();
 }
 
