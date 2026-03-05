@@ -33,9 +33,37 @@
 | 9 | Logging on errors | **High** | Many `catch {}`; generic error names | Classification + context + correlation IDs |
 | 10 | Error code classification | **Critical** | Generic `INTERNAL_ERROR` / `AGENT_CRASH` | `error_classify.zig`: rate_limited / context_exhausted / auth / server_error |
 
+### Oracle Verification Snapshot (Mar 05, 2026)
+
+| # | Status | Missing / remaining work |
+|---|---|---|
+| 1 | ⚠️ Partial | Child process teardown patterns are still mixed; no unified ResourceBundle abstraction |
+| 2 | ⚠️ Partial | Per-run arena added in worker, but allocator/thread model not fully normalized |
+| 3 | ❌ Open | Still single-worker sequential execution |
+| 4 | ❌ Open | No event bus implementation yet |
+| 5 | ❌ Open | No reliable-call wrapper, no dead-letter/outbox |
+| 6 | ❌ Open | No token bucket or tenant-level throttling |
+| 7 | ❌ Open | No exponential/jitter backoff in worker retry path |
+| 8 | ❌ Open | No runtime `LOG_LEVEL` or structured key/value logging |
+| 9 | ⚠️ Partial | Some error paths improved, but consistent classification/context is missing |
+| 10 | ❌ Open | No explicit error-classify layer |
+| 11 | ⚠️ Partial | Path canonicalization + hook disable done; env scrubbing/sandbox hardening still pending |
+| 12 | ⚠️ Partial | Signal handling + join done; stale worktree startup cleanup still missing |
+| 13 | ⚠️ Partial | Claim transaction + CAS done; idempotency conflict flow still not fully race-safe at handler level |
+| 14 | ⚠️ Partial | PR dedupe and no-op commit handling done; no side-effect ledger |
+| 15 | ⚠️ Partial | Git/curl timeouts done; agent-call cancellation/deadline still missing |
+| 16 | ⚠️ Partial | Current settings are single-threaded by config; allocator/thread-safety guardrails not enforced globally |
+| 17 | ⚠️ Partial | Versioned migrations + tx done; SQL splitting remains heuristic |
+| 18 | ⚠️ Partial | `/healthz` + `/readyz` improved; queue-depth/readiness richness still missing |
+| 19 | ❌ Open | No `/metrics` endpoint or observer wiring yet |
+| 20 | ⚠️ Partial | Doctor checks improved; serve-time fail-fast and key-rotation model still missing |
+| 21 | ⚠️ Partial | Unit/integration/e2e targets added; coverage measurement and deeper module tests still missing |
+| 22 | ✅ Fixed | Comment policy section exists and is aligned with current style |
+
 ---
 
 ## 1. Memory leaks — arena usage, defer hygiene, errdefer patterns
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### What nullclaw does well
 - Explicit ownership conventions with consistent "caller owns" vs "borrowed" APIs
@@ -78,6 +106,7 @@ const ResourceBundle = struct {
 ---
 
 ## 2. Allocation best practices — GPA vs arena vs fixed-buffer
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### What nullclaw does well
 - Purpose-fit allocators: arena for per-request scratch, long-lived for caches, bounded buffers for serialization
@@ -106,6 +135,7 @@ fn executeRun(...) !void {
 ---
 
 ## 3. Async / API performance — concurrent dispatch
+**Status (Mar 05, 2026): ❌ Open**
 
 ### What nullclaw does well
 - Concurrent tool/provider dispatch with cancellation boundaries
@@ -135,6 +165,7 @@ for (threads, 0..) |*t, _| {
 ---
 
 ## 4. Event bus / actor-based dispatch
+**Status (Mar 05, 2026): ❌ Open**
 
 ### What nullclaw does well
 - First-class `Bus` with bounded ring-buffer MPSC queues (`bus.zig`)
@@ -172,6 +203,7 @@ pub const Bus = struct {
 ---
 
 ## 5. Reliability & retry for dispatch
+**Status (Mar 05, 2026): ❌ Open**
 
 ### What nullclaw does well
 - `ReliableProvider`: wraps any provider with retry + backoff + classification + rate limit + circuit breaker
@@ -223,6 +255,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
 ---
 
 ## 6. Rate limiting
+**Status (Mar 05, 2026): ❌ Open**
 
 ### What nullclaw does well
 - Rate limit detection + API key rotation on 429
@@ -262,6 +295,7 @@ Key buckets by `tenant_id` (and optionally `provider/model`).
 ---
 
 ## 7. Backoff — backpressure, exponential backoff, Retry-After
+**Status (Mar 05, 2026): ❌ Open**
 
 ### What nullclaw does well
 - Exponential backoff with jitter
@@ -297,6 +331,7 @@ Apply in:
 ---
 
 ## 8. Logging — .env level control, agent-friendly structured logs
+**Status (Mar 05, 2026): ❌ Open**
 
 ### What nullclaw does well
 - `observability.zig`: `Observer` vtable interface with Noop / Log / Verbose / File / Multi / Otel backends
@@ -335,6 +370,7 @@ pub fn init() void {
 ---
 
 ## 9. Logging on errors — context, correlation, error swallowing
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### What nullclaw does well
 - Error logs include classification + context + correlation IDs
@@ -369,6 +405,7 @@ For git failures: include stderr + command + exit code in logs, classify retryab
 ---
 
 ## 10. Error code classification — decision needed
+**Status (Mar 05, 2026): ❌ Open**
 
 ### What nullclaw does well
 - `error_classify.zig`: classifies API error payloads into `rate_limited`, `context_exhausted`, `vision_unsupported`, `other`
@@ -472,6 +509,7 @@ Advanced path then adds:
 ---
 
 ## 11. Secure execution boundary — untrusted repo content
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### Severity: Critical
 
@@ -493,6 +531,7 @@ Advanced path then adds:
 ---
 
 ## 12. Graceful shutdown / signal handling
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### Severity: High
 
@@ -525,6 +564,7 @@ Also: add startup cleanup of stale `/tmp/zombie-wt-*` directories.
 ---
 
 ## 13. Transactional correctness / exactly-once run claiming
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### Severity: Critical
 
@@ -545,6 +585,7 @@ Also: add startup cleanup of stale `/tmp/zombie-wt-*` directories.
 ---
 
 ## 14. Side-effect idempotency — PR creation, git push, artifact commits
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### Severity: Critical
 
@@ -572,6 +613,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 ---
 
 ## 15. Timeouts & cancellation for external calls
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### Severity: High
 
@@ -596,6 +638,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 ---
 
 ## 16. Thread safety & Zig allocator pitfalls
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### Severity: High
 
@@ -619,6 +662,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 ---
 
 ## 17. Schema migration safety
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### Severity: High
 
@@ -637,6 +681,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 ---
 
 ## 18. Health check depth — readiness vs liveness
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### Severity: Medium–High
 
@@ -654,6 +699,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 ---
 
 ## 19. Metrics / telemetry / tracing
+**Status (Mar 05, 2026): ❌ Open**
 
 ### Severity: Medium
 
@@ -673,6 +719,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 ---
 
 ## 20. Configuration validation & secret hygiene
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### Severity: Medium–High
 
@@ -732,6 +779,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 ---
 
 ## 21. Test coverage — measurement and gaps
+**Status (Mar 05, 2026): ⚠️ Partial**
 
 ### Severity: Critical
 
@@ -853,6 +901,7 @@ _test_coverage:
 ---
 
 ## 22. Comment policy — agent-optimized, tokens-conscious
+**Status (Mar 05, 2026): ✅ Fixed**
 
 ### Severity: Low
 
