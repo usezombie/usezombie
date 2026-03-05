@@ -20,7 +20,7 @@ Replace hard-coded role order in worker control flow with a deterministic, profi
 - 1.1 DONE Role registry lookup API added in `src/pipeline/agents.zig` (`lookupRole`, `runByRole`)
 - 1.2 DONE Profile loader added in `src/pipeline/topology.zig` with validation (first stage echo, final gate warden)
 - 1.3 DONE Worker execution now reads pipeline profile and iterates build/gate stages from config
-- 1.4 PENDING Support non-built-in role adapters beyond echo/scout/warden
+- 1.4 DONE Support non-built-in role adapters beyond echo/scout/warden
 
 ---
 
@@ -34,7 +34,7 @@ Preserve default v1 behavior while enabling extension through config changes.
 - 2.1 DONE Default profile file added at `config/pipeline-default.json` and used by runtime (`PIPELINE_PROFILE_PATH`)
 - 2.2 DONE Stage-aware run logs/events now include `stage_id` and `role_id`
 - 2.3 DONE Integration coverage added for custom profile parsing and default topology role resolution
-- 2.4 PENDING Stage-level transition graph (`on_pass`/`on_fail`) metadata execution
+- 2.4 DONE Stage-level transition graph (`on_pass`/`on_fail`) metadata execution
 
 ---
 
@@ -46,7 +46,7 @@ Preserve default v1 behavior while enabling extension through config changes.
 - [x] 3.2 Default profile reproduces current Echo → Scout → Warden flow
 - [x] 3.3 Adding a new middle stage in profile does not require worker loop rewrite
 - [x] 3.4 Logs/events include stage and role identity for executions
-- [ ] 3.5 Arbitrary role plugin model beyond built-in adapters
+- [x] 3.5 Arbitrary role plugin model beyond built-in adapters
 
 ---
 
