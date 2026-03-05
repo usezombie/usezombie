@@ -180,7 +180,9 @@ fn processNextRun(
     const spec_path = try alloc.dupe(u8, try row.get([]u8, 7));
     defer alloc.free(spec_path);
 
-    result.drain() catch {};
+    result.drain() catch |err| {
+        log.warn("claim query drain failed run_id={s}: {}", .{ run_id, err });
+    };
 
     // Move SPEC_QUEUED -> RUN_PLANNED while the row is still locked.
     _ = try state.transition(conn, run_id, .RUN_PLANNED, .orchestrator, .PLAN_COMPLETE, "claimed by worker");
@@ -203,7 +205,9 @@ fn processNextRun(
         .attempt = attempt,
     }) catch |err| {
         if (err == WorkerError.ShutdownRequested) {
-            _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, .AGENT_TIMEOUT, "shutdown requested") catch {};
+            _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, .AGENT_TIMEOUT, "shutdown requested") catch |tx_err| {
+                log.warn("shutdown transition failed run_id={s}: {}", .{ run_id, tx_err });
+            };
             return err;
         }
 
@@ -219,7 +223,9 @@ fn processNextRun(
             classified.retryable,
             @errorName(err),
         });
-        _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, classified.reason_code, note) catch {};
+        _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, classified.reason_code, note) catch |tx_err| {
+            log.warn("failure transition failed run_id={s}: {}", .{ run_id, tx_err });
+        };
     };
     return .worked;
 }
