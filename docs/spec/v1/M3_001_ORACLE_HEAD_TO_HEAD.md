@@ -56,7 +56,7 @@
 | 17 | ⚠️ Partial | Versioned migrations + tx done; SQL splitting remains heuristic |
 | 18 | ⚠️ Partial | `/healthz` + `/readyz` improved, and `/readyz` now exposes queue depth + oldest age; richer readiness policy is still missing |
 | 19 | ⚠️ Partial | `/metrics` endpoint + core counters are available; observer wiring and correlation propagation are still missing |
-| 20 | ⚠️ Partial | Doctor checks improved; serve-time fail-fast and key-rotation model still missing |
+| 20 | ⚠️ Partial | Serve now fails fast on invalid critical config and supports API key rotation; secret versioning/rotation model is still missing |
 | 21 | ⚠️ Partial | Unit/integration/e2e targets added; coverage measurement and deeper module tests still missing |
 | 22 | ✅ Fixed | Comment policy section exists and is aligned with current style |
 
@@ -532,7 +532,7 @@ Advanced path then adds:
 | 17 | Schema migration safety | **High** | Naïve SQL split; non-transactional; silent failures |
 | 18 | Health check depth (readiness vs liveness) | **Medium–High** | `/healthz` always returns ok even with DB down |
 | 19 | Metrics / telemetry / tracing | **Medium** | NoopObserver and incomplete correlation propagation remain, though core counters are now exposed |
-| 20 | Config validation & secret hygiene | **Medium–High** | Permissive defaults; no key rotation; no fail-fast |
+| 20 | Config validation & secret hygiene | **Medium–High** | Core fail-fast and API key rotation exist; encrypted-secret key versioning/rotation is still missing |
 
 ---
 
@@ -772,15 +772,19 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 
 | File | Line | Issue |
 |------|------|-------|
-| `src/main.zig` | 83–86 | PORT parsing falls back silently to 3000 |
-| `src/main.zig` | 112–114 | `GITHUB_APP_ID` defaults to `""` and continues — only `doctor` enforces |
-| `src/http/handler.zig` | 56–61 | Single static API key; no rotation mechanism; no multi-key support |
-| `src/secrets/crypto.zig` | 21–32 | Master key loaded from env — no rotation, no key versioning |
+| `src/main.zig` | 151–241 | Fail-fast checks now cover `PORT`, GitHub app env, key format, and numeric config parsing, but readiness does not yet report config drift |
+| `src/http/handler.zig` | 58–74 | `API_KEY` now supports comma-separated rotation window, but key source is still static env and not vaulted per tenant |
+| `src/secrets/crypto.zig` | 21–32 | Master key loaded from env still has no key version prefix and no online rotation flow |
 
 ### Recommendation
 - Fail-fast in `serve` for required config (not only `doctor`)
 - Support comma-separated API keys: `API_KEY=key1,key2` — accept any valid key (rotation window)
 - Add key version prefix to encrypted envelopes for rotation support
+
+### Oracle review: remaining scope after this fix
+- Add versioned encryption envelope format (`kek_version`) so key rotation is operationally safe.
+- Add serve-time config validation for dependency reachability (not only env format/presence).
+- Move long-lived static keys from plain env to managed secret source with rotation runbook.
 
 ---
 
