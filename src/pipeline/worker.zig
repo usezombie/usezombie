@@ -305,6 +305,44 @@ fn opPushBranch(ctx: PushRetryCtx, _: u32) !void {
     return git.push(ctx.alloc, ctx.wt_path, ctx.branch, ctx.github_token);
 }
 
+const ScoutRetryCtx = struct {
+    alloc: std.mem.Allocator,
+    workspace_path: []const u8,
+    prompt: []const u8,
+    plan_content: []const u8,
+    defects_content: ?[]const u8,
+};
+
+fn opRunScout(ctx: ScoutRetryCtx, _: u32) !agents.AgentResult {
+    return agents.runScout(
+        ctx.alloc,
+        ctx.workspace_path,
+        ctx.prompt,
+        ctx.plan_content,
+        ctx.defects_content,
+    );
+}
+
+const WardenRetryCtx = struct {
+    alloc: std.mem.Allocator,
+    workspace_path: []const u8,
+    prompt: []const u8,
+    spec_content: []const u8,
+    plan_content: []const u8,
+    implementation_summary: []const u8,
+};
+
+fn opRunWarden(ctx: WardenRetryCtx, _: u32) !agents.AgentResult {
+    return agents.runWarden(
+        ctx.alloc,
+        ctx.workspace_path,
+        ctx.prompt,
+        ctx.spec_content,
+        ctx.plan_content,
+        ctx.implementation_summary,
+    );
+}
+
 const PrRetryCtx = struct {
     alloc: std.mem.Allocator,
     repo_url: []const u8,
@@ -403,13 +441,17 @@ fn executeRun(
 
         _ = try state.transition(conn, ctx.run_id, .PATCH_IN_PROGRESS, .orchestrator, .PATCH_STARTED, null);
 
-        const scout_result = try agents.runScout(
-            run_alloc,
-            wt.path,
-            prompts.scout,
-            echo_result.content,
-            defects,
-        );
+        const scout_result = try reliable.call(agents.AgentResult, ScoutRetryCtx{
+            .alloc = run_alloc,
+            .workspace_path = wt.path,
+            .prompt = prompts.scout,
+            .plan_content = echo_result.content,
+            .defects_content = defects,
+        }, opRunScout, .{
+            .max_retries = 1,
+            .base_delay_ms = 1_000,
+            .max_delay_ms = 8_000,
+        });
 
         agents.emitNullclawRunEvent(ctx.run_id, attempt, .scout, scout_result);
         total_tokens += scout_result.token_count;
@@ -425,14 +467,18 @@ fn executeRun(
         // ── Phase 3: Warden (validation) ─────────────────────────────────
         _ = try state.transition(conn, ctx.run_id, .VERIFICATION_IN_PROGRESS, .orchestrator, .PATCH_STARTED, null);
 
-        const warden_result = try agents.runWarden(
-            run_alloc,
-            wt.path,
-            prompts.warden,
-            spec_content,
-            echo_result.content,
-            scout_result.content,
-        );
+        const warden_result = try reliable.call(agents.AgentResult, WardenRetryCtx{
+            .alloc = run_alloc,
+            .workspace_path = wt.path,
+            .prompt = prompts.warden,
+            .spec_content = spec_content,
+            .plan_content = echo_result.content,
+            .implementation_summary = scout_result.content,
+        }, opRunWarden, .{
+            .max_retries = 1,
+            .base_delay_ms = 1_000,
+            .max_delay_ms = 8_000,
+        });
 
         agents.emitNullclawRunEvent(ctx.run_id, attempt, .warden, warden_result);
         total_tokens += warden_result.token_count;
