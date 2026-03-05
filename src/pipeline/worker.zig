@@ -313,9 +313,11 @@ const PrRetryCtx = struct {
     title: []const u8,
     body: []const u8,
     github_token: []const u8,
+    last_error_detail: ?[]u8 = null,
 };
 
-fn opCreatePr(ctx: PrRetryCtx, _: u32) ![]u8 {
+fn opCreatePr(ctx: *PrRetryCtx, _: u32) ![]u8 {
+    ctx.last_error_detail = null;
     return git.createPullRequest(
         ctx.alloc,
         ctx.repo_url,
@@ -324,7 +326,12 @@ fn opCreatePr(ctx: PrRetryCtx, _: u32) ![]u8 {
         ctx.title,
         ctx.body,
         ctx.github_token,
+        &ctx.last_error_detail,
     );
+}
+
+fn prDetail(ctx: *PrRetryCtx, _: anyerror) ?[]const u8 {
+    return ctx.last_error_detail;
 }
 
 fn executeRun(
@@ -477,7 +484,7 @@ fn executeRun(
 
                 const pr_title = try std.fmt.allocPrint(run_alloc, "usezombie: {s}", .{ctx.spec_id});
 
-                const created_pr = try reliable.call([]u8, PrRetryCtx{
+                var pr_retry_ctx = PrRetryCtx{
                     .alloc = run_alloc,
                     .repo_url = ctx.repo_url,
                     .branch = branch,
@@ -485,7 +492,8 @@ fn executeRun(
                     .title = pr_title,
                     .body = warden_result.content,
                     .github_token = github_token,
-                }, opCreatePr, .{
+                };
+                const created_pr = try reliable.callWithDetail([]u8, &pr_retry_ctx, opCreatePr, prDetail, .{
                     .max_retries = 2,
                     .base_delay_ms = 1_000,
                     .max_delay_ms = 10_000,

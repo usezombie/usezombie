@@ -16,11 +16,25 @@ pub fn call(
     comptime operation: fn (@TypeOf(ctx), u32) anyerror!T,
     opts: RetryOptions,
 ) !T {
+    return callWithDetail(T, ctx, operation, struct {
+        fn detail(_: @TypeOf(ctx), _: anyerror) ?[]const u8 {
+            return null;
+        }
+    }.detail, opts);
+}
+
+pub fn callWithDetail(
+    comptime T: type,
+    ctx: anytype,
+    comptime operation: fn (@TypeOf(ctx), u32) anyerror!T,
+    comptime detail_for_error: fn (@TypeOf(ctx), anyerror) ?[]const u8,
+    opts: RetryOptions,
+) !T {
     var attempt: u32 = 0;
 
     while (true) {
         const result = operation(ctx, attempt) catch |err| {
-            const classified = classifier.classify(err, null);
+            const classified = classifier.classify(err, detail_for_error(ctx, err));
             if (!classified.retryable or attempt >= opts.max_retries) {
                 return err;
             }
@@ -51,5 +65,26 @@ test "reliable call retries and succeeds" {
     }.op, .{ .max_retries = 3, .base_delay_ms = 1, .max_delay_ms = 2 });
 
     try std.testing.expectEqual(@as(i32, 42), result);
+    try std.testing.expectEqual(@as(u32, 3), Ctx.calls);
+}
+
+test "reliable call with detail respects retry-after classification path" {
+    const Ctx = struct {
+        var calls: u32 = 0;
+    };
+
+    const result = try callWithDetail(i32, {}, struct {
+        fn op(_: @TypeOf({}), _: u32) !i32 {
+            Ctx.calls += 1;
+            if (Ctx.calls < 3) return error.PrRateLimited;
+            return 7;
+        }
+    }.op, struct {
+        fn detail(_: @TypeOf({}), _: anyerror) ?[]const u8 {
+            return "HTTP 429\nRetry-After: 0\n";
+        }
+    }.detail, .{ .max_retries = 3, .base_delay_ms = 1, .max_delay_ms = 2 });
+
+    try std.testing.expectEqual(@as(i32, 7), result);
     try std.testing.expectEqual(@as(u32, 3), Ctx.calls);
 }
