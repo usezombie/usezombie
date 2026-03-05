@@ -42,9 +42,28 @@ pub const WorkerConfig = struct {
 
 pub const WorkerState = struct {
     running: std.atomic.Value(bool),
+    in_flight_runs: std.atomic.Value(u32),
 
     pub fn init() WorkerState {
-        return .{ .running = std.atomic.Value(bool).init(true) };
+        return .{
+            .running = std.atomic.Value(bool).init(true),
+            .in_flight_runs = std.atomic.Value(u32).init(0),
+        };
+    }
+
+    pub fn beginRun(self: *WorkerState) void {
+        _ = self.in_flight_runs.fetchAdd(1, .acq_rel);
+        metrics.setWorkerInFlightRuns(self.currentInFlightRuns());
+    }
+
+    pub fn endRun(self: *WorkerState) void {
+        const prev = self.in_flight_runs.fetchSub(1, .acq_rel);
+        std.debug.assert(prev > 0);
+        metrics.setWorkerInFlightRuns(self.currentInFlightRuns());
+    }
+
+    pub fn currentInFlightRuns(self: *const WorkerState) u32 {
+        return self.in_flight_runs.load(.acquire);
     }
 };
 
@@ -153,10 +172,21 @@ const TenantRateLimiter = struct {
 // ── Entry point ───────────────────────────────────────────────────────────
 
 pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
+    metrics.setWorkerInFlightRuns(worker_state.currentInFlightRuns());
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
         worker_state.running.store(false, .release);
-        _ = gpa.deinit();
+        const inflight = worker_state.currentInFlightRuns();
+        if (inflight != 0) {
+            log.warn("worker exiting with in_flight_runs={d}", .{inflight});
+        }
+        switch (gpa.deinit()) {
+            .ok => {},
+            .leak => {
+                metrics.incWorkerAllocatorLeaks();
+                log.warn("worker allocator leak detected", .{});
+            },
+        }
     }
     const alloc = gpa.allocator();
 
@@ -302,6 +332,9 @@ fn processNextRun(
         .{ request_id, attempt },
     ) catch "run_claimed";
     events.emit("run_claimed", run_id, claimed_detail_slice);
+
+    worker_state.beginRun();
+    defer worker_state.endRun();
 
     executeRun(alloc, cfg, worker_state, prompts, profile, conn, token_cache, .{
         .run_id = run_id,
@@ -1214,4 +1247,16 @@ test "integration: sleepWhileRunning returns immediately when stopped" {
     var ws = WorkerState.init();
     ws.running.store(false, .release);
     sleepWhileRunning(&ws, 500);
+}
+
+test "worker state in-flight run counter tracks begin/end safely" {
+    var ws = WorkerState.init();
+    try std.testing.expectEqual(@as(u32, 0), ws.currentInFlightRuns());
+    ws.beginRun();
+    ws.beginRun();
+    try std.testing.expectEqual(@as(u32, 2), ws.currentInFlightRuns());
+    ws.endRun();
+    try std.testing.expectEqual(@as(u32, 1), ws.currentInFlightRuns());
+    ws.endRun();
+    try std.testing.expectEqual(@as(u32, 0), ws.currentInFlightRuns());
 }
