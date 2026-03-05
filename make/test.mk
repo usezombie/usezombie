@@ -2,10 +2,11 @@
 # TEST — unit + integration + e2e
 # =============================================================================
 
-.PHONY: test test-unit test-unit-zombied test-unit-website test-integration test-integration-zombied test-depth test-e2e qa qa-smoke
+.PHONY: test test-unit test-unit-zombied test-unit-website test-integration test-integration-zombied test-depth test-coverage-zombied test-e2e qa qa-smoke
 
 ZIG_GLOBAL_CACHE_DIR ?= $(CURDIR)/.tmp/zig-global-cache
 ZIG_LOCAL_CACHE_DIR  ?= $(CURDIR)/.tmp/zig-local-cache
+ZOMBIED_COVERAGE_MIN_LINES ?= 35
 
 # --- Unit tests ---
 
@@ -45,6 +46,22 @@ test-depth:  ## Enforce minimum test depth inventory
 	 if [ "$$unit_count" -lt 25 ]; then echo "✗ expected at least 25 Zig tests, got $$unit_count"; exit 1; fi; \
 	 if [ "$$integration_count" -lt 3 ]; then echo "✗ expected at least 3 Zig integration tests, got $$integration_count"; exit 1; fi; \
 	 echo "✓ [zombied] test depth gate passed (unit=$$unit_count integration=$$integration_count)"
+
+test-coverage-zombied:  ## Run backend line coverage with kcov and enforce minimum threshold
+	@command -v kcov >/dev/null 2>&1 || { echo "✗ kcov is required for backend coverage (install: brew install kcov or apt-get install kcov)"; exit 1; }
+	@mkdir -p "$(ZIG_GLOBAL_CACHE_DIR)" "$(ZIG_LOCAL_CACHE_DIR)" coverage/zombied .tmp
+	@echo "→ [zombied] Building backend test binary for coverage..."
+	@ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
+	 ZIG_LOCAL_CACHE_DIR="$(ZIG_LOCAL_CACHE_DIR)" \
+	 zig build test-bin
+	@echo "→ [zombied] Running kcov coverage..."
+	@kcov --clean --include-pattern="$(CURDIR)/src" coverage/zombied zig-out/bin/zombied-tests >/dev/null
+	@line_rate=$$(sed -n 's/.*line-rate="\([0-9.]*\)".*/\1/p' coverage/zombied/cobertura.xml | head -n 1); \
+	 if [ -z "$$line_rate" ]; then echo "✗ failed to parse backend line-rate from coverage/zombied/cobertura.xml"; exit 1; fi; \
+	 line_pct=$$(awk -v r="$$line_rate" 'BEGIN { printf "%.2f", r * 100 }'); \
+	 printf 'zombied_line_coverage_pct=%s\nzombied_line_coverage_min_pct=%s\n' "$$line_pct" "$(ZOMBIED_COVERAGE_MIN_LINES)" | tee .tmp/zombied-coverage.txt >/dev/null; \
+	 awk -v got="$$line_pct" -v min="$(ZOMBIED_COVERAGE_MIN_LINES)" 'BEGIN { if ((got + 0) < (min + 0)) { printf "✗ backend line coverage %.2f%% is below threshold %.2f%%\n", got, min; exit 1 } }'; \
+	 echo "✓ [zombied] backend line coverage gate passed ($$line_pct% >= $(ZOMBIED_COVERAGE_MIN_LINES)%)"
 
 # --- E2E: API flow (zombied backend) ---
 

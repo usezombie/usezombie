@@ -26,6 +26,36 @@ jobs:
           version: 0.15.2
       - run: make test-unit-zombied
 
+  # ── zombied: Zig line coverage (kcov + codecov) ─────────────────────────
+  coverage-zig:
+    runs-on: ubuntu-latest
+    needs: test-zig
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - name: Install kcov
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y kcov
+      - name: Run backend coverage gate
+        run: make test-coverage-zombied
+      - name: Upload backend coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage/zombied/cobertura.xml
+          flags: zombied
+          fail_ci_if_error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      - name: Upload backend coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zombied-coverage
+          path: coverage/zombied/
+          retention-days: 7
+
   # ── CLI: lint + build ────────────────────────────────────────────────────
   lint-cli:
     runs-on: ubuntu-latest
