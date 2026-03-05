@@ -158,8 +158,13 @@ const TenantRateLimiter = struct {
         provider: []const u8,
         now_ms: i64,
     ) !*rate_limit.TokenBucket {
-        const scoped_key = try std.fmt.allocPrint(self.alloc, "{s}::{s}", .{ tenant_id, provider });
-        defer self.alloc.free(scoped_key);
+        var key_buf: [256]u8 = undefined;
+        const scoped_key = std.fmt.bufPrint(&key_buf, "{s}::{s}", .{ tenant_id, provider }) catch |err| blk: {
+            if (err != error.NoSpaceLeft) return err;
+            break :blk try std.fmt.allocPrint(self.alloc, "{s}::{s}", .{ tenant_id, provider });
+        };
+        const using_heap_key = @intFromPtr(scoped_key.ptr) != @intFromPtr(&key_buf[0]);
+        defer if (using_heap_key) self.alloc.free(scoped_key);
 
         if (self.buckets.getPtr(scoped_key)) |bucket| return bucket;
 
@@ -1368,6 +1373,25 @@ test "integration: tenant limiter deinit releases scoped keys under churn" {
         var provider_buf: [32]u8 = undefined;
         const tenant = try std.fmt.bufPrint(&tenant_buf, "tenant-{d}", .{i % 50});
         const provider = try std.fmt.bufPrint(&provider_buf, "provider-{d}", .{i % 20});
+        _ = try limiter.getOrCreateBucket(tenant, provider, std.time.milliTimestamp());
+    }
+}
+
+test "integration: tenant limiter long scoped keys use fallback path without leaks" {
+    var gpa = WorkerAllocator{};
+    defer {
+        const leaked = finalizeWorkerAllocator(&gpa);
+        std.testing.expect(!leaked) catch unreachable;
+    }
+
+    var limiter = TenantRateLimiter.init(gpa.allocator(), 2, 5.0);
+    defer limiter.deinit();
+
+    const tenant = "tenant-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+    const provider = "provider-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy";
+
+    var i: usize = 0;
+    while (i < 200) : (i += 1) {
         _ = try limiter.getOrCreateBucket(tenant, provider, std.time.milliTimestamp());
     }
 }
