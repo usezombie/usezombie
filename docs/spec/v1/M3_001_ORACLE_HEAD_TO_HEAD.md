@@ -52,7 +52,7 @@
 | 13 | ⚠️ Partial | Claim transaction + CAS done; idempotency conflict flow still not fully race-safe at handler level |
 | 14 | ⚠️ Partial | PR dedupe and no-op commit handling done; no side-effect ledger |
 | 15 | ⚠️ Partial | Git/curl timeouts done; agent-call cancellation/deadline still missing |
-| 16 | ⚠️ Partial | Current settings are single-threaded by config; allocator/thread-safety guardrails not enforced globally |
+| 16 | ⚠️ Partial | Main allocator is now thread-safe and worker concurrency is configurable; global leak-reporting/thread-safety guardrails still need tightening |
 | 17 | ⚠️ Partial | Versioned migrations + tx done; SQL splitting remains heuristic |
 | 18 | ⚠️ Partial | `/healthz` + `/readyz` improved, and `/readyz` now exposes queue depth + oldest age; richer readiness policy is still missing |
 | 19 | ❌ Open | No `/metrics` endpoint or observer wiring yet |
@@ -674,7 +674,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 
 | File | Line | Issue |
 |------|------|-------|
-| `src/main.zig` | 131–135 | `ctx.alloc = alloc` (GPA) shared with HTTP thread — GPA is **not** thread-safe by default |
+| `src/main.zig` | 89–97 | Main GPA is now thread-safe, but leak reporting remains permissive (deinit result not enforced) |
 | `src/http/server.zig` | 137–140 | Zap supports multi-thread/worker config — concurrent handler access to non-thread-safe allocator |
 | `src/main.zig` | 62–64 | `defer _ = gpa.deinit();` — leak detection result discarded |
 | `src/pipeline/worker.zig` | 54–56 | Same: worker GPA deinit result ignored |
@@ -686,6 +686,11 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
   const check = gpa.deinit();
   if (check == .leak) log.err("memory leak detected", .{});
   ```
+
+### Oracle review: remaining scope after this fix
+- Enforce leak-check handling in debug builds instead of discarding `gpa.deinit()` status.
+- Confirm Zap runtime thread model and document allocator expectations explicitly.
+- Audit remaining shared allocators/caches for thread-safety under `WORKER_CONCURRENCY > 1`.
 
 ---
 
