@@ -32,6 +32,21 @@ fn dispatch(r: zap.Request) !void {
         handler.handleHealthz(g_ctx, r);
         return;
     }
+    if (std.mem.eql(u8, path, "/readyz")) {
+        handler.handleReadyz(g_ctx, r);
+        return;
+    }
+
+    // Route: /v1/github/callback
+    if (std.mem.eql(u8, path, "/v1/github/callback")) {
+        if (r.methodAsEnum() == .GET) {
+            handler.handleGitHubCallback(g_ctx, r);
+        } else {
+            r.setStatus(.method_not_allowed);
+            r.sendBody("") catch {};
+        }
+        return;
+    }
 
     // Route: /v1/runs
     if (std.mem.eql(u8, path, "/v1/runs")) {
@@ -138,4 +153,8 @@ pub fn serve(ctx: *handler.Context, cfg: ServerConfig) !void {
         .threads = cfg.threads,
         .workers = cfg.workers,
     });
+}
+
+pub fn stop() void {
+    zap.stop();
 }

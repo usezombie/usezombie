@@ -35,7 +35,7 @@ No tool today connects a **spec queue** to a **coordinated agent team** to a **s
 3. **One binary, zero dependencies.** One Zig binary (~2-3MB) with built-in agent runtime, HTTP API, and OS-level sandbox. Deploy by copying a file. No containers, no runtime dependencies.
 4. **Feedback as artifacts.** Every validation failure produces a structured defect report. Auditable paper trail. Agents learn from their own mistakes across retries.
 5. **"Isolate the agent" security model.** Zero secrets in the sandbox. Control plane acts as credential proxy. Agent receives only a session token and callback URL.
-6. **OS-level sandboxing.** Landlock/Bubblewrap provides PID, mount, and network namespace isolation. Same binary, sandbox is a config flag, not a platform.
+6. **VM-level sandboxing.** Firecracker microVM isolation provides stronger execution boundaries for untrusted code while preserving deterministic worker behavior.
 
 ## Target Use Cases
 
@@ -48,17 +48,24 @@ Each engineer's specs queue independently per workspace. UseZombie processes the
 ### Agent-to-agent pipeline
 An AI PM agent writes specs based on user feedback, drops `PENDING_*.md` files into the repo. UseZombie implements them. The PM agent reviews the PR summary — approves or drops revision spec. Zero humans in the loop.
 
-## ICP (phased)
+## ICP (by version)
 
-### M1-M2: Solo builders and small teams
+### v1: Solo builders and small teams
 1. Solo builders running 3+ repos with AI coding agents.
 2. Small teams (2-10 engineers) already using Claude Code, Codex, or Amp but babysitting each run.
 3. Repos with recurring spec backlogs and frequent PR demand.
+4. CLI-first delivery: `npx zombiectl login` → workspace add → specs sync → run → PR.
 
-### M3: Platform teams and enterprise
+### v2: Teams with security requirements
+1. Teams needing VM-level execution isolation (Firecracker).
+2. Organizations requiring native git operations (libgit2, no subprocess).
+3. Multi-worker horizontal scaling with bounded concurrency.
+
+### v3: Platform teams and enterprise
 1. Platform/DevEx teams in 20-200 engineer orgs.
 2. Teams needing audit trails, policy controls, and reliability SLOs for agent-generated PRs.
 3. Organizations with compliance requirements around AI-generated code.
+4. Mission Control UI (`app.usezombie.com`) for visual management.
 
 ## Buyer and User Map
 
@@ -90,13 +97,13 @@ Secondary:
 3. Sensitive commands with confirmations.
 
 ### Team
-1. Shared workspaces + RBAC.
+1. Shared workspaces + team-level access control.
 2. Policy approvals and audit exports.
 3. Team observability and alerting.
 
 ### Enterprise
-1. SSO, compliance controls, data governance.
-2. NullClaw Bubblewrap sandbox isolation.
+1. Compliance controls, data governance.
+2. Firecracker microVM execution isolation.
 3. Contractual SLA/support.
 
 ## Revenue Model: BYOK + Compute Billing
@@ -145,7 +152,17 @@ Secondary:
 - `skill.md` — Natural language onboarding for LLM agents
 - `/agents` route with JSON-LD + code examples
 
-## Agent Readiness (M2 differentiator)
+## v1 Launch Domains
+
+| Domain | Purpose |
+|---|---|
+| `usezombie.com` | Human buyer landing page + pricing |
+| `usezombie.sh` | Agent discovery, machine-readable onboarding |
+| `docs.usezombie.com` | Mintlify-hosted technical documentation |
+| `api.usezombie.com` | zombied API endpoint |
+| `app.usezombie.com` | v3 — Mission Control UI (not v1) |
+
+## Agent Readiness (v2 differentiator)
 
 Factory.ai-style repository assessment:
 1. Evaluate repos across technical pillars (style/validation, build system, testing, docs, dev environment, code quality, observability, security).

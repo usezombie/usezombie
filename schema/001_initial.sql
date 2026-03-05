@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS runs (
     pr_url          TEXT,
     created_at      BIGINT NOT NULL,
     updated_at      BIGINT NOT NULL,
-    UNIQUE (idempotency_key)
+    UNIQUE (workspace_id, idempotency_key)
 );
 CREATE INDEX IF NOT EXISTS idx_runs_state      ON runs(state, created_at);
 CREATE INDEX IF NOT EXISTS idx_runs_workspace  ON runs(workspace_id, state);

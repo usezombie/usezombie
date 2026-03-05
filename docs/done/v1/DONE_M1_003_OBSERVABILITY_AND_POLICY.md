@@ -48,7 +48,7 @@ Optional diagnostic event type:
 
 NullClaw-specific telemetry:
 1. `nullclaw_run`: agent role, config file, result status, wall-clock duration, peak memory, token count
-2. Emitted by clawable binary after each NullClaw invocation (Echo, Scout, Warden)
+2. Emitted by zombie binary after each NullClaw invocation (Echo, Scout, Warden)
 
 Envelope requirements:
 1. Stable `event_id` and monotonic `sequence` per run.
@@ -124,7 +124,7 @@ Mitigation: controlled reason-code catalog with human-readable mapping in docs.
 4. Risk: false-positive alerts create fatigue.
 Mitigation: rolling-window thresholds and per-workspace suppression controls.
 5. Risk: NullClaw stderr output not captured in observability events.
-Mitigation: clawable binary pipes NullClaw stderr to structured log events.
+Mitigation: zombie binary pipes NullClaw stderr to structured log events.
 
 ## Test/Verification Commands
 

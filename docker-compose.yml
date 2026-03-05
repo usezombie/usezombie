@@ -14,7 +14,7 @@ services:
   zombied:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     environment:
       PORT: 3000
       DATABASE_URL: postgres://usezombie:usezombie@postgres:5432/usezombiedb
@@ -24,6 +24,10 @@ services:
       - postgres
     ports:
       - "3000:3000"
+    volumes:
+      - ./:/app
+      - zig-cache:/app/.zig-cache
 
 volumes:
   postgres-data:
+  zig-cache:

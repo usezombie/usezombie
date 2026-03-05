@@ -54,7 +54,7 @@ Transition policy:
 2. `scout` (builder): implements changes and writes `implementation.md`.
 3. `warden` (validator): validates and writes `validation.md` + `attempt_N_defects.md` on failures.
 4. Engine/system actor handles PR creation, notifications, and terminal-state progression.
-5. `clawable` coordinator role is reserved for Phase 2+ chat/voice ingress and is not active in Sprint 1.
+5. `zombie` coordinator role is reserved for Phase 2+ chat/voice ingress and is not active in Sprint 1.
 
 ### 4) Control API contract (surface)
 1. `start_run(spec_id, workspace_id, mode, requested_by)` returns `run_id`, `state`, and admission metadata.

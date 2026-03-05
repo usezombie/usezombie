@@ -1,4 +1,4 @@
-# PENDING 004: Website Execution Plan (Human + Agent Boundaries)
+# M3_002: Website Execution Plan (Human + Agent Boundaries)
 
 Date: Feb 28, 2026
 Status: Pending spec (implementation-ready, no code)
@@ -81,11 +81,11 @@ Mitigation: explicit route labels, hero copy, and separated CTAs.
 ## Test/verification commands
 ```bash
 # Required section presence
-rg -n "^## (Goal|Explicit assumptions|In-scope|Out-of-scope|Interfaces and contracts|Acceptance criteria|Risks and mitigations|Test/verification commands)$" docs/spec/PENDING2_004_WEBSITE_EXECUTION_PLAN.md
+rg -n "^## (Goal|Explicit assumptions|In-scope|Out-of-scope|Interfaces and contracts|Acceptance criteria|Risks and mitigations|Test/verification commands)$" docs/spec/v1/M3_002_WEBSITE_EXECUTION_PLAN.md
 
 # IA and machine-readable assets are defined
-rg -n "/agents|/pricing|/docs|openapi.json|agent-manifest.json|skill.md|llms.txt|JSON-LD" docs/spec/PENDING2_004_WEBSITE_EXECUTION_PLAN.md
+rg -n "/agents|/pricing|/docs|openapi.json|agent-manifest.json|skill.md|llms.txt|JSON-LD" docs/spec/v1/M3_002_WEBSITE_EXECUTION_PLAN.md
 
 # Boundary and styling constraints captured
-rg -n "human|agent|neon-orange|accessibility|responsive|CTA" docs/spec/PENDING2_004_WEBSITE_EXECUTION_PLAN.md
+rg -n "human|agent|neon-orange|accessibility|responsive|CTA" docs/spec/v1/M3_002_WEBSITE_EXECUTION_PLAN.md
 ```

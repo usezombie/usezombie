@@ -1,7 +1,7 @@
-# M2-008: Secrets Hardening — Vault Schema + Envelope Encryption
+# M3_000: Secrets Hardening — Vault Schema + Envelope Encryption
 
 Date: Mar 3, 2026
-Status: PENDING
+Status: ✅ DONE (Mar 05, 2026)
 Priority: P0 — security blocker before any customer data
 Depends on: M1 control plane operational
 

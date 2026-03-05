@@ -5,14 +5,70 @@ on:
   pull_request:
 
 jobs:
-  test:
+  lint-zig:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: mlugg/setup-zig@v2
         with:
-          bun-version: 1.3.9
-      - run: bun install
-      - run: make quality
-      - run: make test
-      - run: make build
+          version: 0.15.2
+      - run: make lint
+
+  test-zig:
+    runs-on: ubuntu-latest
+    needs: lint-zig
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - run: make _test_unit
+
+  lint-cli:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  test-cli:
+    runs-on: ubuntu-latest
+    needs: lint-cli
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm test
+
+  # ── Push dev container on develop branch merges ─────────────────────
+  push-dev:
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    needs: [test-zig, test-cli]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push dev image
+        run: |
+          make build-dev
+          make push-dev
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}

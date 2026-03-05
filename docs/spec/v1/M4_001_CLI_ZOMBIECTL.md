@@ -1,4 +1,4 @@
-# M2-007: zombiectl CLI
+# M4_001: zombiectl CLI
 
 Date: Mar 3, 2026
 Status: PENDING

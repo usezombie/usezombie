@@ -2,13 +2,18 @@
 # QUALITY — code quality, formatting, analysis
 # =============================================================================
 
-.PHONY: fmt fmt-check doctor
+.PHONY: lint doctor _fmt _fmt_check
 
-fmt: ## Format all Zig source files
+_fmt:
+	@echo "→ Formatting code..."
 	@find src -name '*.zig' -exec zig fmt {} \;
 
-fmt-check: ## Check formatting without modifying files
+_fmt_check:
+	@echo "→ Checking formatting..."
 	@find src -name '*.zig' -exec zig fmt --check {} \;
 
-doctor: ## Run zombied doctor (connectivity + config check)
+lint: _fmt_check _fmt  ## Run formatter and linter
+	@echo "✓ All checks passed"
+
+doctor:  ## Run zombied doctor (connectivity + config check)
 	@zig build run -- doctor
