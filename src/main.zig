@@ -171,6 +171,7 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
             runtime_config.ValidationError.InvalidPort,
             runtime_config.ValidationError.InvalidMaxAttempts,
             runtime_config.ValidationError.InvalidWorkerConcurrency,
+            runtime_config.ValidationError.InvalidRunTimeoutMs,
             runtime_config.ValidationError.InvalidRateLimitCapacity,
             runtime_config.ValidationError.InvalidRateLimitRefillPerSec,
             runtime_config.ValidationError.InvalidReadyMaxQueueDepth,
@@ -222,6 +223,7 @@ fn cmdServe(alloc: std.mem.Allocator) !void {
         .github_app_id = serve_cfg.github_app_id,
         .github_app_private_key = serve_cfg.github_app_private_key,
         .max_attempts = serve_cfg.max_attempts,
+        .run_timeout_ms = serve_cfg.run_timeout_ms,
         .rate_limit_capacity = serve_cfg.rate_limit_capacity,
         .rate_limit_refill_per_sec = serve_cfg.rate_limit_refill_per_sec,
     };

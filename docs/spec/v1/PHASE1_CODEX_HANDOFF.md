@@ -191,6 +191,14 @@ Create `ArenaAllocator` at start of `executeRun()`, `defer arena.deinit()`. Pass
 - This extends correlation beyond API/worker/agent paths into governance and state machine surfaces.
 - Remaining: replace ad-hoc lookup-based correlation with a unified trace context model.
 
+### ⚠️ PARTIAL: 1.20 Per-run deadline gating (Dimension 15)
+
+**File:** `src/config/runtime.zig` + `src/main.zig` + `src/pipeline/worker.zig`
+
+- Added `RUN_TIMEOUT_MS` runtime config (default `300000`) and validation.
+- Worker now enforces run deadline checks before major phases and blocks over-time runs with deterministic state transition.
+- Remaining: true in-flight cooperative cancellation for currently running `agent.runSingle()` calls.
+
 ### ⚠️ PARTIAL: 1.16 Readiness threshold gating (Dimension 18)
 
 **File:** `src/config/runtime.zig` + `src/http/handler.zig` + `src/main.zig`
@@ -536,6 +544,7 @@ NULLCLAW_OBSERVER=log                        # log|noop|verbose (default: log)
 AGENT_CONFIG_DIR=/app/config
 DEFAULT_MAX_ATTEMPTS=3
 WORKER_CONCURRENCY=1
+RUN_TIMEOUT_MS=300000                         # Max wall-clock per run before worker blocks it
 LOG_LEVEL=info
 RATE_LIMIT_CAPACITY=30
 RATE_LIMIT_REFILL_PER_SEC=5.0

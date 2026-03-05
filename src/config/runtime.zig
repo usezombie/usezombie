@@ -15,6 +15,7 @@ pub const ValidationError = error{
     InvalidWorkerConcurrency,
     InvalidRateLimitCapacity,
     InvalidRateLimitRefillPerSec,
+    InvalidRunTimeoutMs,
     InvalidReadyMaxQueueDepth,
     InvalidReadyMaxQueueAgeMs,
 };
@@ -28,6 +29,7 @@ pub const ServeConfig = struct {
     config_dir: []u8,
     max_attempts: u32,
     worker_concurrency: u32,
+    run_timeout_ms: u64,
     rate_limit_capacity: u32,
     rate_limit_refill_per_sec: f64,
     ready_max_queue_depth: ?i64,
@@ -40,6 +42,7 @@ pub const ServeConfig = struct {
         const port = try parseU16Env(alloc, "PORT", 3000, ValidationError.InvalidPort);
         const max_attempts = try parseU32Env(alloc, "DEFAULT_MAX_ATTEMPTS", 3, ValidationError.InvalidMaxAttempts);
         const worker_concurrency = try parseU32Env(alloc, "WORKER_CONCURRENCY", 1, ValidationError.InvalidWorkerConcurrency);
+        const run_timeout_ms = try parseU64Env(alloc, "RUN_TIMEOUT_MS", 300_000, ValidationError.InvalidRunTimeoutMs);
         const rate_limit_capacity = try parseU32Env(alloc, "RATE_LIMIT_CAPACITY", 30, ValidationError.InvalidRateLimitCapacity);
         const rate_limit_refill_per_sec = try parseF64Env(alloc, "RATE_LIMIT_REFILL_PER_SEC", 5.0, ValidationError.InvalidRateLimitRefillPerSec);
         const ready_max_queue_depth = try parseOptionalI64Env(alloc, "READY_MAX_QUEUE_DEPTH", ValidationError.InvalidReadyMaxQueueDepth);
@@ -47,6 +50,7 @@ pub const ServeConfig = struct {
 
         if (max_attempts == 0) return ValidationError.InvalidMaxAttempts;
         if (worker_concurrency == 0) return ValidationError.InvalidWorkerConcurrency;
+        if (run_timeout_ms == 0) return ValidationError.InvalidRunTimeoutMs;
         if (rate_limit_capacity == 0) return ValidationError.InvalidRateLimitCapacity;
         if (!(rate_limit_refill_per_sec > 0)) return ValidationError.InvalidRateLimitRefillPerSec;
         if (ready_max_queue_depth) |v| if (v <= 0) return ValidationError.InvalidReadyMaxQueueDepth;
@@ -84,6 +88,7 @@ pub const ServeConfig = struct {
             .config_dir = config_dir,
             .max_attempts = max_attempts,
             .worker_concurrency = worker_concurrency,
+            .run_timeout_ms = run_timeout_ms,
             .rate_limit_capacity = rate_limit_capacity,
             .rate_limit_refill_per_sec = rate_limit_refill_per_sec,
             .ready_max_queue_depth = ready_max_queue_depth,
@@ -113,6 +118,7 @@ pub const ServeConfig = struct {
             ValidationError.InvalidPort => std.debug.print("fatal: invalid PORT value\n", .{}),
             ValidationError.InvalidMaxAttempts => std.debug.print("fatal: invalid DEFAULT_MAX_ATTEMPTS value\n", .{}),
             ValidationError.InvalidWorkerConcurrency => std.debug.print("fatal: invalid WORKER_CONCURRENCY value\n", .{}),
+            ValidationError.InvalidRunTimeoutMs => std.debug.print("fatal: invalid RUN_TIMEOUT_MS value\n", .{}),
             ValidationError.InvalidRateLimitCapacity => std.debug.print("fatal: invalid RATE_LIMIT_CAPACITY value\n", .{}),
             ValidationError.InvalidRateLimitRefillPerSec => std.debug.print("fatal: invalid RATE_LIMIT_REFILL_PER_SEC value\n", .{}),
             ValidationError.InvalidReadyMaxQueueDepth => std.debug.print("fatal: invalid READY_MAX_QUEUE_DEPTH value\n", .{}),
@@ -145,6 +151,12 @@ fn parseF64Env(alloc: std.mem.Allocator, name: []const u8, default_value: f64, i
     const raw = std.process.getEnvVarOwned(alloc, name) catch return default_value;
     defer alloc.free(raw);
     return std.fmt.parseFloat(f64, raw) catch invalid_error;
+}
+
+fn parseU64Env(alloc: std.mem.Allocator, name: []const u8, default_value: u64, invalid_error: ValidationError) !u64 {
+    const raw = std.process.getEnvVarOwned(alloc, name) catch return default_value;
+    defer alloc.free(raw);
+    return std.fmt.parseInt(u64, raw, 10) catch invalid_error;
 }
 
 fn parseOptionalI64Env(alloc: std.mem.Allocator, name: []const u8, invalid_error: ValidationError) !?i64 {
