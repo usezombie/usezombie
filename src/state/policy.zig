@@ -39,7 +39,20 @@ pub fn recordPolicyEvent(
     });
     r.deinit();
 
-    log.info("policy_event workspace={s} class={s} decision={s} rule={s} actor={s}", .{
+    var request_id: []const u8 = "-";
+    if (run_id) |rid| {
+        var rq = conn.query("SELECT request_id FROM runs WHERE run_id = $1", .{rid}) catch null;
+        if (rq) |*q| {
+            defer q.deinit();
+            if ((q.next() catch null)) |rrow| {
+                if (rrow.get(?[]u8, 0) catch null) |req| {
+                    if (req.len > 0) request_id = req;
+                }
+            }
+        }
+    }
+    log.info("policy_event request_id={s} workspace={s} class={s} decision={s} rule={s} actor={s}", .{
+        request_id,
         workspace_id,
         @tagName(action_class),
         @tagName(decision),
@@ -49,8 +62,8 @@ pub fn recordPolicyEvent(
     var detail_buf: [192]u8 = undefined;
     const detail = std.fmt.bufPrint(
         &detail_buf,
-        "workspace={s} class={s} decision={s} rule={s} actor={s}",
-        .{ workspace_id, @tagName(action_class), @tagName(decision), rule_id, actor },
+        "request_id={s} workspace={s} class={s} decision={s} rule={s} actor={s}",
+        .{ request_id, workspace_id, @tagName(action_class), @tagName(decision), rule_id, actor },
     ) catch "policy_event";
     events.emit("policy_event", run_id, detail);
 }

@@ -183,6 +183,14 @@ Create `ArenaAllocator` at start of `executeRun()`, `defer arena.deinit()`. Pass
 - Wired helper usage into key HTTP send/format catch paths and worker claim/transition catch paths.
 - Remaining: expand helper usage to remaining critical boundaries (notably git op error classification paths).
 
+### ⚠️ PARTIAL: 1.19 State/policy correlation enrichment (Dimension 19)
+
+**File:** `src/state/machine.zig` + `src/state/policy.zig`
+
+- State transition and policy event logs/bus payloads now include resolved `request_id` (looked up from `runs` by `run_id`).
+- This extends correlation beyond API/worker/agent paths into governance and state machine surfaces.
+- Remaining: replace ad-hoc lookup-based correlation with a unified trace context model.
+
 ### ⚠️ PARTIAL: 1.16 Readiness threshold gating (Dimension 18)
 
 **File:** `src/config/runtime.zig` + `src/http/handler.zig` + `src/main.zig`
