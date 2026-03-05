@@ -48,7 +48,7 @@ M3_007 (Website) ──── independent, parallel ─────────�
 
 ## ✅ DONE: Step 1 — M3_001 Critical Bug Fixes
 
-Reference: `docs/spec/v1/M3_001_ORACLE_HEAD_TO_HEAD.md` (dimensions 5, 7, 10, 11-20)
+Reference: `docs/spec/v1/M3_001_ORACLE_HEAD_TO_HEAD.md` (dimensions 1, 5, 7, 10, 11-20)
 
 ### ✅ DONE: 1.1 Transaction wrapping for run claiming
 
@@ -127,6 +127,13 @@ Create `ArenaAllocator` at start of `executeRun()`, `defer arena.deinit()`. Pass
 
 `/healthz`: execute `SELECT 1` — return 503 if Postgres unreachable.
 `/readyz`: check DB + worker thread liveness — return 503 if either is dead.
+
+### ✅ DONE: 1.11 Memory lifecycle cleanup in git + tool builders (Dimension 1)
+
+**File:** `src/git/ops.zig` + `src/pipeline/agents.zig`
+
+- `src/git/ops.zig`: added a `CommandResources` lifecycle wrapper for subprocess execution (`spawn`/timeout/read/deinit). Timeout path now closes pipes, kills, waits, and returns deterministic timeout errors.
+- `src/pipeline/agents.zig`: consolidated duplicated restricted tool construction into shared helpers to standardize ownership and cleanup behavior.
 
 ---
 

@@ -22,7 +22,7 @@
 
 | # | Dimension | Severity | usezombie status | nullclaw reference pattern |
 |---|-----------|----------|------------------|----------------------------|
-| 1 | Memory leaks | **Medium** | Good defer hygiene; subprocess lifecycle gaps | ResourceBundle pattern, errdefer at boundaries |
+| 1 | Memory leaks | **Medium** | ✅ Command/process lifecycle now uses explicit resource bundling and shared tool-builder ownership patterns | ResourceBundle pattern, errdefer at boundaries |
 | 2 | Allocation best practices | **Medium** | Single GPA for worker; many manual frees | Per-run ArenaAllocator; bounded buffers |
 | 3 | Async / API performance | **High** | Configurable multi-worker threads via `WORKER_CONCURRENCY`; deeper async/provider concurrency still missing | Multi-worker + concurrent dispatch |
 | 4 | Event bus / actor dispatch | **Medium** | Ad-hoc log lines only | Ring-buffer MPSC bus (`bus.zig`) |
@@ -37,7 +37,7 @@
 
 | # | Status | Missing / remaining work |
 |---|---|---|
-| 1 | ⚠️ Partial | Child process teardown patterns are still mixed; no unified ResourceBundle abstraction |
+| 1 | ✅ Fixed | `src/git/ops.zig` now uses a `CommandResources` lifecycle wrapper (`spawn`/timeout/read/deinit), and agent restricted tool builders are consolidated in `src/pipeline/agents.zig` |
 | 2 | ⚠️ Partial | Per-run arena added in worker, but allocator/thread model not fully normalized |
 | 3 | ⚠️ Partial | Worker concurrency is now configurable with multiple threads; provider/tool dispatch is still blocking/sequential per run |
 | 4 | ❌ Open | No event bus implementation yet |
@@ -63,45 +63,22 @@
 ---
 
 ## 1. Memory leaks — arena usage, defer hygiene, errdefer patterns
-**Status (Mar 05, 2026): ⚠️ Partial**
+**Status (Mar 05, 2026): ✅ Fixed**
 
 ### What nullclaw does well
 - Explicit ownership conventions with consistent "caller owns" vs "borrowed" APIs
 - Defensive `errdefer` cleanup at all boundaries (tools, providers, observers)
 - Lifecycle bundling: components constructed/deconstructed as a unit (provider + observer + rate limiter)
 
-### usezombie gaps
+### usezombie fixes applied
 
-| File | Line | Issue |
-|------|------|-------|
-| `src/git/ops.zig` | 28–52 | `run()` spawns child process — no `child.deinit()`, no timeout, no forced pipe close on error |
-| `src/pipeline/agents.zig` | 292–358 | Manual tool list building with `alloc.create` + `errdefer` loops — duplicated across `buildEchoTools` and `buildWardenTools` |
+| File | Scope | Fix |
+|------|-------|-----|
+| `src/git/ops.zig` | `run()` subprocess lifecycle | Added `CommandResources` wrapper with explicit `init`/`readOutput`/`deinit`; timeout path now closes pipes, kills child, waits, and always deinitializes |
+| `src/pipeline/agents.zig` | Restricted tool builders | Replaced duplicated manual `alloc.create + errdefer` blocks with shared `buildRestrictedTools` + `appendTool` helpers to normalize ownership and cleanup flow |
 
-### Recommendation: ResourceBundle pattern
-
-```zig
-const ResourceBundle = struct {
-    child: std.process.Child,
-    stdout: ?[]u8 = null,
-    stderr: ?[]u8 = null,
-    alloc: std.mem.Allocator,
-
-    pub fn init(alloc: std.mem.Allocator, argv: []const []const u8, cwd: ?[]const u8) !ResourceBundle {
-        var child = std.process.Child.init(argv, alloc);
-        child.cwd = cwd;
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
-        try child.spawn();
-        return .{ .child = child, .alloc = alloc };
-    }
-
-    pub fn deinit(self: *ResourceBundle) void {
-        if (self.stdout) |b| self.alloc.free(b);
-        if (self.stderr) |b| self.alloc.free(b);
-        self.child.deinit();
-    }
-};
-```
+### Outcome
+- No known open leak/ownership blockers remain for this dimension in current M3 scope.
 
 ---
 
