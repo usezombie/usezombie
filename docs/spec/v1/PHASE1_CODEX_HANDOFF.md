@@ -158,6 +158,14 @@ Create `ArenaAllocator` at start of `executeRun()`, `defer arena.deinit()`. Pass
 - Wired event emission from state transitions (`state_transition`), policy decisions (`policy_event`), and agent run completions (`nullclaw_run`).
 - Remaining: durable outbox/replay model and distributed event fan-out.
 
+### ⚠️ PARTIAL: 1.15 Histogram timing metrics (Dimension 19)
+
+**File:** `src/observability/metrics.zig` + `src/pipeline/worker.zig`
+
+- Added Prometheus histogram-style series for `zombie_agent_duration_seconds` and `zombie_run_total_wall_seconds`.
+- Worker now records agent call durations and end-to-end run wall time into histogram buckets.
+- Remaining: trace/correlation propagation (`request_id`/`run_id`) across all telemetry surfaces.
+
 ---
 
 ## ✅ DONE: Step 1 (parallel) — M3_000 Secrets + Schema Separation
