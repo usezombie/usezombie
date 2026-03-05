@@ -4,6 +4,110 @@ Date: Mar 3, 2026
 
 ---
 
+## 0. GitHub Auth + Installation + Runtime Token Flow
+
+This is the end-to-end credential and control-plane flow used by UseZombie.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Operator
+    actor User
+    participant CLI as zombiectl
+    participant API as UseZombie API
+    participant Vault as Vault/Secrets
+    participant GH as GitHub
+    participant Worker as Worker
+
+    Note over Operator,GH: Operator setup (once)
+    Operator->>GH: Create GitHub App + callback URL
+    Operator->>API: Set env (GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET)
+
+    Note over User,GH: Workspace onboarding (per workspace)
+    User->>CLI: zombiectl login
+    CLI->>API: Authenticate user (Clerk/OAuth)
+    User->>CLI: zombiectl workspace add <repo_url>
+    CLI->>GH: Open GitHub App install flow
+    GH->>API: GET /v1/github/callback?installation_id=<id>&state=<workspace_id>
+    API->>Vault: Store github_app_installation_id per workspace
+
+    Note over Worker,GH: Runtime automation (per run)
+    Worker->>Vault: Load github_app_installation_id
+    Worker->>Worker: Sign GitHub App JWT with GITHUB_APP_PRIVATE_KEY
+    Worker->>GH: Exchange JWT for installation token
+    GH-->>Worker: installation token (short-lived)
+    Worker->>GH: git push + create PR with installation token
+    Worker->>Worker: Discard token after run
+```
+
+```text
+                    +----------------------+
+                    |      Operator        |
+                    +----------+-----------+
+                               |
+                               | set app/env config
+                               v
++---------+      login/add     +----------------------+      install/callback      +---------+
+|  User   +------------------->+       zombiectl       +--------------------------->+ GitHub  |
++----+----+                    +-----------+----------+                            +----+----+
+     |                                     |                                            |
+     |                                     | auth / workspace API                        | callback with installation_id
+     |                                     v                                            v
+     |                          +----------------------+                       +----------------------+
+     |                          |     UseZombie API    +---------------------->+    Vault/Secrets     |
+     |                          +----------------------+  store installation_id +----------------------+
+     |                                                                                     ^
+     |                                                                                     |
+     |                                            load installation_id                      |
+     |                                  +----------------------+                           |
+     +--------------------------------->+       Worker         +---------------------------+
+                                        +----------+-----------+
+                                                   |
+                                                   | mint app JWT -> exchange token
+                                                   v
+                                              +----+----+
+                                              | GitHub  |
+                                              +----+----+
+                                                   ^
+                                                   |
+                                         push branch + create PR
+```
+
+### A) Operator setup (once per environment)
+
+1. Register UseZombie as a GitHub App with callback URL `https://api.usezombie.com/v1/github/callback`.
+2. Configure runtime env:
+   - `GITHUB_APP_ID`
+   - `GITHUB_APP_PRIVATE_KEY`
+   - `GITHUB_CLIENT_ID`
+   - `GITHUB_CLIENT_SECRET`
+
+`GITHUB_APP_PRIVATE_KEY` is app-level (shared for that GitHub App), not per workspace.
+
+### B) User onboarding (per user/workspace)
+
+1. User authenticates to UseZombie (`zombiectl login` / Clerk).
+2. User runs `zombiectl workspace add <repo_url>`.
+3. Browser opens GitHub App installation flow.
+4. GitHub redirects to `/v1/github/callback?installation_id=<id>&state=<workspace_id>`.
+5. Callback stores `github_app_installation_id` in vault for that workspace.
+
+### C) Runtime automation (per run)
+
+1. Worker loads workspace `github_app_installation_id` from vault.
+2. Worker creates GitHub App JWT (`RS256`) using `GITHUB_APP_PRIVATE_KEY`.
+3. Worker exchanges JWT for short-lived installation access token.
+4. Worker uses installation token for `git push` and PR API calls.
+5. Token is kept in memory only and discarded after use.
+
+### D) Why both OAuth and App tokens
+
+- OAuth/Clerk is for user identity + selecting/connecting repos.
+- GitHub App installation token is for automation execution (repo-scoped, short-lived, non-human credential).
+- No long-lived PAT is required for worker runtime.
+
+---
+
 ## 1. Solo Builder
 
 **Profile:** Individual developer with 3 active repos. Wants to ship features faster without context-switching between planning, coding, and review.
