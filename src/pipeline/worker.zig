@@ -12,6 +12,9 @@ const git = @import("../git/ops.zig");
 const github_auth = @import("../auth/github.zig");
 const memory = @import("../memory/workspace.zig");
 const secrets = @import("../secrets/crypto.zig");
+const backoff = @import("../reliability/backoff.zig");
+const err_classify = @import("../reliability/error_classify.zig");
+const reliable = @import("../reliability/reliable_call.zig");
 const log = std.log.scoped(.worker);
 
 // ── Worker configuration ──────────────────────────────────────────────────
@@ -55,6 +58,11 @@ const WorkerError = error{
     MissingGitHubInstallation,
 };
 
+const ProcessOutcome = enum {
+    idle,
+    worked,
+};
+
 // ── Entry point ───────────────────────────────────────────────────────────
 
 pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
@@ -80,15 +88,27 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
     var token_cache = github_auth.TokenCache.init(alloc, cfg.github_app_id, cfg.github_app_private_key);
     defer token_cache.deinit();
 
+    var consecutive_errors: u32 = 0;
     while (worker_state.running.load(.acquire)) {
-        processNextRun(alloc, cfg, worker_state, &prompts, &token_cache) catch |err| {
+        const outcome = processNextRun(alloc, cfg, worker_state, &prompts, &token_cache) catch |err| {
             if (err != WorkerError.ShutdownRequested) {
                 log.err("run processing error: {}", .{err});
+                consecutive_errors += 1;
+
+                const max_delay_ms = std.math.mul(u64, cfg.poll_interval_ms, 8) catch cfg.poll_interval_ms;
+                const delay_ms = backoff.expBackoffJitter(consecutive_errors - 1, cfg.poll_interval_ms, max_delay_ms);
+                std.Thread.sleep(delay_ms * std.time.ns_per_ms);
             }
+            continue;
         };
+        consecutive_errors = 0;
 
         if (!worker_state.running.load(.acquire)) break;
-        std.Thread.sleep(cfg.poll_interval_ms * std.time.ns_per_ms);
+
+        switch (outcome) {
+            .idle => std.Thread.sleep(cfg.poll_interval_ms * std.time.ns_per_ms),
+            .worked => std.Thread.sleep(@min(cfg.poll_interval_ms, 200) * std.time.ns_per_ms),
+        }
     }
 
     log.info("worker stopped", .{});
@@ -115,7 +135,7 @@ fn processNextRun(
     worker_state: *WorkerState,
     prompts: *const agents.PromptFiles,
     token_cache: *github_auth.TokenCache,
-) !void {
+) !ProcessOutcome {
     var conn = try cfg.pool.acquire();
     defer cfg.pool.release(conn);
 
@@ -141,7 +161,7 @@ fn processNextRun(
     const row = (try result.next()) orelse {
         try commitTx(conn);
         tx_open = false;
-        return;
+        return .idle;
     };
 
     const run_id = try alloc.dupe(u8, try row.get([]u8, 0));
@@ -183,13 +203,15 @@ fn processNextRun(
         .attempt = attempt,
     }) catch |err| {
         if (err == WorkerError.ShutdownRequested) {
-            _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, .AGENT_CRASH, "shutdown requested") catch {};
+            _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, .AGENT_TIMEOUT, "shutdown requested") catch {};
             return err;
         }
 
+        const classified = err_classify.classify(err, null);
         log.err("run failed run_id={s}: {}", .{ run_id, err });
-        _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, .AGENT_CRASH, @errorName(err)) catch {};
+        _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, classified.reason_code, @errorName(err)) catch {};
     };
+    return .worked;
 }
 
 fn isWithinPath(base: []const u8, candidate: []const u8) bool {
@@ -250,6 +272,49 @@ fn getExistingPrUrl(alloc: std.mem.Allocator, conn: *pg.Conn, run_id: []const u8
         return alloc.dupe(u8, pr);
     }
     return null;
+}
+
+const TokenRetryCtx = struct {
+    cache: *github_auth.TokenCache,
+    alloc: std.mem.Allocator,
+    installation_id: []const u8,
+};
+
+fn opGetInstallationToken(ctx: TokenRetryCtx, _: u32) ![]u8 {
+    return ctx.cache.getInstallationToken(ctx.alloc, ctx.installation_id);
+}
+
+const PushRetryCtx = struct {
+    alloc: std.mem.Allocator,
+    wt_path: []const u8,
+    branch: []const u8,
+    github_token: []const u8,
+};
+
+fn opPushBranch(ctx: PushRetryCtx, _: u32) !void {
+    return git.push(ctx.alloc, ctx.wt_path, ctx.branch, ctx.github_token);
+}
+
+const PrRetryCtx = struct {
+    alloc: std.mem.Allocator,
+    repo_url: []const u8,
+    branch: []const u8,
+    base_branch: []const u8,
+    title: []const u8,
+    body: []const u8,
+    github_token: []const u8,
+};
+
+fn opCreatePr(ctx: PrRetryCtx, _: u32) ![]u8 {
+    return git.createPullRequest(
+        ctx.alloc,
+        ctx.repo_url,
+        ctx.branch,
+        ctx.base_branch,
+        ctx.title,
+        ctx.body,
+        ctx.github_token,
+    );
 }
 
 fn executeRun(
@@ -378,22 +443,43 @@ fn executeRun(
                 const installation_id = try loadInstallationId(run_alloc, conn, ctx.workspace_id);
                 defer run_alloc.free(installation_id);
 
-                const github_token = try token_cache.getInstallationToken(run_alloc, installation_id);
+                const github_token = try reliable.call([]u8, TokenRetryCtx{
+                    .cache = token_cache,
+                    .alloc = run_alloc,
+                    .installation_id = installation_id,
+                }, opGetInstallationToken, .{
+                    .max_retries = 2,
+                    .base_delay_ms = 500,
+                    .max_delay_ms = 5_000,
+                });
                 defer run_alloc.free(github_token);
 
-                try git.push(run_alloc, wt.path, branch, github_token);
+                try reliable.call(void, PushRetryCtx{
+                    .alloc = run_alloc,
+                    .wt_path = wt.path,
+                    .branch = branch,
+                    .github_token = github_token,
+                }, opPushBranch, .{
+                    .max_retries = 2,
+                    .base_delay_ms = 1_000,
+                    .max_delay_ms = 10_000,
+                });
 
                 const pr_title = try std.fmt.allocPrint(run_alloc, "usezombie: {s}", .{ctx.spec_id});
 
-                const created_pr = try git.createPullRequest(
-                    run_alloc,
-                    ctx.repo_url,
-                    branch,
-                    ctx.default_branch,
-                    pr_title,
-                    warden_result.content,
-                    github_token,
-                );
+                const created_pr = try reliable.call([]u8, PrRetryCtx{
+                    .alloc = run_alloc,
+                    .repo_url = ctx.repo_url,
+                    .branch = branch,
+                    .base_branch = ctx.default_branch,
+                    .title = pr_title,
+                    .body = warden_result.content,
+                    .github_token = github_token,
+                }, opCreatePr, .{
+                    .max_retries = 2,
+                    .base_delay_ms = 1_000,
+                    .max_delay_ms = 10_000,
+                });
                 pr_url = created_pr;
             }
 
@@ -469,6 +555,11 @@ fn executeRun(
 
         // Increment attempt counter in DB
         _ = try state.incrementAttempt(conn, ctx.run_id);
+
+        // Adaptive retry delay with jitter.
+        const retry_index = attempt - ctx.attempt;
+        const delay_ms = backoff.expBackoffJitter(retry_index, 1_000, 30_000);
+        std.Thread.sleep(delay_ms * std.time.ns_per_ms);
 
         log.info("retrying run_id={s} attempt={d}", .{ ctx.run_id, attempt + 1 });
     }
