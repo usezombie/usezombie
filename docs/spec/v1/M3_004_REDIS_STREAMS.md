@@ -148,3 +148,13 @@ For Upstash (dev/prod): `rediss://default:<password>@<host>:6379` (note `rediss:
 - Redis pub/sub for real-time status updates (future: SSE/WebSocket to CLI).
 - Redis as session store for Clerk tokens.
 - Redis Cluster or Sentinel HA.
+
+---
+
+## Deferred From M4_004
+
+1. D18 Readiness depth hardening was moved from `M4_004` to this track for Redis-backed readiness semantics.
+2. Required follow-up scope:
+   - `/readyz` must include Redis queue dependency checks (stream health + consumer-group operability).
+   - `/readyz` must fail closed when queue coordination is degraded, even if Postgres is healthy.
+   - Verification must include restart and degraded dependency scenarios with explicit operator runbook notes.
