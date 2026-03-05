@@ -51,7 +51,7 @@
 | 12 | ⚠️ Partial | Signal handling + join done; stale worktree startup cleanup still missing |
 | 13 | ⚠️ Partial | Claim transaction + CAS done; idempotency conflict flow still not fully race-safe at handler level |
 | 14 | ⚠️ Partial | PR dedupe and no-op commit handling done; no side-effect ledger |
-| 15 | ⚠️ Partial | Git/curl timeouts done; agent-call cancellation/deadline still missing |
+| 15 | ⚠️ Partial | Git/curl timeouts and per-run deadline gating are in place; direct agent-call cancellation tokening is still missing |
 | 16 | ⚠️ Partial | Main allocator is now thread-safe and worker concurrency is configurable; global leak-reporting/thread-safety guardrails still need tightening |
 | 17 | ⚠️ Partial | Versioned migrations + tx done; SQL splitting remains heuristic |
 | 18 | ⚠️ Partial | `/healthz` + `/readyz` improved, and `/readyz` now supports queue depth/age thresholds; migration/dependency readiness gates are still missing |
@@ -471,7 +471,7 @@ Advanced path then adds:
 | 12 | Graceful shutdown / signal handling | **High** | No SIGTERM handling; orphaned worktrees; leaked threads |
 | 13 | Transactional correctness / exactly-once | **Critical** | Double-run claiming; state races; idempotency gaps |
 | 14 | Side-effect idempotency (PR/push/commit) | **Critical** | Duplicate PRs on retry; repeated git pushes |
-| 15 | Timeouts & cancellation | **High** | git/curl/agent can hang indefinitely |
+| 15 | Timeouts & cancellation | **High** | Agent calls still lack cooperative cancellation/token interruption |
 | 16 | Thread safety & Zig allocator pitfalls | **High** | Shared GPA across threads; leak detection ignored |
 | 17 | Schema migration safety | **High** | Naïve SQL split; non-transactional; silent failures |
 | 18 | Health check depth (readiness vs liveness) | **Medium–High** | Readiness still lacks migration/dependency gates under degraded upstream conditions |
@@ -593,19 +593,13 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 
 | File | Line | Issue |
 |------|------|-------|
-| `src/git/ops.zig` | 28–52 | Subprocess runner: no timeout, no kill on hang |
-| `src/git/ops.zig` | 206–212 | `curl -s` without `--max-time` or `--connect-timeout` |
-| `src/pipeline/agents.zig` | 130, 202, 276 | `agent.runSingle()` blocks with no cancellation token |
+| `src/pipeline/worker.zig` + `src/config/runtime.zig` | deadline checks + `RUN_TIMEOUT_MS` | Per-run timeout checks are now present, but enforcement is phase-boundary only (not preemptive mid-call) |
+| `src/pipeline/agents.zig` | `runEcho` / `runScout` / `runWarden` | `agent.runSingle()` remains blocking with no cancellation token/interrupt hook |
 
 ### Recommendation
-- Add `--max-time 120 --connect-timeout 10` to all `curl` calls
-- Add a process timeout wrapper:
-  ```zig
-  fn runWithTimeout(alloc: Allocator, argv: []const []const u8, cwd: ?[]const u8, timeout_ms: u64) ![]const u8 {
-      // spawn, then poll with deadline; kill + reap on timeout
-  }
-  ```
-- Per-run deadline: `const deadline = now + RUN_TIMEOUT_MS`; check before each phase
+- Keep `RUN_TIMEOUT_MS` boundary checks for deterministic fail-fast on overlong runs.
+- Add cooperative cancellation support to agent runtime calls where available.
+- Add subprocess-level cancellation/kill semantics for any new external tools beyond current git/curl wrappers.
 
 ---
 
@@ -738,7 +732,7 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 | **P0** | Side-effect idempotency (PR dedupe, side-effect ledger) | M (3–4h) | 14 |
 | **P0** | Secure execution boundary (path canonicalization, hook disable, env scrub) | M (3–4h) | 11 |
 | **P0 (remaining)** | Expand `reliable_call.zig` + `error_classify.zig` + `expBackoffJitter` coverage (`Retry-After` plumbing, agent-call wrapping, richer parsing) | M (4–6h) | 5, 7, 10 |
-| **P1** | Timeouts for subprocess + curl + agent calls | M (3–4h) | 15 |
+| **P1** | Cooperative cancellation for agent runtime calls | M (3–4h) | 15 |
 | **P1** | Graceful shutdown (signal handler, thread join, worktree cleanup) | M (2–3h) | 12 |
 | **P1** | Thread safety (force single-thread or thread-safe GPA) | S (1h) | 16 |
 | **P1** | Structured logging + runtime `LOG_LEVEL` + real Observer | M (2–4h) | 8, 9 |

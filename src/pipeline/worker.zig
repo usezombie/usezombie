@@ -30,6 +30,7 @@ pub const WorkerConfig = struct {
     github_app_id: []const u8,
     github_app_private_key: []const u8,
     max_attempts: u32 = 3,
+    run_timeout_ms: u64 = 300_000,
     poll_interval_ms: u64 = 2_000,
     rate_limit_capacity: u32 = 30,
     rate_limit_refill_per_sec: f64 = 5.0,
@@ -61,6 +62,7 @@ const RunContext = struct {
 
 const WorkerError = error{
     ShutdownRequested,
+    RunDeadlineExceeded,
     PathTraversal,
     MissingGitHubInstallation,
 };
@@ -269,10 +271,14 @@ fn processNextRun(
         .spec_path = spec_path,
         .attempt = attempt,
     }, tenant_limiter) catch |err| {
-        if (err == WorkerError.ShutdownRequested) {
-            _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, .AGENT_TIMEOUT, "shutdown requested") catch |tx_err| {
+        if (err == WorkerError.ShutdownRequested or err == WorkerError.RunDeadlineExceeded) {
+            const reason_note = if (err == WorkerError.RunDeadlineExceeded) "run deadline exceeded" else "shutdown requested";
+            _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, .AGENT_TIMEOUT, reason_note) catch |tx_err| {
                 obs_log.logWarnErr(.worker, tx_err, "shutdown transition failed run_id={s}", .{run_id});
             };
+            if (err == WorkerError.RunDeadlineExceeded) {
+                events.emit("run_deadline_exceeded", run_id, reason_note);
+            }
             metrics.incRunsBlocked();
             return err;
         }
@@ -462,6 +468,9 @@ fn executeRun(
     ctx: RunContext,
     tenant_limiter: *TenantRateLimiter,
 ) !void {
+    const deadline_ms = std.time.milliTimestamp() + @as(i64, @intCast(cfg.run_timeout_ms));
+    try ensureBeforeDeadline(deadline_ms);
+
     var run_arena = std.heap.ArenaAllocator.init(alloc);
     defer run_arena.deinit();
     const run_alloc = run_arena.allocator();
@@ -494,6 +503,7 @@ fn executeRun(
     const memory_context = try memory.loadForEcho(run_alloc, conn, ctx.workspace_id, 20);
 
     // ── Phase 1: Echo (planning) ─────────────────────────────────────────
+    try ensureBeforeDeadline(deadline_ms);
     try tenant_limiter.acquire(ctx.tenant_id, 1.0);
     const echo_result = try agents.runEcho(
         run_alloc,
@@ -522,11 +532,13 @@ fn executeRun(
     var total_wall_seconds: u64 = echo_result.wall_seconds;
 
     while (attempt <= cfg.max_attempts) : (attempt += 1) {
+        try ensureBeforeDeadline(deadline_ms);
         if (!worker_state.running.load(.acquire)) return WorkerError.ShutdownRequested;
 
         _ = try state.transition(conn, ctx.run_id, .PATCH_IN_PROGRESS, .orchestrator, .PATCH_STARTED, null);
 
         try tenant_limiter.acquire(ctx.tenant_id, 1.0);
+        try ensureBeforeDeadline(deadline_ms);
         const scout_result = try reliable.call(agents.AgentResult, ScoutRetryCtx{
             .alloc = run_alloc,
             .workspace_path = wt.path,
@@ -556,6 +568,7 @@ fn executeRun(
         // ── Phase 3: Warden (validation) ─────────────────────────────────
         _ = try state.transition(conn, ctx.run_id, .VERIFICATION_IN_PROGRESS, .orchestrator, .PATCH_STARTED, null);
 
+        try ensureBeforeDeadline(deadline_ms);
         try tenant_limiter.acquire(ctx.tenant_id, 1.0);
         const warden_result = try reliable.call(agents.AgentResult, WardenRetryCtx{
             .alloc = run_alloc,
@@ -596,6 +609,7 @@ fn executeRun(
 
             var pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
             if (pr_url == null) {
+                try ensureBeforeDeadline(deadline_ms);
                 const installation_id = try loadInstallationId(run_alloc, conn, ctx.workspace_id);
                 defer run_alloc.free(installation_id);
 
@@ -736,6 +750,7 @@ fn executeRun(
         const delay_ms = backoff.expBackoffJitter(retry_index, 1_000, 30_000);
         metrics.incRunRetries();
         metrics.addBackoffWaitMs(delay_ms);
+        try ensureBeforeDeadline(deadline_ms);
         std.Thread.sleep(delay_ms * std.time.ns_per_ms);
 
         log.info("retrying run_id={s} attempt={d}", .{ ctx.run_id, attempt + 1 });
@@ -755,6 +770,10 @@ fn executeRun(
     events.emit("run_blocked", ctx.run_id, blocked_detail_slice);
     metrics.observeRunTotalWallSeconds(total_wall_seconds);
     metrics.incRunsBlocked();
+}
+
+fn ensureBeforeDeadline(deadline_ms: i64) WorkerError!void {
+    if (std.time.milliTimestamp() > deadline_ms) return WorkerError.RunDeadlineExceeded;
 }
 
 // ── Artifact helpers ─────────────────────────────────────────────────────
