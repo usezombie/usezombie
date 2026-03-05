@@ -14,6 +14,8 @@ const common = @import("common.zig");
 const log = std.log.scoped(.zombied);
 
 var shutdown_requested = std.atomic.Value(bool).init(false);
+var stop_server_fn: *const fn () void = http_server.stop;
+var stop_server_test_counter: ?*std.atomic.Value(u32) = null;
 
 fn onSignal(sig: i32) callconv(.c) void {
     _ = sig;
@@ -36,7 +38,7 @@ fn signalWatcher(wstate: *worker.WorkerState) void {
     }
 
     wstate.running.store(false, .release);
-    http_server.stop();
+    stop_server_fn();
 }
 
 pub fn run(alloc: std.mem.Allocator) !void {
@@ -177,4 +179,33 @@ pub fn run(alloc: std.mem.Allocator) !void {
             .{ stats.removed_worktrees, stats.failed_worktree_removals, stats.pruned_bare_repos, stats.failed_bare_prunes },
         );
     }
+}
+
+fn testStopServerHook() void {
+    if (stop_server_test_counter) |counter| {
+        _ = counter.fetchAdd(1, .acq_rel);
+    }
+}
+
+test "integration: signalWatcher stops worker and invokes server stop hook" {
+    var ws = worker.WorkerState.init();
+    ws.running.store(true, .release);
+    shutdown_requested.store(false, .release);
+
+    var stop_calls = std.atomic.Value(u32).init(0);
+    stop_server_test_counter = &stop_calls;
+    stop_server_fn = testStopServerHook;
+    defer {
+        stop_server_fn = http_server.stop;
+        stop_server_test_counter = null;
+        shutdown_requested.store(false, .release);
+    }
+
+    const thread = try std.Thread.spawn(.{}, signalWatcher, .{&ws});
+    std.Thread.sleep(15 * std.time.ns_per_ms);
+    shutdown_requested.store(true, .release);
+    thread.join();
+
+    try std.testing.expect(!ws.running.load(.acquire));
+    try std.testing.expectEqual(@as(u32, 1), stop_calls.load(.acquire));
 }
