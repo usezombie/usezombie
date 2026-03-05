@@ -55,7 +55,7 @@
 | 16 | ⚠️ Partial | Main allocator is now thread-safe and worker concurrency is configurable; global leak-reporting/thread-safety guardrails still need tightening |
 | 17 | ⚠️ Partial | Versioned migrations + tx done; SQL splitting remains heuristic |
 | 18 | ⚠️ Partial | `/healthz` + `/readyz` improved, and `/readyz` now supports queue depth/age thresholds; migration/dependency readiness gates are still missing |
-| 19 | ⚠️ Partial | `/metrics` now exposes core counters + duration histograms, observer wiring is enabled, and `request_id` is persisted/propagated into worker lifecycle events; trace-level correlation is still missing |
+| 19 | ⚠️ Partial | `/metrics` now exposes core counters + duration histograms, observer wiring is enabled, and `request_id` is propagated through API/worker/state/policy lifecycle events; trace-level correlation is still missing |
 | 20 | ⚠️ Partial | Serve-time config is now centralized in `src/config/runtime.zig`, fail-fast on critical env is active, and API key rotation is supported; secret versioning/rotation model is still missing |
 | 21 | ⚠️ Partial | Unit/integration/e2e targets added; coverage measurement and deeper module tests still missing |
 | 22 | ✅ Fixed | Comment policy section exists and is aligned with current style |
@@ -690,8 +690,9 @@ Store a side-effect ledger: `(run_id, effect_type, completed_at)` — check befo
 |------|------|-------|
 | `src/http/server.zig` | 35–42 | `/metrics` endpoint exists and is Prometheus-scrapeable, but there is no auth/TLS boundary guidance yet |
 | `src/observability/metrics.zig` | 1–250 | Core counters/gauges and duration histograms are present, but no trace/span exporter integration exists |
-| `src/http/handler.zig` + `src/pipeline/worker.zig` | run creation + claim path | `request_id` now persists on `runs` and is carried into worker lifecycle events, but state/policy event payloads still rely on `run_id` only |
-| `src/pipeline/agents.zig` | `emitNullclawRunEvent` | Agent run telemetry now includes `request_id`, but correlation is not yet normalized into a single trace context model |
+| `src/http/handler.zig` + `src/pipeline/worker.zig` | run creation + worker lifecycle | `request_id` now persists on `runs` and is emitted across claim/failure/done/blocked lifecycle events |
+| `src/state/machine.zig` + `src/state/policy.zig` | state/policy event emission | State transition and policy events now enrich payload/logging with resolved `request_id` from the run row |
+| `src/pipeline/agents.zig` | `emitNullclawRunEvent` | Agent run telemetry includes `request_id`, but correlation is not yet normalized into a single trace context contract |
 
 ### Recommendation
 - Keep `LogObserver` as default and extend to `MultiObserver` (file/collector sink) for durable telemetry export

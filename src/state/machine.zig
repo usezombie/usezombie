@@ -126,8 +126,22 @@ pub fn transition(
         };
     }
 
-    log.info("transition run_id={s} {s}→{s} actor={s}", .{
+    var request_id: []const u8 = "-";
+    {
+        var rq = conn.query("SELECT request_id FROM runs WHERE run_id = $1", .{run_id}) catch null;
+        if (rq) |*q| {
+            defer q.deinit();
+            if ((q.next() catch null)) |rrow| {
+                if (rrow.get(?[]u8, 0) catch null) |rid| {
+                    if (rid.len > 0) request_id = rid;
+                }
+            }
+        }
+    }
+
+    log.info("transition run_id={s} request_id={s} {s}→{s} actor={s}", .{
         run_id,
+        request_id,
         current.state.label(),
         to.label(),
         actor.label(),
@@ -135,8 +149,8 @@ pub fn transition(
     var detail_buf: [160]u8 = undefined;
     const detail = std.fmt.bufPrint(
         &detail_buf,
-        "from={s} to={s} actor={s} reason={s}",
-        .{ current.state.label(), to.label(), actor.label(), reason_code.label() },
+        "request_id={s} from={s} to={s} actor={s} reason={s}",
+        .{ request_id, current.state.label(), to.label(), actor.label(), reason_code.label() },
     ) catch "state_transition";
     events.emit("state_transition", run_id, detail);
 
