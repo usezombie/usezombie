@@ -4,6 +4,7 @@
 const std = @import("std");
 const zap = @import("zap");
 const pg = @import("pg");
+const clerk = @import("../auth/clerk.zig");
 const state = @import("../state/machine.zig");
 const policy = @import("../state/policy.zig");
 const worker = @import("../pipeline/worker.zig");
@@ -18,6 +19,7 @@ pub const Context = struct {
     pool: *pg.Pool,
     alloc: std.mem.Allocator,
     api_keys: []const u8, // comma-separated API key list from env
+    clerk: ?*clerk.Verifier,
     worker_state: *const worker.WorkerState,
     ready_max_queue_depth: ?i64,
     ready_max_queue_age_ms: ?i64,
@@ -58,9 +60,24 @@ fn requestId(alloc: std.mem.Allocator) []const u8 {
     return std.fmt.allocPrint(alloc, "req_{s}", .{hex[0..12]}) catch "req_unknown";
 }
 
+const AuthMode = enum {
+    api_key,
+    clerk_jwt,
+};
+
+const AuthPrincipal = struct {
+    mode: AuthMode,
+    tenant_id: ?[]const u8 = null,
+};
+
+const AuthError = error{
+    Unauthorized,
+    TokenExpired,
+};
+
 /// Validate Authorization header: "Bearer <api_key>".
 /// Supports key rotation via `API_KEY=key1,key2,...`.
-fn authenticate(r: zap.Request, ctx: *Context) bool {
+fn authenticateApiKey(r: zap.Request, ctx: *Context) bool {
     const auth = r.getHeader("authorization") orelse return false;
     const prefix = "Bearer ";
     if (!std.mem.startsWith(u8, auth, prefix)) return false;
@@ -73,6 +90,39 @@ fn authenticate(r: zap.Request, ctx: *Context) bool {
         if (std.mem.eql(u8, provided, candidate)) return true;
     }
     return false;
+}
+
+fn authenticate(alloc: std.mem.Allocator, r: zap.Request, ctx: *Context) AuthError!AuthPrincipal {
+    if (ctx.clerk) |verifier| {
+        const auth = r.getHeader("authorization") orelse return AuthError.Unauthorized;
+        const principal = verifier.verifyAuthorization(alloc, auth) catch |err| switch (err) {
+            clerk.VerifyError.TokenExpired => return AuthError.TokenExpired,
+            else => return AuthError.Unauthorized,
+        };
+        return .{ .mode = .clerk_jwt, .tenant_id = principal.tenant_id };
+    }
+
+    if (!authenticateApiKey(r, ctx)) return AuthError.Unauthorized;
+    return .{ .mode = .api_key };
+}
+
+fn writeAuthError(r: zap.Request, req_id: []const u8, err: AuthError) void {
+    switch (err) {
+        AuthError.TokenExpired => errorResponse(r, .unauthorized, "token_expired", "token expired", req_id),
+        AuthError.Unauthorized => errorResponse(r, .unauthorized, "UNAUTHORIZED", "Invalid or missing token", req_id),
+    }
+}
+
+fn authorizeWorkspace(conn: *pg.Conn, principal: AuthPrincipal, workspace_id: []const u8) bool {
+    if (principal.mode == .api_key) return true;
+    const tenant_id = principal.tenant_id orelse return false;
+
+    var q = conn.query(
+        "SELECT 1 FROM workspaces WHERE workspace_id = $1 AND tenant_id = $2",
+        .{ workspace_id, tenant_id },
+    ) catch return false;
+    defer q.deinit();
+    return (q.next() catch null) != null;
 }
 
 // ── Healthz ───────────────────────────────────────────────────────────────
@@ -206,10 +256,10 @@ pub fn handleStartRun(ctx: *Context, r: zap.Request) void {
 
     const req_id = requestId(alloc);
 
-    if (!authenticate(r, ctx)) {
-        errorResponse(r, .unauthorized, "UNAUTHORIZED", "Invalid or missing API key", req_id);
+    const principal = authenticate(alloc, r, ctx) catch |err| {
+        writeAuthError(r, req_id, err);
         return;
-    }
+    };
 
     const body = r.body orelse {
         errorResponse(r, .bad_request, "INVALID_REQUEST", "Request body required", req_id);
@@ -237,27 +287,9 @@ pub fn handleStartRun(ctx: *Context, r: zap.Request) void {
     };
     defer ctx.pool.release(conn);
 
-    // Idempotency: scoped by workspace.
-    {
-        var check = conn.query(
-            "SELECT run_id FROM runs WHERE workspace_id = $1 AND idempotency_key = $2",
-            .{ req.workspace_id, req.idempotency_key },
-        ) catch {
-            errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Database error", req_id);
-            return;
-        };
-        defer check.deinit();
-
-        if (check.next() catch null) |row| {
-            const existing_run_id = row.get([]u8, 0) catch "unknown";
-            writeJson(r, .accepted, .{
-                .run_id = existing_run_id,
-                .state = "SPEC_QUEUED",
-                .attempt = @as(u32, 1),
-                .request_id = req_id,
-            });
-            return;
-        }
+    if (!authorizeWorkspace(conn, principal, req.workspace_id)) {
+        errorResponse(r, .forbidden, "FORBIDDEN", "Workspace access denied", req_id);
+        return;
     }
 
     // Verify workspace exists and is not paused
@@ -314,26 +346,42 @@ pub fn handleStartRun(ctx: *Context, r: zap.Request) void {
         \\   requested_by, idempotency_key, request_id, branch, created_at, updated_at)
         \\SELECT $1, $2, $3, tenant_id, 'SPEC_QUEUED', 1, $4, $5, $6, $7, $8, $9, $9
         \\FROM workspaces WHERE workspace_id = $2
+        \\ON CONFLICT (workspace_id, idempotency_key) DO UPDATE
+        \\SET updated_at = runs.updated_at
+        \\RETURNING run_id, state, attempt, (xmax = 0) AS inserted
     , .{ run_id, req.workspace_id, req.spec_id, req.mode, req.requested_by, req.idempotency_key, req_id, branch, now_ms }) catch {
         errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to create run", req_id);
         return;
     };
-    insert.deinit();
+    defer insert.deinit();
 
-    // Record policy_decision event — sensitive action, M1 permissive mode (always allow)
-    policy.recordPolicyEvent(conn, req.workspace_id, run_id, .sensitive, .allow, "m1.start_run", req.requested_by) catch |err| {
-        log.warn("policy event insert failed (non-fatal): {}", .{err});
+    const inserted_row = insert.next() catch null orelse {
+        errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to upsert run", req_id);
+        return;
     };
+    const final_run_id = inserted_row.get([]u8, 0) catch run_id;
+    const final_state = inserted_row.get([]u8, 1) catch "SPEC_QUEUED";
+    const final_attempt = inserted_row.get(i32, 2) catch 1;
+    const was_inserted = inserted_row.get(bool, 3) catch false;
 
-    log.info("run created run_id={s} workspace_id={s} spec_id={s}", .{
-        run_id, req.workspace_id, req.spec_id,
-    });
-    metrics.incRunsCreated();
+    if (was_inserted) {
+        // Record policy_decision event — sensitive action, M1 permissive mode (always allow)
+        policy.recordPolicyEvent(conn, req.workspace_id, final_run_id, .sensitive, .allow, "m1.start_run", req.requested_by) catch |err| {
+            log.warn("policy event insert failed (non-fatal): {}", .{err});
+        };
+
+        log.info("run created run_id={s} workspace_id={s} spec_id={s}", .{
+            final_run_id, req.workspace_id, req.spec_id,
+        });
+        metrics.incRunsCreated();
+    } else {
+        log.info("run idempotent replay run_id={s} workspace_id={s}", .{ final_run_id, req.workspace_id });
+    }
 
     writeJson(r, .accepted, .{
-        .run_id = run_id,
-        .state = "SPEC_QUEUED",
-        .attempt = @as(u32, 1),
+        .run_id = final_run_id,
+        .state = final_state,
+        .attempt = @as(u32, @intCast(final_attempt)),
         .request_id = req_id,
     });
 }
@@ -346,10 +394,10 @@ pub fn handleGetRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
     const alloc = arena.allocator();
     const req_id = requestId(alloc);
 
-    if (!authenticate(r, ctx)) {
-        errorResponse(r, .unauthorized, "UNAUTHORIZED", "Invalid or missing API key", req_id);
+    const principal = authenticate(alloc, r, ctx) catch |err| {
+        writeAuthError(r, req_id, err);
         return;
-    }
+    };
 
     var conn = ctx.pool.acquire() catch {
         errorResponse(r, .service_unavailable, "INTERNAL_ERROR", "Database unavailable", req_id);
@@ -385,6 +433,11 @@ pub fn handleGetRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
     const run_request_id = row.get(?[]u8, 9) catch null;
     const created_at = row.get(i64, 10) catch 0;
     const updated_at = row.get(i64, 11) catch 0;
+
+    if (!authorizeWorkspace(conn, principal, workspace_id)) {
+        errorResponse(r, .forbidden, "FORBIDDEN", "Workspace access denied", req_id);
+        return;
+    }
 
     run_result.drain() catch |err| obs_log.logWarnErr(.http, err, "run query drain failed run_id={s}", .{run_id});
 
@@ -497,10 +550,10 @@ pub fn handleRetryRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
     const alloc = arena.allocator();
     const req_id = requestId(alloc);
 
-    if (!authenticate(r, ctx)) {
-        errorResponse(r, .unauthorized, "UNAUTHORIZED", "Invalid or missing API key", req_id);
+    const principal = authenticate(alloc, r, ctx) catch |err| {
+        writeAuthError(r, req_id, err);
         return;
-    }
+    };
 
     const Req = struct {
         reason: []const u8,
@@ -534,6 +587,11 @@ pub fn handleRetryRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
         const wid = wrow.get([]u8, 0) catch break :blk @as([]const u8, "");
         break :blk alloc.dupe(u8, wid) catch @as([]const u8, "");
     };
+
+    if (workspace_id_for_policy.len > 0 and !authorizeWorkspace(conn, principal, workspace_id_for_policy)) {
+        errorResponse(r, .forbidden, "FORBIDDEN", "Workspace access denied", req_id);
+        return;
+    }
 
     const current = state.getRunState(conn, run_id) catch |err| switch (err) {
         state.TransitionError.RunNotFound => {
@@ -598,10 +656,10 @@ pub fn handlePauseWorkspace(ctx: *Context, r: zap.Request, workspace_id: []const
     const alloc = arena.allocator();
     const req_id = requestId(alloc);
 
-    if (!authenticate(r, ctx)) {
-        errorResponse(r, .unauthorized, "UNAUTHORIZED", "Invalid or missing API key", req_id);
+    const principal = authenticate(alloc, r, ctx) catch |err| {
+        writeAuthError(r, req_id, err);
         return;
-    }
+    };
 
     const Req = struct {
         pause: bool,
@@ -624,6 +682,11 @@ pub fn handlePauseWorkspace(ctx: *Context, r: zap.Request, workspace_id: []const
         return;
     };
     defer ctx.pool.release(conn);
+
+    if (!authorizeWorkspace(conn, principal, workspace_id)) {
+        errorResponse(r, .forbidden, "FORBIDDEN", "Workspace access denied", req_id);
+        return;
+    }
 
     // Record policy_decision event before state change — sensitive action
     policy.recordPolicyEvent(conn, workspace_id, null, .sensitive, .allow, "m1.pause_workspace", "api") catch |err| {
@@ -673,10 +736,10 @@ pub fn handleListSpecs(ctx: *Context, r: zap.Request) void {
     const alloc = arena.allocator();
     const req_id = requestId(alloc);
 
-    if (!authenticate(r, ctx)) {
-        errorResponse(r, .unauthorized, "UNAUTHORIZED", "Invalid or missing API key", req_id);
+    const principal = authenticate(alloc, r, ctx) catch |err| {
+        writeAuthError(r, req_id, err);
         return;
-    }
+    };
 
     const workspace_id = r.getParamStr(alloc, "workspace_id") catch null orelse {
         errorResponse(r, .bad_request, "INVALID_REQUEST", "workspace_id query param required", req_id);
@@ -697,6 +760,11 @@ pub fn handleListSpecs(ctx: *Context, r: zap.Request) void {
         return;
     };
     defer ctx.pool.release(conn);
+
+    if (!authorizeWorkspace(conn, principal, wid)) {
+        errorResponse(r, .forbidden, "FORBIDDEN", "Workspace access denied", req_id);
+        return;
+    }
 
     var result = conn.query(
         \\SELECT spec_id, file_path, title, status, created_at, updated_at
@@ -743,16 +811,21 @@ pub fn handleSyncSpecs(ctx: *Context, r: zap.Request, workspace_id: []const u8) 
     const alloc = arena.allocator();
     const req_id = requestId(alloc);
 
-    if (!authenticate(r, ctx)) {
-        errorResponse(r, .unauthorized, "UNAUTHORIZED", "Invalid or missing API key", req_id);
+    const principal = authenticate(alloc, r, ctx) catch |err| {
+        writeAuthError(r, req_id, err);
         return;
-    }
+    };
 
     var conn = ctx.pool.acquire() catch {
         errorResponse(r, .service_unavailable, "INTERNAL_ERROR", "Database unavailable", req_id);
         return;
     };
     defer ctx.pool.release(conn);
+
+    if (!authorizeWorkspace(conn, principal, workspace_id)) {
+        errorResponse(r, .forbidden, "FORBIDDEN", "Workspace access denied", req_id);
+        return;
+    }
 
     // Fetch workspace to get repo_url and cache_root
     var ws = conn.query(

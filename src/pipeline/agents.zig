@@ -32,18 +32,20 @@ pub fn emitNullclawRunEvent(
     run_id: []const u8,
     request_id: []const u8,
     attempt: u32,
+    stage_id: []const u8,
+    role_id: []const u8,
     actor: types.Actor,
     result: AgentResult,
 ) void {
     log.info(
-        "nullclaw_run event_type=nullclaw_run run_id={s} request_id={s} attempt={d} actor={s} exit_ok={} tokens={d} wall_seconds={d} peak_memory_kb=N/A",
-        .{ run_id, request_id, attempt, actor.label(), result.exit_ok, result.token_count, result.wall_seconds },
+        "nullclaw_run event_type=nullclaw_run run_id={s} request_id={s} attempt={d} stage_id={s} role_id={s} actor={s} exit_ok={} tokens={d} wall_seconds={d} peak_memory_kb=N/A",
+        .{ run_id, request_id, attempt, stage_id, role_id, actor.label(), result.exit_ok, result.token_count, result.wall_seconds },
     );
     var detail_buf: [192]u8 = undefined;
     const detail = std.fmt.bufPrint(
         &detail_buf,
-        "request_id={s} attempt={d} actor={s} exit_ok={} tokens={d} wall_seconds={d}",
-        .{ request_id, attempt, actor.label(), result.exit_ok, result.token_count, result.wall_seconds },
+        "request_id={s} attempt={d} stage_id={s} role_id={s} actor={s} exit_ok={} tokens={d} wall_seconds={d}",
+        .{ request_id, attempt, stage_id, role_id, actor.label(), result.exit_ok, result.token_count, result.wall_seconds },
     ) catch "nullclaw_run";
     events.emit("nullclaw_run", run_id, detail);
 }
@@ -55,6 +57,73 @@ pub const PromptFiles = struct {
     scout: []const u8,
     warden: []const u8,
 };
+
+pub const RoleKind = enum {
+    echo,
+    scout,
+    warden,
+};
+
+pub const RoleBinding = struct {
+    role_id: []const u8,
+    actor: types.Actor,
+    kind: RoleKind,
+};
+
+const ROLE_REGISTRY = [_]RoleBinding{
+    .{ .role_id = "echo", .actor = .echo, .kind = .echo },
+    .{ .role_id = "scout", .actor = .scout, .kind = .scout },
+    .{ .role_id = "warden", .actor = .warden, .kind = .warden },
+};
+
+pub const RoleInput = struct {
+    workspace_path: []const u8,
+    prompts: *const PromptFiles,
+    spec_content: ?[]const u8 = null,
+    memory_context: ?[]const u8 = null,
+    plan_content: ?[]const u8 = null,
+    defects_content: ?[]const u8 = null,
+    implementation_summary: ?[]const u8 = null,
+};
+
+pub const RoleError = error{
+    UnknownRole,
+    MissingRoleInput,
+};
+
+pub fn lookupRole(role_id: []const u8) ?RoleBinding {
+    for (ROLE_REGISTRY) |binding| {
+        if (std.ascii.eqlIgnoreCase(role_id, binding.role_id)) return binding;
+    }
+    return null;
+}
+
+pub fn runByRole(alloc: std.mem.Allocator, binding: RoleBinding, input: RoleInput) !AgentResult {
+    return switch (binding.kind) {
+        .echo => runEcho(
+            alloc,
+            input.workspace_path,
+            input.prompts.echo,
+            input.spec_content orelse return RoleError.MissingRoleInput,
+            input.memory_context orelse return RoleError.MissingRoleInput,
+        ),
+        .scout => runScout(
+            alloc,
+            input.workspace_path,
+            input.prompts.scout,
+            input.plan_content orelse return RoleError.MissingRoleInput,
+            input.defects_content,
+        ),
+        .warden => runWarden(
+            alloc,
+            input.workspace_path,
+            input.prompts.warden,
+            input.spec_content orelse return RoleError.MissingRoleInput,
+            input.plan_content orelse return RoleError.MissingRoleInput,
+            input.implementation_summary orelse return RoleError.MissingRoleInput,
+        ),
+    };
+}
 
 pub fn loadPrompts(alloc: std.mem.Allocator, config_dir: []const u8) !PromptFiles {
     return PromptFiles{
@@ -451,4 +520,32 @@ test "parseObserverBackend supports known values" {
     try std.testing.expectEqual(@as(?ObserverBackend, .noop), parseObserverBackend("noop"));
     try std.testing.expectEqual(@as(?ObserverBackend, .verbose), parseObserverBackend("verbose"));
     try std.testing.expectEqual(@as(?ObserverBackend, null), parseObserverBackend("otel"));
+}
+
+test "lookupRole resolves built-in role ids" {
+    const echo = lookupRole("echo") orelse return error.TestExpectedRole;
+    try std.testing.expectEqual(types.Actor.echo, echo.actor);
+    try std.testing.expectEqual(RoleKind.echo, echo.kind);
+
+    const scout = lookupRole("SCOUT") orelse return error.TestExpectedRole;
+    try std.testing.expectEqual(types.Actor.scout, scout.actor);
+    try std.testing.expectEqual(RoleKind.scout, scout.kind);
+
+    try std.testing.expectEqual(@as(?RoleBinding, null), lookupRole("security"));
+}
+
+test "runByRole validates required stage input fields" {
+    const binding = lookupRole("warden") orelse return error.TestExpectedRole;
+    const fake_prompts = PromptFiles{
+        .echo = "echo prompt",
+        .scout = "scout prompt",
+        .warden = "warden prompt",
+    };
+
+    try std.testing.expectError(RoleError.MissingRoleInput, runByRole(std.testing.allocator, binding, .{
+        .workspace_path = "/tmp",
+        .prompts = &fake_prompts,
+        .spec_content = "spec",
+        .plan_content = "plan",
+    }));
 }

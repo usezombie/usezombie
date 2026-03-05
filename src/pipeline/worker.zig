@@ -1,7 +1,7 @@
 //! Worker loop — Thread 2.
 //! Polls Postgres for SPEC_QUEUED runs via SELECT FOR UPDATE SKIP LOCKED.
-//! Executes Echo → Scout → Warden pipeline. Commits artifacts to git branch.
-//! Runs sequentially: one spec at a time for M1.
+//! Executes pipeline stages from a topology profile (default: Echo → Scout → Warden).
+//! Commits stage artifacts to git branch. Runs sequentially per run.
 
 const std = @import("std");
 const pg = @import("pg");
@@ -16,6 +16,7 @@ const backoff = @import("../reliability/backoff.zig");
 const err_classify = @import("../reliability/error_classify.zig");
 const reliable = @import("../reliability/reliable_call.zig");
 const rate_limit = @import("../reliability/rate_limit.zig");
+const topology = @import("topology.zig");
 const metrics = @import("../observability/metrics.zig");
 const events = @import("../events/bus.zig");
 const obs_log = @import("../observability/logging.zig");
@@ -29,6 +30,7 @@ pub const WorkerConfig = struct {
     cache_root: []const u8,
     github_app_id: []const u8,
     github_app_private_key: []const u8,
+    pipeline_profile_path: []const u8,
     max_attempts: u32 = 3,
     run_timeout_ms: u64 = 300_000,
     poll_interval_ms: u64 = 2_000,
@@ -65,6 +67,9 @@ const WorkerError = error{
     RunDeadlineExceeded,
     PathTraversal,
     MissingGitHubInstallation,
+    InvalidPipelineRole,
+    InvalidPipelineProfile,
+    SideEffectClaimedNoResult,
 };
 
 const ProcessOutcome = enum {
@@ -137,6 +142,13 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
         alloc.free(prompts.warden);
     }
 
+    var profile = topology.loadProfile(alloc, cfg.pipeline_profile_path) catch |err| {
+        log.err("failed to load pipeline profile path={s} err={}", .{ cfg.pipeline_profile_path, err });
+        return;
+    };
+    defer profile.deinit();
+    log.info("pipeline profile loaded profile={s} stages={d}", .{ profile.profile_id, profile.stages.len });
+
     var token_cache = github_auth.TokenCache.init(alloc, cfg.github_app_id, cfg.github_app_private_key);
     defer token_cache.deinit();
     var tenant_limiter = TenantRateLimiter.init(alloc, cfg.rate_limit_capacity, cfg.rate_limit_refill_per_sec);
@@ -144,7 +156,7 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
 
     var consecutive_errors: u32 = 0;
     while (worker_state.running.load(.acquire)) {
-        const outcome = processNextRun(alloc, cfg, worker_state, &prompts, &token_cache, &tenant_limiter) catch |err| {
+        const outcome = processNextRun(alloc, cfg, worker_state, &prompts, &profile, &token_cache, &tenant_limiter) catch |err| {
             if (err != WorkerError.ShutdownRequested) {
                 log.err("run processing error: {}", .{err});
                 metrics.incWorkerErrors();
@@ -189,6 +201,7 @@ fn processNextRun(
     cfg: WorkerConfig,
     worker_state: *WorkerState,
     prompts: *const agents.PromptFiles,
+    profile: *const topology.Profile,
     token_cache: *github_auth.TokenCache,
     tenant_limiter: *TenantRateLimiter,
 ) !ProcessOutcome {
@@ -260,7 +273,7 @@ fn processNextRun(
     ) catch "run_claimed";
     events.emit("run_claimed", run_id, claimed_detail_slice);
 
-    executeRun(alloc, cfg, worker_state, prompts, conn, token_cache, .{
+    executeRun(alloc, cfg, worker_state, prompts, profile, conn, token_cache, .{
         .run_id = run_id,
         .request_id = request_id,
         .workspace_id = workspace_id,
@@ -458,11 +471,22 @@ fn prDetail(ctx: *PrRetryCtx, _: anyerror) ?[]const u8 {
     return ctx.last_error_detail;
 }
 
+const StageRetryCtx = struct {
+    alloc: std.mem.Allocator,
+    binding: agents.RoleBinding,
+    input: agents.RoleInput,
+};
+
+fn opRunStage(ctx: StageRetryCtx, _: u32) !agents.AgentResult {
+    return agents.runByRole(ctx.alloc, ctx.binding, ctx.input);
+}
+
 fn executeRun(
     alloc: std.mem.Allocator,
     cfg: WorkerConfig,
     worker_state: *WorkerState,
     prompts: *const agents.PromptFiles,
+    profile: *const topology.Profile,
     conn: *pg.Conn,
     token_cache: *github_auth.TokenCache,
     ctx: RunContext,
@@ -502,106 +526,176 @@ fn executeRun(
     // ── Load workspace memories for Echo ─────────────────────────────────
     const memory_context = try memory.loadForEcho(run_alloc, conn, ctx.workspace_id, 20);
 
-    // ── Phase 1: Echo (planning) ─────────────────────────────────────────
+    // ── Stage 1: planning stage (echo role in default profile) ─────────
+    const plan_stage = profile.stages[0];
+    const plan_binding = agents.lookupRole(plan_stage.role_id) orelse return WorkerError.InvalidPipelineRole;
+
     try ensureBeforeDeadline(deadline_ms);
     try tenant_limiter.acquire(ctx.tenant_id, 1.0);
-    const echo_result = try agents.runEcho(
-        run_alloc,
-        wt.path,
-        prompts.echo,
-        spec_content,
-        memory_context,
-    );
+    const plan_result = try reliable.call(agents.AgentResult, StageRetryCtx{
+        .alloc = run_alloc,
+        .binding = plan_binding,
+        .input = .{
+            .workspace_path = wt.path,
+            .prompts = prompts,
+            .spec_content = spec_content,
+            .memory_context = memory_context,
+        },
+    }, opRunStage, .{
+        .max_retries = 1,
+        .base_delay_ms = 1_000,
+        .max_delay_ms = 8_000,
+    });
     metrics.incAgentEchoCalls();
-    metrics.addAgentTokens(echo_result.token_count);
-    metrics.observeAgentDurationSeconds(echo_result.wall_seconds);
+    metrics.addAgentTokens(plan_result.token_count);
+    metrics.observeAgentDurationSeconds(plan_result.wall_seconds);
 
-    agents.emitNullclawRunEvent(ctx.run_id, ctx.request_id, ctx.attempt, .echo, echo_result);
-    try state.writeUsage(conn, ctx.run_id, ctx.attempt, .echo, echo_result.token_count, echo_result.wall_seconds);
+    agents.emitNullclawRunEvent(
+        ctx.run_id,
+        ctx.request_id,
+        ctx.attempt,
+        plan_stage.stage_id,
+        plan_stage.role_id,
+        plan_binding.actor,
+        plan_result,
+    );
+    try state.writeUsage(conn, ctx.run_id, ctx.attempt, plan_binding.actor, plan_result.token_count, plan_result.wall_seconds);
 
-    // Commit plan.json to feature branch
-    const plan_path = try std.fmt.allocPrint(run_alloc, "docs/runs/{s}/plan.json", .{ctx.run_id});
-    try commitArtifact(run_alloc, conn, ctx, &wt, plan_path, echo_result.content, "echo: add plan.json", .echo, ctx.attempt);
+    const plan_path = try std.fmt.allocPrint(run_alloc, "docs/runs/{s}/{s}", .{ ctx.run_id, plan_stage.artifact_name });
+    try commitArtifact(
+        run_alloc,
+        conn,
+        ctx,
+        &wt,
+        plan_path,
+        plan_result.content,
+        plan_stage.commit_message,
+        plan_binding.actor,
+        ctx.attempt,
+    );
 
-    // ── Phase 2: Scout (building) — with retry loop ──────────────────────
+    const gate_stage = profile.gateStage();
+    const gate_binding = agents.lookupRole(gate_stage.role_id) orelse return WorkerError.InvalidPipelineRole;
+    const build_stages = profile.buildStages();
+    if (build_stages.len == 0) return WorkerError.InvalidPipelineProfile;
+
     var attempt = ctx.attempt;
     var defects: ?[]const u8 = null;
 
-    // Accumulate token and wall-clock totals across all agent calls
-    var total_tokens: u64 = echo_result.token_count;
-    var total_wall_seconds: u64 = echo_result.wall_seconds;
+    var total_tokens: u64 = plan_result.token_count;
+    var total_wall_seconds: u64 = plan_result.wall_seconds;
 
     while (attempt <= cfg.max_attempts) : (attempt += 1) {
         try ensureBeforeDeadline(deadline_ms);
         if (!worker_state.running.load(.acquire)) return WorkerError.ShutdownRequested;
 
+        // ── Build stages (one or more) ───────────────────────────────────
         _ = try state.transition(conn, ctx.run_id, .PATCH_IN_PROGRESS, .orchestrator, .PATCH_STARTED, null);
 
-        try tenant_limiter.acquire(ctx.tenant_id, 1.0);
-        try ensureBeforeDeadline(deadline_ms);
-        const scout_result = try reliable.call(agents.AgentResult, ScoutRetryCtx{
-            .alloc = run_alloc,
-            .workspace_path = wt.path,
-            .prompt = prompts.scout,
-            .plan_content = echo_result.content,
-            .defects_content = defects,
-        }, opRunScout, .{
-            .max_retries = 1,
-            .base_delay_ms = 1_000,
-            .max_delay_ms = 8_000,
-        });
-        metrics.incAgentScoutCalls();
-        metrics.addAgentTokens(scout_result.token_count);
-        metrics.observeAgentDurationSeconds(scout_result.wall_seconds);
+        var latest_build_output: []const u8 = plan_result.content;
+        for (build_stages) |stage| {
+            const binding = agents.lookupRole(stage.role_id) orelse return WorkerError.InvalidPipelineRole;
+            log.info("stage start run_id={s} stage_id={s} role={s} attempt={d}", .{
+                ctx.run_id,
+                stage.stage_id,
+                stage.role_id,
+                attempt,
+            });
 
-        agents.emitNullclawRunEvent(ctx.run_id, ctx.request_id, attempt, .scout, scout_result);
-        total_tokens += scout_result.token_count;
-        total_wall_seconds += scout_result.wall_seconds;
-        try state.writeUsage(conn, ctx.run_id, attempt, .scout, scout_result.token_count, scout_result.wall_seconds);
+            try tenant_limiter.acquire(ctx.tenant_id, 1.0);
+            try ensureBeforeDeadline(deadline_ms);
+            const result = try reliable.call(agents.AgentResult, StageRetryCtx{
+                .alloc = run_alloc,
+                .binding = binding,
+                .input = .{
+                    .workspace_path = wt.path,
+                    .prompts = prompts,
+                    .spec_content = spec_content,
+                    .plan_content = plan_result.content,
+                    .defects_content = defects,
+                    .implementation_summary = latest_build_output,
+                },
+            }, opRunStage, .{
+                .max_retries = 1,
+                .base_delay_ms = 1_000,
+                .max_delay_ms = 8_000,
+            });
 
-        // Commit implementation.md
-        const impl_path = try std.fmt.allocPrint(run_alloc, "docs/runs/{s}/implementation.md", .{ctx.run_id});
-        try commitArtifact(run_alloc, conn, ctx, &wt, impl_path, scout_result.content, "scout: add implementation.md", .scout, attempt);
+            switch (binding.actor) {
+                .echo => metrics.incAgentEchoCalls(),
+                .scout => metrics.incAgentScoutCalls(),
+                .warden => metrics.incAgentWardenCalls(),
+                .orchestrator => {},
+            }
+            metrics.addAgentTokens(result.token_count);
+            metrics.observeAgentDurationSeconds(result.wall_seconds);
+
+            agents.emitNullclawRunEvent(
+                ctx.run_id,
+                ctx.request_id,
+                attempt,
+                stage.stage_id,
+                stage.role_id,
+                binding.actor,
+                result,
+            );
+            total_tokens += result.token_count;
+            total_wall_seconds += result.wall_seconds;
+            try state.writeUsage(conn, ctx.run_id, attempt, binding.actor, result.token_count, result.wall_seconds);
+
+            const stage_path = try std.fmt.allocPrint(run_alloc, "docs/runs/{s}/{s}", .{ ctx.run_id, stage.artifact_name });
+            try commitArtifact(run_alloc, conn, ctx, &wt, stage_path, result.content, stage.commit_message, binding.actor, attempt);
+            latest_build_output = result.content;
+        }
 
         _ = try state.transition(conn, ctx.run_id, .PATCH_READY, .scout, .PATCH_COMMITTED, null);
 
-        // ── Phase 3: Warden (validation) ─────────────────────────────────
+        // ── Gate stage: final verification ───────────────────────────────
         _ = try state.transition(conn, ctx.run_id, .VERIFICATION_IN_PROGRESS, .orchestrator, .PATCH_STARTED, null);
 
         try ensureBeforeDeadline(deadline_ms);
         try tenant_limiter.acquire(ctx.tenant_id, 1.0);
-        const warden_result = try reliable.call(agents.AgentResult, WardenRetryCtx{
+        const gate_result = try reliable.call(agents.AgentResult, StageRetryCtx{
             .alloc = run_alloc,
-            .workspace_path = wt.path,
-            .prompt = prompts.warden,
-            .spec_content = spec_content,
-            .plan_content = echo_result.content,
-            .implementation_summary = scout_result.content,
-        }, opRunWarden, .{
+            .binding = gate_binding,
+            .input = .{
+                .workspace_path = wt.path,
+                .prompts = prompts,
+                .spec_content = spec_content,
+                .plan_content = plan_result.content,
+                .implementation_summary = latest_build_output,
+            },
+        }, opRunStage, .{
             .max_retries = 1,
             .base_delay_ms = 1_000,
             .max_delay_ms = 8_000,
         });
-        metrics.incAgentWardenCalls();
-        metrics.addAgentTokens(warden_result.token_count);
-        metrics.observeAgentDurationSeconds(warden_result.wall_seconds);
+        if (gate_binding.actor == .warden) metrics.incAgentWardenCalls();
+        metrics.addAgentTokens(gate_result.token_count);
+        metrics.observeAgentDurationSeconds(gate_result.wall_seconds);
 
-        agents.emitNullclawRunEvent(ctx.run_id, ctx.request_id, attempt, .warden, warden_result);
-        total_tokens += warden_result.token_count;
-        total_wall_seconds += warden_result.wall_seconds;
-        try state.writeUsage(conn, ctx.run_id, attempt, .warden, warden_result.token_count, warden_result.wall_seconds);
+        agents.emitNullclawRunEvent(
+            ctx.run_id,
+            ctx.request_id,
+            attempt,
+            gate_stage.stage_id,
+            gate_stage.role_id,
+            gate_binding.actor,
+            gate_result,
+        );
+        total_tokens += gate_result.token_count;
+        total_wall_seconds += gate_result.wall_seconds;
+        try state.writeUsage(conn, ctx.run_id, attempt, gate_binding.actor, gate_result.token_count, gate_result.wall_seconds);
 
-        // Commit validation.md
-        const validation_path = try std.fmt.allocPrint(run_alloc, "docs/runs/{s}/validation.md", .{ctx.run_id});
-        try commitArtifact(run_alloc, conn, ctx, &wt, validation_path, warden_result.content, "warden: add validation.md", .warden, attempt);
+        const gate_path = try std.fmt.allocPrint(run_alloc, "docs/runs/{s}/{s}", .{ ctx.run_id, gate_stage.artifact_name });
+        try commitArtifact(run_alloc, conn, ctx, &wt, gate_path, gate_result.content, gate_stage.commit_message, gate_binding.actor, attempt);
 
-        // Save workspace memories from Warden
-        const observations = try agents.extractObservations(run_alloc, warden_result.content);
+        const observations = try agents.extractObservations(run_alloc, gate_result.content);
         if (observations.len > 0) {
             _ = try memory.saveFromWarden(conn, ctx.workspace_id, ctx.run_id, observations);
         }
 
-        const passed = agents.parseWardenVerdict(warden_result.content);
+        const passed = agents.parseWardenVerdict(gate_result.content);
 
         if (passed) {
             // ── PASS: create PR ──────────────────────────────────────────
@@ -609,49 +703,60 @@ fn executeRun(
 
             var pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
             if (pr_url == null) {
-                try ensureBeforeDeadline(deadline_ms);
-                const installation_id = try loadInstallationId(run_alloc, conn, ctx.workspace_id);
-                defer run_alloc.free(installation_id);
+                const side_effect_key = try std.fmt.allocPrint(run_alloc, "pr:create:{s}", .{branch});
+                const claimed = try state.claimSideEffect(conn, ctx.run_id, side_effect_key, branch);
 
-                const github_token = try reliable.call([]u8, TokenRetryCtx{
-                    .cache = token_cache,
-                    .alloc = run_alloc,
-                    .installation_id = installation_id,
-                }, opGetInstallationToken, .{
-                    .max_retries = 2,
-                    .base_delay_ms = 500,
-                    .max_delay_ms = 5_000,
-                });
-                defer run_alloc.free(github_token);
+                if (!claimed) {
+                    pr_url = try getExistingPrUrl(run_alloc, conn, ctx.run_id);
+                    if (pr_url == null) return WorkerError.SideEffectClaimedNoResult;
+                }
 
-                try reliable.call(void, PushRetryCtx{
-                    .alloc = run_alloc,
-                    .wt_path = wt.path,
-                    .branch = branch,
-                    .github_token = github_token,
-                }, opPushBranch, .{
-                    .max_retries = 2,
-                    .base_delay_ms = 1_000,
-                    .max_delay_ms = 10_000,
-                });
+                if (pr_url == null) {
+                    try ensureBeforeDeadline(deadline_ms);
+                    const installation_id = try loadInstallationId(run_alloc, conn, ctx.workspace_id);
+                    defer run_alloc.free(installation_id);
 
-                const pr_title = try std.fmt.allocPrint(run_alloc, "usezombie: {s}", .{ctx.spec_id});
+                    const github_token = try reliable.call([]u8, TokenRetryCtx{
+                        .cache = token_cache,
+                        .alloc = run_alloc,
+                        .installation_id = installation_id,
+                    }, opGetInstallationToken, .{
+                        .max_retries = 2,
+                        .base_delay_ms = 500,
+                        .max_delay_ms = 5_000,
+                    });
+                    defer run_alloc.free(github_token);
 
-                var pr_retry_ctx = PrRetryCtx{
-                    .alloc = run_alloc,
-                    .repo_url = ctx.repo_url,
-                    .branch = branch,
-                    .base_branch = ctx.default_branch,
-                    .title = pr_title,
-                    .body = warden_result.content,
-                    .github_token = github_token,
-                };
-                const created_pr = try reliable.callWithDetail([]u8, &pr_retry_ctx, opCreatePr, prDetail, .{
-                    .max_retries = 2,
-                    .base_delay_ms = 1_000,
-                    .max_delay_ms = 10_000,
-                });
-                pr_url = created_pr;
+                    try reliable.call(void, PushRetryCtx{
+                        .alloc = run_alloc,
+                        .wt_path = wt.path,
+                        .branch = branch,
+                        .github_token = github_token,
+                    }, opPushBranch, .{
+                        .max_retries = 2,
+                        .base_delay_ms = 1_000,
+                        .max_delay_ms = 10_000,
+                    });
+
+                    const pr_title = try std.fmt.allocPrint(run_alloc, "usezombie: {s}", .{ctx.spec_id});
+
+                    var pr_retry_ctx = PrRetryCtx{
+                        .alloc = run_alloc,
+                        .repo_url = ctx.repo_url,
+                        .branch = branch,
+                        .base_branch = ctx.default_branch,
+                        .title = pr_title,
+                        .body = gate_result.content,
+                        .github_token = github_token,
+                    };
+                    const created_pr = try reliable.callWithDetail([]u8, &pr_retry_ctx, opCreatePr, prDetail, .{
+                        .max_retries = 2,
+                        .base_delay_ms = 1_000,
+                        .max_delay_ms = 10_000,
+                    });
+                    pr_url = created_pr;
+                    try state.markSideEffectDone(conn, ctx.run_id, side_effect_key, created_pr);
+                }
             }
 
             const pr_final = pr_url orelse return git.GitError.PrFailed;
@@ -738,9 +843,9 @@ fn executeRun(
             "docs/runs/{s}/attempt_{d}_defects.md",
             .{ ctx.run_id, attempt },
         );
-        try commitArtifact(run_alloc, conn, ctx, &wt, defects_path, warden_result.content, "warden: add defects", .warden, attempt);
+        try commitArtifact(run_alloc, conn, ctx, &wt, defects_path, gate_result.content, "warden: add defects", .warden, attempt);
 
-        defects = try run_alloc.dupe(u8, warden_result.content);
+        defects = try run_alloc.dupe(u8, gate_result.content);
 
         // Increment attempt counter in DB
         _ = try state.incrementAttempt(conn, ctx.run_id);
@@ -811,4 +916,13 @@ test "isWithinPath respects directory boundaries" {
     try std.testing.expect(isWithinPath("/tmp/wt", "/tmp/wt"));
     try std.testing.expect(!isWithinPath("/tmp/wt", "/tmp/wt-other/spec.md"));
     try std.testing.expect(!isWithinPath("/tmp/wt", "/tmp/other/spec.md"));
+}
+
+test "integration: default topology roles resolve through registry" {
+    var profile = try topology.defaultProfile(std.testing.allocator);
+    defer profile.deinit();
+
+    for (profile.stages) |stage| {
+        try std.testing.expect(agents.lookupRole(stage.role_id) != null);
+    }
 }

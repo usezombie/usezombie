@@ -227,6 +227,41 @@ pub fn registerArtifact(
     r.deinit();
 }
 
+/// Claim a side effect so it can run at-most-once per run/effect_key.
+/// Returns true when this caller acquired the claim, false when it was already claimed.
+pub fn claimSideEffect(
+    conn: *pg.Conn,
+    run_id: []const u8,
+    effect_key: []const u8,
+    details: ?[]const u8,
+) !bool {
+    const now_ms = std.time.milliTimestamp();
+    var r = try conn.query(
+        \\INSERT INTO run_side_effects
+        \\  (run_id, effect_key, status, details, created_at, updated_at)
+        \\VALUES ($1, $2, 'claimed', $3, $4, $4)
+        \\ON CONFLICT (run_id, effect_key) DO NOTHING
+        \\RETURNING id
+    , .{ run_id, effect_key, details, now_ms });
+    defer r.deinit();
+    return (try r.next()) != null;
+}
+
+pub fn markSideEffectDone(
+    conn: *pg.Conn,
+    run_id: []const u8,
+    effect_key: []const u8,
+    details: ?[]const u8,
+) !void {
+    const now_ms = std.time.milliTimestamp();
+    var r = try conn.query(
+        \\UPDATE run_side_effects
+        \\SET status = 'done', details = COALESCE($3, details), updated_at = $4
+        \\WHERE run_id = $1 AND effect_key = $2
+    , .{ run_id, effect_key, details, now_ms });
+    r.deinit();
+}
+
 test "isAllowed covers all configured transitions" {
     const valid = [_][2]types.RunState{
         .{ .SPEC_QUEUED, .RUN_PLANNED },
