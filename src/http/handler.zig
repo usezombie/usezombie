@@ -8,6 +8,7 @@ const state = @import("../state/machine.zig");
 const policy = @import("../state/policy.zig");
 const worker = @import("../pipeline/worker.zig");
 const secrets = @import("../secrets/crypto.zig");
+const metrics = @import("../observability/metrics.zig");
 const log = std.log.scoped(.http);
 
 // ── Handler context (shared across all handlers) ──────────────────────────
@@ -143,6 +144,25 @@ pub fn handleReadyz(ctx: *Context, r: zap.Request) void {
     });
 }
 
+pub fn handleMetrics(ctx: *Context, r: zap.Request) void {
+    const qh = queueHealth(ctx);
+    const body = metrics.renderPrometheus(
+        ctx.alloc,
+        ctx.worker_state.running.load(.acquire),
+        if (qh) |v| v.queued_count else null,
+        if (qh) |v| v.oldest_queued_age_ms else null,
+    ) catch {
+        r.setStatus(.internal_server_error);
+        r.sendBody("") catch |err| log.warn("metrics send failed: {}", .{err});
+        return;
+    };
+    defer ctx.alloc.free(body);
+
+    r.setStatus(.ok);
+    r.setContentType(.TEXT) catch |err| log.warn("setContentType TEXT failed: {}", .{err});
+    r.sendBody(body) catch |err| log.warn("metrics body send failed: {}", .{err});
+}
+
 // ── POST /v1/runs ─────────────────────────────────────────────────────────
 
 pub fn handleStartRun(ctx: *Context, r: zap.Request) void {
@@ -274,6 +294,7 @@ pub fn handleStartRun(ctx: *Context, r: zap.Request) void {
     log.info("run created run_id={s} workspace_id={s} spec_id={s}", .{
         run_id, req.workspace_id, req.spec_id,
     });
+    metrics.incRunsCreated();
 
     writeJson(r, .accepted, .{
         .run_id = run_id,

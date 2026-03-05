@@ -16,6 +16,7 @@ const backoff = @import("../reliability/backoff.zig");
 const err_classify = @import("../reliability/error_classify.zig");
 const reliable = @import("../reliability/reliable_call.zig");
 const rate_limit = @import("../reliability/rate_limit.zig");
+const metrics = @import("../observability/metrics.zig");
 const log = std.log.scoped(.worker);
 
 // ── Worker configuration ──────────────────────────────────────────────────
@@ -141,6 +142,7 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
         const outcome = processNextRun(alloc, cfg, worker_state, &prompts, &token_cache, &tenant_limiter) catch |err| {
             if (err != WorkerError.ShutdownRequested) {
                 log.err("run processing error: {}", .{err});
+                metrics.incWorkerErrors();
                 consecutive_errors += 1;
 
                 const max_delay_ms = std.math.mul(u64, cfg.poll_interval_ms, 8) catch cfg.poll_interval_ms;
@@ -257,6 +259,7 @@ fn processNextRun(
             _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, .AGENT_TIMEOUT, "shutdown requested") catch |tx_err| {
                 log.warn("shutdown transition failed run_id={s}: {}", .{ run_id, tx_err });
             };
+            metrics.incRunsBlocked();
             return err;
         }
 
@@ -275,6 +278,7 @@ fn processNextRun(
         _ = state.transition(conn, run_id, .BLOCKED, .orchestrator, classified.reason_code, note) catch |tx_err| {
             log.warn("failure transition failed run_id={s}: {}", .{ run_id, tx_err });
         };
+        metrics.incRunsBlocked();
     };
     return .worked;
 }
@@ -477,6 +481,8 @@ fn executeRun(
         spec_content,
         memory_context,
     );
+    metrics.incAgentEchoCalls();
+    metrics.addAgentTokens(echo_result.token_count);
 
     agents.emitNullclawRunEvent(ctx.run_id, ctx.attempt, .echo, echo_result);
     try state.writeUsage(conn, ctx.run_id, ctx.attempt, .echo, echo_result.token_count, echo_result.wall_seconds);
@@ -510,6 +516,8 @@ fn executeRun(
             .base_delay_ms = 1_000,
             .max_delay_ms = 8_000,
         });
+        metrics.incAgentScoutCalls();
+        metrics.addAgentTokens(scout_result.token_count);
 
         agents.emitNullclawRunEvent(ctx.run_id, attempt, .scout, scout_result);
         total_tokens += scout_result.token_count;
@@ -538,6 +546,8 @@ fn executeRun(
             .base_delay_ms = 1_000,
             .max_delay_ms = 8_000,
         });
+        metrics.incAgentWardenCalls();
+        metrics.addAgentTokens(warden_result.token_count);
 
         agents.emitNullclawRunEvent(ctx.run_id, attempt, .warden, warden_result);
         total_tokens += warden_result.token_count;
@@ -648,6 +658,7 @@ fn executeRun(
             ) catch |err| {
                 log.warn("run_summary.md alloc failed (non-fatal): {}", .{err});
                 log.info("run completed run_id={s} pr_url={s}", .{ ctx.run_id, pr_final });
+                metrics.incRunsCompleted();
                 return;
             };
 
@@ -658,6 +669,7 @@ fn executeRun(
             };
 
             log.info("run completed run_id={s} pr_url={s}", .{ ctx.run_id, pr_final });
+            metrics.incRunsCompleted();
             return;
         }
 
@@ -682,6 +694,8 @@ fn executeRun(
         // Adaptive retry delay with jitter.
         const retry_index = attempt - ctx.attempt;
         const delay_ms = backoff.expBackoffJitter(retry_index, 1_000, 30_000);
+        metrics.incRunRetries();
+        metrics.addBackoffWaitMs(delay_ms);
         std.Thread.sleep(delay_ms * std.time.ns_per_ms);
 
         log.info("retrying run_id={s} attempt={d}", .{ ctx.run_id, attempt + 1 });
@@ -692,6 +706,7 @@ fn executeRun(
     _ = try state.transition(conn, ctx.run_id, .NOTIFIED_BLOCKED, .orchestrator, .NOTIFICATION_SENT, null);
 
     log.warn("run blocked (retries exhausted) run_id={s}", .{ctx.run_id});
+    metrics.incRunsBlocked();
 }
 
 // ── Artifact helpers ─────────────────────────────────────────────────────
