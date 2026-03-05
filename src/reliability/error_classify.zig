@@ -20,9 +20,24 @@ pub const Classified = struct {
     reason_code: types.ReasonCode,
 };
 
+fn findIgnoreCase(haystack: []const u8, needle: []const u8) ?usize {
+    if (needle.len == 0) return 0;
+    if (needle.len > haystack.len) return null;
+
+    var i: usize = 0;
+    while (i + needle.len <= haystack.len) : (i += 1) {
+        if (std.ascii.eqlIgnoreCase(haystack[i .. i + needle.len], needle)) return i;
+    }
+    return null;
+}
+
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    return findIgnoreCase(haystack, needle) != null;
+}
+
 fn parseRetryAfterMs(detail: []const u8) ?u64 {
     const needle = "Retry-After:";
-    const idx = std.mem.indexOf(u8, detail, needle) orelse return null;
+    const idx = findIgnoreCase(detail, needle) orelse return null;
 
     var rest = detail[idx + needle.len ..];
     rest = std.mem.trimLeft(u8, rest, " \t");
@@ -36,30 +51,74 @@ fn parseRetryAfterMs(detail: []const u8) ?u64 {
 }
 
 fn fromDetail(detail: []const u8) ?Classified {
-    if (std.mem.indexOf(u8, detail, "429") != null or std.mem.indexOf(u8, detail, "rate limit") != null) {
+    if (containsIgnoreCase(detail, "429") or
+        containsIgnoreCase(detail, "rate limit") or
+        containsIgnoreCase(detail, "too many requests"))
+    {
         return .{
             .class = .rate_limited,
             .retryable = true,
             .retry_after_ms = parseRetryAfterMs(detail),
-            .reason_code = .AGENT_TIMEOUT,
+            .reason_code = .RATE_LIMITED,
         };
     }
 
-    if (std.mem.indexOf(u8, detail, "401") != null or std.mem.indexOf(u8, detail, "403") != null) {
+    if (containsIgnoreCase(detail, "401") or
+        containsIgnoreCase(detail, "403") or
+        containsIgnoreCase(detail, "unauthorized") or
+        containsIgnoreCase(detail, "forbidden") or
+        containsIgnoreCase(detail, "invalid token"))
+    {
         return .{
             .class = .auth,
             .retryable = false,
             .retry_after_ms = null,
-            .reason_code = .AGENT_CRASH,
+            .reason_code = .AUTH_FAILED,
         };
     }
 
-    if (std.mem.indexOf(u8, detail, "context") != null and std.mem.indexOf(u8, detail, "exhaust") != null) {
+    if (containsIgnoreCase(detail, "context") and containsIgnoreCase(detail, "exhaust")) {
         return .{
             .class = .context_exhausted,
             .retryable = false,
             .retry_after_ms = null,
             .reason_code = .SPEC_MISMATCH,
+        };
+    }
+
+    if (containsIgnoreCase(detail, "408") or
+        containsIgnoreCase(detail, "504") or
+        containsIgnoreCase(detail, "timeout"))
+    {
+        return .{
+            .class = .timeout,
+            .retryable = true,
+            .retry_after_ms = null,
+            .reason_code = .AGENT_TIMEOUT,
+        };
+    }
+
+    if (containsIgnoreCase(detail, "500") or
+        containsIgnoreCase(detail, "502") or
+        containsIgnoreCase(detail, "503"))
+    {
+        return .{
+            .class = .server_error,
+            .retryable = true,
+            .retry_after_ms = null,
+            .reason_code = .AGENT_TIMEOUT,
+        };
+    }
+
+    if (containsIgnoreCase(detail, "400") or
+        containsIgnoreCase(detail, "422") or
+        containsIgnoreCase(detail, "bad request"))
+    {
+        return .{
+            .class = .invalid_request,
+            .retryable = false,
+            .retry_after_ms = null,
+            .reason_code = .AGENT_CRASH,
         };
     }
 
@@ -108,7 +167,7 @@ pub fn classify(err: anyerror, detail: ?[]const u8) Classified {
             .class = .auth,
             .retryable = false,
             .retry_after_ms = null,
-            .reason_code = .AGENT_CRASH,
+            .reason_code = .AUTH_FAILED,
         };
     }
 
@@ -136,8 +195,22 @@ test "classify timeout errors as retryable" {
 }
 
 test "classify detail-based rate limit and retry-after" {
-    const c = classify(error.CurlFailed, "HTTP 429\nRetry-After: 7\n");
+    const c = classify(error.CurlFailed, "HTTP 429\nretry-after: 7\n");
     try std.testing.expectEqual(ErrorClass.rate_limited, c.class);
     try std.testing.expect(c.retryable);
+    try std.testing.expectEqual(types.ReasonCode.RATE_LIMITED, c.reason_code);
     try std.testing.expectEqual(@as(?u64, 7_000), c.retry_after_ms);
+}
+
+test "classify detail-based auth as non-retryable" {
+    const c = classify(error.CurlFailed, "HTTP 401 unauthorized");
+    try std.testing.expectEqual(ErrorClass.auth, c.class);
+    try std.testing.expect(!c.retryable);
+    try std.testing.expectEqual(types.ReasonCode.AUTH_FAILED, c.reason_code);
+}
+
+test "classify config auth failures with auth reason code" {
+    const c = classify(error.MissingConfig, null);
+    try std.testing.expectEqual(ErrorClass.auth, c.class);
+    try std.testing.expectEqual(types.ReasonCode.AUTH_FAILED, c.reason_code);
 }
