@@ -1,4 +1,4 @@
-# DONE_KICKOFF — Build UseZombie M1
+# KICKOFF — Build UseZombie M1
 
 Date: Mar 2, 2026
 Status: M1 COMPLETE — all three milestones filed to docs/done/v1/ ✅
@@ -153,16 +153,16 @@ These files must be authored during M1 implementation. They do not exist yet.
 ## Spec Completion Convention
 
 When a milestone spec is fully implemented and verified:
-1. Move the spec from `docs/spec/v1/M1_000_*.md` to `docs/done/v1/DONE_M1_000_*.md`
+1. Move the spec from `docs/spec/v1/M1_000_*.md` to `docs/done/v1/M1_000_*.md`
 2. Mark the corresponding checkbox in the milestone tracker below with ✅
 3. The spec file in `docs/done/v1/` is the permanent record — never edit after moving
 
 ### Milestone Tracker
 
 #### M1 — Control Plane + Agent Pipeline
-- ✅ `DONE_M1_000_CONTROL_PLANE_NULLCLAW_BASELINE.md` — Zig binary, NullClaw integration, HTTP API, state machine, agent pipeline
-- ✅ `DONE_M1_002_API_AND_EVENTS_CONTRACTS.md` — API contracts, artifact schema, event envelope (all 4 gaps closed Mar 3, 2026)
-- ✅ `DONE_M1_003_OBSERVABILITY_AND_POLICY.md` — Observability events, SLOs, policy guardrails (all 5 gaps closed Mar 3, 2026)
+- ✅ `M1_000_CONTROL_PLANE_NULLCLAW_BASELINE.md` — Zig binary, NullClaw integration, HTTP API, state machine, agent pipeline
+- ✅ `M1_002_API_AND_EVENTS_CONTRACTS.md` — API contracts, artifact schema, event envelope (all 4 gaps closed Mar 3, 2026)
+- ✅ `M1_003_OBSERVABILITY_AND_POLICY.md` — Observability events, SLOs, policy guardrails (all 5 gaps closed Mar 3, 2026)
 
 ## Decisions Locked
 

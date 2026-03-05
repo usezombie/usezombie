@@ -15,7 +15,7 @@ UseZombie is a Zig monorepo (`zombied` binary) using NullClaw as agent runtime, 
 ## Important: 
 
 Read and follow: When the Milestone is complete mark with green tick + DONE in the relevant section of the doc and the relevant M3_xxx file.
-If the M3_xxx is fully done, then rename M3_XXX to DONE_M3_xxx...md and move it to docs/done/v1/..
+If the M3_xxx is fully done, then move it to `docs/done/v1/` and keep the original filename (no `DONE_` prefix needed).
 
 ---
 
@@ -46,7 +46,7 @@ M3_007 (Website) ──── independent, parallel ─────────�
 
 ## ✅ DONE: Step 1 — M3_001 Critical Bug Fixes
 
-Reference: `docs/done/v1/DONE_M3_001_ORACLE_HEAD_TO_HEAD.md` (dimensions 5, 7, 11-20)
+Reference: `docs/spec/v1/M3_001_ORACLE_HEAD_TO_HEAD.md` (dimensions 5, 7, 11-20)
 
 ### 1.1 Transaction wrapping for run claiming
 
@@ -130,7 +130,7 @@ Create `ArenaAllocator` at start of `executeRun()`, `defer arena.deinit()`. Pass
 
 ## ✅ DONE: Step 1 (parallel) — M3_000 Secrets + Schema Separation
 
-Reference: `docs/done/v1/DONE_M3_000_SECRETS_HARDENING.md`
+Reference: `docs/done/v1/M3_000_SECRETS_HARDENING.md`
 
 ### 1A.1 Vault schema
 
@@ -349,7 +349,7 @@ Reference: `docs/spec/v1/M4_002_PUBLISH_CLI.md`
 
 ## ✅ DONE: Parallel — M3_007 Static Website
 
-Reference: `docs/done/v1/DONE_M3_007_WEBSITE_STATIC.md`
+Reference: `docs/done/v1/M3_007_WEBSITE_STATIC.md`
 
 Can be built independently of all backend work.
 
