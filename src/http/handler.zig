@@ -5,6 +5,7 @@ const std = @import("std");
 const zap = @import("zap");
 const pg = @import("pg");
 const clerk = @import("../auth/clerk.zig");
+const queue_redis = @import("../queue/redis.zig");
 const state = @import("../state/machine.zig");
 const policy = @import("../state/policy.zig");
 const worker = @import("../pipeline/worker.zig");
@@ -17,6 +18,7 @@ const log = std.log.scoped(.http);
 
 pub const Context = struct {
     pool: *pg.Pool,
+    queue: *queue_redis.Client,
     alloc: std.mem.Allocator,
     api_keys: []const u8, // comma-separated API key list from env
     clerk: ?*clerk.Verifier,
@@ -407,6 +409,14 @@ pub fn handleStartRun(ctx: *Context, r: zap.Request) void {
         log.info("run created run_id={s} workspace_id={s} spec_id={s}", .{
             final_run_id, req.workspace_id, req.spec_id,
         });
+        ctx.queue.xaddRun(final_run_id, 0, req.workspace_id) catch |err| {
+            obs_log.logWarnErr(.http, err, "queue enqueue failed run_id={s} workspace_id={s}", .{
+                final_run_id,
+                req.workspace_id,
+            });
+            errorResponse(r, .service_unavailable, "QUEUE_UNAVAILABLE", "Queue unavailable", req_id);
+            return;
+        };
         metrics.incRunsCreated();
     } else {
         log.info("run idempotent replay run_id={s} workspace_id={s}", .{ final_run_id, req.workspace_id });
@@ -673,6 +683,11 @@ pub fn handleRetryRun(ctx: *Context, r: zap.Request, run_id: []const u8) void {
     r3.deinit();
 
     log.info("run retried run_id={s} reason={s}", .{ run_id, parsed.value.reason });
+    ctx.queue.xaddRun(run_id, current.attempt + 1, workspace_id_for_policy) catch |err| {
+        obs_log.logWarnErr(.http, err, "queue enqueue failed for retry run_id={s}", .{run_id});
+        errorResponse(r, .service_unavailable, "QUEUE_UNAVAILABLE", "Queue unavailable", req_id);
+        return;
+    };
 
     writeJson(r, .accepted, .{
         .run_id = run_id,
@@ -686,6 +701,7 @@ test "integration: beginApiRequest enforces max in-flight limit" {
     var ws = worker.WorkerState.init();
     var ctx = Context{
         .pool = undefined,
+        .queue = undefined,
         .alloc = std.testing.allocator,
         .api_keys = "",
         .clerk = null,
@@ -706,6 +722,7 @@ test "integration: endApiRequest decrements in-flight counter deterministically"
     var ws = worker.WorkerState.init();
     var ctx = Context{
         .pool = undefined,
+        .queue = undefined,
         .alloc = std.testing.allocator,
         .api_keys = "",
         .clerk = null,

@@ -11,6 +11,13 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
   zombied:
     build:
       context: .
@@ -18,10 +25,12 @@ services:
     environment:
       PORT: 3000
       DATABASE_URL: postgres://usezombie:usezombie@postgres:5432/usezombiedb
+      REDIS_URL: redis://redis:6379
       API_KEY: local-dev-api-key
       AGENT_CONFIG_DIR: /app/config
     depends_on:
       - postgres
+      - redis
     ports:
       - "3000:3000"
     volumes:
@@ -30,4 +39,5 @@ services:
 
 volumes:
   postgres-data:
+  redis-data:
   zig-cache:
