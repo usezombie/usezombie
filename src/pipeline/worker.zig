@@ -263,6 +263,11 @@ fn rollbackTx(conn: *pg.Conn) void {
     tx.deinit();
 }
 
+fn beginRunIfActive(worker_state: *WorkerState) WorkerError!void {
+    if (!worker_state.running.load(.acquire)) return WorkerError.ShutdownRequested;
+    worker_state.beginRun();
+}
+
 fn processNextRun(
     alloc: std.mem.Allocator,
     cfg: WorkerConfig,
@@ -329,7 +334,8 @@ fn processNextRun(
     try commitTx(conn);
     tx_open = false;
 
-    if (!worker_state.running.load(.acquire)) return WorkerError.ShutdownRequested;
+    try beginRunIfActive(worker_state);
+    defer worker_state.endRun();
 
     log.info("claimed run run_id={s} request_id={s} attempt={d}", .{ run_id, request_id, attempt });
     var claimed_detail: [128]u8 = undefined;
@@ -339,9 +345,6 @@ fn processNextRun(
         .{ request_id, attempt },
     ) catch "run_claimed";
     events.emit("run_claimed", run_id, claimed_detail_slice);
-
-    worker_state.beginRun();
-    defer worker_state.endRun();
 
     executeRun(alloc, cfg, worker_state, prompts, profile, conn, token_cache, .{
         .run_id = run_id,
@@ -1266,6 +1269,41 @@ test "worker state in-flight run counter tracks begin/end safely" {
     try std.testing.expectEqual(@as(u32, 1), ws.currentInFlightRuns());
     ws.endRun();
     try std.testing.expectEqual(@as(u32, 0), ws.currentInFlightRuns());
+}
+
+test "beginRunIfActive rejects stopped worker without incrementing in-flight" {
+    var ws = WorkerState.init();
+    ws.running.store(false, .release);
+
+    try std.testing.expectError(WorkerError.ShutdownRequested, beginRunIfActive(&ws));
+    try std.testing.expectEqual(@as(u32, 0), ws.currentInFlightRuns());
+}
+
+test "beginRunIfActive increments in-flight when running" {
+    var ws = WorkerState.init();
+    ws.running.store(true, .release);
+
+    try beginRunIfActive(&ws);
+    try std.testing.expectEqual(@as(u32, 1), ws.currentInFlightRuns());
+    ws.endRun();
+    try std.testing.expectEqual(@as(u32, 0), ws.currentInFlightRuns());
+}
+
+test "sleepCooperative returns deadline exceeded when deadline already passed" {
+    var ws = WorkerState.init();
+    try std.testing.expectError(
+        WorkerError.RunDeadlineExceeded,
+        sleepCooperative(10, &ws, std.time.milliTimestamp() - 1),
+    );
+}
+
+test "integration: sleepCooperative returns deadline exceeded during wait window" {
+    var ws = WorkerState.init();
+    const deadline_ms = std.time.milliTimestamp() + 10;
+    try std.testing.expectError(
+        WorkerError.RunDeadlineExceeded,
+        sleepCooperative(250, &ws, deadline_ms),
+    );
 }
 
 const CounterRaceCtx = struct {
