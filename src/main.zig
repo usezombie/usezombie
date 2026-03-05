@@ -17,12 +17,35 @@ const worker = @import("pipeline/worker.zig");
 const log = std.log.scoped(.zombied);
 
 var shutdown_requested = std.atomic.Value(bool).init(false);
+var runtime_log_level = std.atomic.Value(u8).init(@intFromEnum(if (builtin.mode == .Debug) std.log.Level.debug else std.log.Level.info));
 
 // Logging configuration — follow Ghostty pattern
 pub const std_options: std.Options = .{
-    .log_level = if (builtin.mode == .Debug) .debug else .info,
+    .log_level = .debug,
     .logFn = zombiedLog,
 };
+
+fn parseLogLevel(level_raw: []const u8) ?std.log.Level {
+    if (std.ascii.eqlIgnoreCase(level_raw, "debug")) return .debug;
+    if (std.ascii.eqlIgnoreCase(level_raw, "info")) return .info;
+    if (std.ascii.eqlIgnoreCase(level_raw, "warn") or std.ascii.eqlIgnoreCase(level_raw, "warning")) return .warn;
+    if (std.ascii.eqlIgnoreCase(level_raw, "err") or std.ascii.eqlIgnoreCase(level_raw, "error")) return .err;
+    return null;
+}
+
+fn initRuntimeLogLevel(alloc: std.mem.Allocator) void {
+    const level_raw = std.process.getEnvVarOwned(alloc, "LOG_LEVEL") catch return;
+    defer alloc.free(level_raw);
+
+    if (parseLogLevel(level_raw)) |lvl| {
+        runtime_log_level.store(@intFromEnum(lvl), .release);
+    }
+}
+
+fn shouldLog(level: std.log.Level) bool {
+    const configured: std.log.Level = @enumFromInt(runtime_log_level.load(.acquire));
+    return @intFromEnum(level) <= @intFromEnum(configured);
+}
 
 fn zombiedLog(
     comptime level: std.log.Level,
@@ -30,6 +53,8 @@ fn zombiedLog(
     comptime fmt: []const u8,
     args: anytype,
 ) void {
+    if (!shouldLog(level)) return;
+
     const prefix = comptime switch (level) {
         .err => "ERR",
         .warn => "WRN",
@@ -87,6 +112,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
+    initRuntimeLogLevel(alloc);
 
     if (builtin.mode == .Debug) {
         log.warn("debug build — not for production use", .{});
@@ -98,6 +124,14 @@ pub fn main() !void {
         .doctor => try cmdDoctor(alloc),
         .run => try cmdRun(alloc),
     }
+}
+
+test "parseLogLevel accepts common values" {
+    try std.testing.expectEqual(@as(?std.log.Level, .debug), parseLogLevel("DEBUG"));
+    try std.testing.expectEqual(@as(?std.log.Level, .info), parseLogLevel("info"));
+    try std.testing.expectEqual(@as(?std.log.Level, .warn), parseLogLevel("warning"));
+    try std.testing.expectEqual(@as(?std.log.Level, .err), parseLogLevel("error"));
+    try std.testing.expectEqual(@as(?std.log.Level, null), parseLogLevel("trace"));
 }
 
 fn runCanonicalMigrations(pool: *db.Pool) !void {
