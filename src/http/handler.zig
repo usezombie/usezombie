@@ -73,6 +73,7 @@ const AuthPrincipal = struct {
 const AuthError = error{
     Unauthorized,
     TokenExpired,
+    AuthServiceUnavailable,
 };
 
 /// Validate Authorization header: "Bearer <api_key>".
@@ -95,10 +96,7 @@ fn authenticateApiKey(r: zap.Request, ctx: *Context) bool {
 fn authenticate(alloc: std.mem.Allocator, r: zap.Request, ctx: *Context) AuthError!AuthPrincipal {
     if (ctx.clerk) |verifier| {
         const auth = r.getHeader("authorization") orelse return AuthError.Unauthorized;
-        const principal = verifier.verifyAuthorization(alloc, auth) catch |err| switch (err) {
-            clerk.VerifyError.TokenExpired => return AuthError.TokenExpired,
-            else => return AuthError.Unauthorized,
-        };
+        const principal = verifier.verifyAuthorization(alloc, auth) catch |err| return mapClerkVerifyError(err);
         return .{ .mode = .clerk_jwt, .tenant_id = principal.tenant_id };
     }
 
@@ -110,7 +108,16 @@ fn writeAuthError(r: zap.Request, req_id: []const u8, err: AuthError) void {
     switch (err) {
         AuthError.TokenExpired => errorResponse(r, .unauthorized, "token_expired", "token expired", req_id),
         AuthError.Unauthorized => errorResponse(r, .unauthorized, "UNAUTHORIZED", "Invalid or missing token", req_id),
+        AuthError.AuthServiceUnavailable => errorResponse(r, .service_unavailable, "AUTH_UNAVAILABLE", "Authentication service unavailable", req_id),
     }
+}
+
+fn mapClerkVerifyError(err: clerk.VerifyError) AuthError {
+    return switch (err) {
+        .TokenExpired => AuthError.TokenExpired,
+        .JwksFetchFailed, .JwksParseFailed => AuthError.AuthServiceUnavailable,
+        else => AuthError.Unauthorized,
+    };
 }
 
 fn authorizeWorkspace(conn: *pg.Conn, principal: AuthPrincipal, workspace_id: []const u8) bool {
@@ -959,4 +966,17 @@ pub fn handleGitHubCallback(ctx: *Context, r: zap.Request) void {
         .installation_id = installation_id,
         .request_id = req_id,
     });
+}
+
+test "mapClerkVerifyError maps expired token to token_expired response path" {
+    try std.testing.expectEqual(AuthError.TokenExpired, mapClerkVerifyError(clerk.VerifyError.TokenExpired));
+}
+
+test "mapClerkVerifyError maps jwks failures to auth unavailable" {
+    try std.testing.expectEqual(AuthError.AuthServiceUnavailable, mapClerkVerifyError(clerk.VerifyError.JwksFetchFailed));
+    try std.testing.expectEqual(AuthError.AuthServiceUnavailable, mapClerkVerifyError(clerk.VerifyError.JwksParseFailed));
+}
+
+test "mapClerkVerifyError maps signature failures to unauthorized" {
+    try std.testing.expectEqual(AuthError.Unauthorized, mapClerkVerifyError(clerk.VerifyError.SignatureInvalid));
 }

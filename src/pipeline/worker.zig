@@ -396,10 +396,17 @@ const TokenRetryCtx = struct {
     cache: *github_auth.TokenCache,
     alloc: std.mem.Allocator,
     installation_id: []const u8,
+    last_error_detail: ?[]u8 = null,
 };
 
-fn opGetInstallationToken(ctx: TokenRetryCtx, _: u32) ![]u8 {
-    return ctx.cache.getInstallationToken(ctx.alloc, ctx.installation_id);
+fn opGetInstallationToken(ctx: *TokenRetryCtx, _: u32) ![]u8 {
+    if (ctx.last_error_detail) |d| ctx.alloc.free(d);
+    ctx.last_error_detail = null;
+    return ctx.cache.getInstallationTokenWithDetail(ctx.alloc, ctx.installation_id, &ctx.last_error_detail);
+}
+
+fn tokenDetail(ctx: *TokenRetryCtx, _: anyerror) ?[]const u8 {
+    return ctx.last_error_detail;
 }
 
 const PushRetryCtx = struct {
@@ -411,6 +418,28 @@ const PushRetryCtx = struct {
 
 fn opPushBranch(ctx: PushRetryCtx, _: u32) !void {
     return git.push(ctx.alloc, ctx.wt_path, ctx.branch, ctx.github_token);
+}
+
+const BareCloneRetryCtx = struct {
+    alloc: std.mem.Allocator,
+    cache_root: []const u8,
+    workspace_id: []const u8,
+    repo_url: []const u8,
+};
+
+fn opEnsureBareClone(ctx: BareCloneRetryCtx, _: u32) ![]const u8 {
+    return git.ensureBareClone(ctx.alloc, ctx.cache_root, ctx.workspace_id, ctx.repo_url);
+}
+
+const WorktreeRetryCtx = struct {
+    alloc: std.mem.Allocator,
+    bare_path: []const u8,
+    run_id: []const u8,
+    base_branch: []const u8,
+};
+
+fn opCreateWorktree(ctx: WorktreeRetryCtx, _: u32) !git.WorktreeHandle {
+    return git.createWorktree(ctx.alloc, ctx.bare_path, ctx.run_id, ctx.base_branch);
 }
 
 const ScoutRetryCtx = struct {
@@ -490,6 +519,18 @@ fn opRunStage(ctx: StageRetryCtx, _: u32) !agents.AgentResult {
     return agents.runByRole(ctx.alloc, ctx.binding, ctx.input);
 }
 
+const CommitRetryCtx = struct {
+    alloc: std.mem.Allocator,
+    wt_path: []const u8,
+    rel_path: []const u8,
+    content: []const u8,
+    msg: []const u8,
+};
+
+fn opCommitArtifact(ctx: CommitRetryCtx, _: u32) !void {
+    return git.commitFile(ctx.alloc, ctx.wt_path, ctx.rel_path, ctx.content, ctx.msg, "UseZombie Bot", "bot@usezombie.dev");
+}
+
 fn executeRun(
     alloc: std.mem.Allocator,
     cfg: WorkerConfig,
@@ -511,14 +552,29 @@ fn executeRun(
     if (!worker_state.running.load(.acquire)) return WorkerError.ShutdownRequested;
 
     // ── Set up git worktree ───────────────────────────────────────────────
-    const bare_path = try git.ensureBareClone(
-        run_alloc,
-        cfg.cache_root,
-        ctx.workspace_id,
-        ctx.repo_url,
-    );
+    const bare_path = try reliable.call([]const u8, BareCloneRetryCtx{
+        .alloc = run_alloc,
+        .cache_root = cfg.cache_root,
+        .workspace_id = ctx.workspace_id,
+        .repo_url = ctx.repo_url,
+    }, opEnsureBareClone, .{
+        .max_retries = 2,
+        .base_delay_ms = 500,
+        .max_delay_ms = 5_000,
+        .operation_name = "git_ensure_bare_clone",
+    });
 
-    var wt = try git.createWorktree(run_alloc, bare_path, ctx.run_id, ctx.default_branch);
+    var wt = try reliable.call(git.WorktreeHandle, WorktreeRetryCtx{
+        .alloc = run_alloc,
+        .bare_path = bare_path,
+        .run_id = ctx.run_id,
+        .base_branch = ctx.default_branch,
+    }, opCreateWorktree, .{
+        .max_retries = 2,
+        .base_delay_ms = 500,
+        .max_delay_ms = 5_000,
+        .operation_name = "git_create_worktree",
+    });
     defer {
         git.removeWorktree(run_alloc, bare_path, wt.path);
         wt.deinit();
@@ -729,11 +785,13 @@ fn executeRun(
                     defer run_alloc.free(installation_id);
 
                     try tenant_limiter.acquire(ctx.tenant_id, "github_installation_token", 1.0);
-                    const github_token = try reliable.call([]u8, TokenRetryCtx{
+                    var token_retry_ctx = TokenRetryCtx{
                         .cache = token_cache,
                         .alloc = run_alloc,
                         .installation_id = installation_id,
-                    }, opGetInstallationToken, .{
+                    };
+                    defer if (token_retry_ctx.last_error_detail) |d| run_alloc.free(d);
+                    const github_token = try reliable.callWithDetail([]u8, &token_retry_ctx, opGetInstallationToken, tokenDetail, .{
                         .max_retries = 2,
                         .base_delay_ms = 500,
                         .max_delay_ms = 5_000,
@@ -913,7 +971,18 @@ fn commitArtifact(
     attempt: u32,
 ) !void {
     // Write + commit to git
-    try git.commitFile(alloc, wt.path, rel_path, content, msg, "UseZombie Bot", "bot@usezombie.dev");
+    try reliable.call(void, CommitRetryCtx{
+        .alloc = alloc,
+        .wt_path = wt.path,
+        .rel_path = rel_path,
+        .content = content,
+        .msg = msg,
+    }, opCommitArtifact, .{
+        .max_retries = 1,
+        .base_delay_ms = 300,
+        .max_delay_ms = 2_000,
+        .operation_name = "git_commit_artifact",
+    });
 
     // Register in artifacts table
     const checksum = sha256Hex(content);

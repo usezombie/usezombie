@@ -153,7 +153,16 @@ pub fn classify(err: anyerror, detail: ?[]const u8) Classified {
         };
     }
 
-    if (std.mem.eql(u8, name, "PrAuthFailed")) {
+    if (std.mem.eql(u8, name, "RateLimited")) {
+        return .{
+            .class = .rate_limited,
+            .retryable = true,
+            .retry_after_ms = if (detail) |d| parseRetryAfterMs(d) else null,
+            .reason_code = .RATE_LIMITED,
+        };
+    }
+
+    if (std.mem.eql(u8, name, "PrAuthFailed") or std.mem.eql(u8, name, "AuthFailed")) {
         return .{
             .class = .auth,
             .retryable = false,
@@ -162,7 +171,10 @@ pub fn classify(err: anyerror, detail: ?[]const u8) Classified {
         };
     }
 
-    if (std.mem.eql(u8, name, "PrInvalidRequest")) {
+    if (std.mem.eql(u8, name, "PrInvalidRequest") or
+        std.mem.eql(u8, name, "InvalidRequest") or
+        std.mem.eql(u8, name, "OpenSslFailed"))
+    {
         return .{
             .class = .invalid_request,
             .retryable = false,
@@ -171,7 +183,7 @@ pub fn classify(err: anyerror, detail: ?[]const u8) Classified {
         };
     }
 
-    if (std.mem.eql(u8, name, "PrServerError")) {
+    if (std.mem.eql(u8, name, "PrServerError") or std.mem.eql(u8, name, "ServerError")) {
         return .{
             .class = .server_error,
             .retryable = true,
@@ -182,6 +194,9 @@ pub fn classify(err: anyerror, detail: ?[]const u8) Classified {
 
     if (std.mem.eql(u8, name, "CurlFailed") or
         std.mem.eql(u8, name, "FetchFailed") or
+        std.mem.eql(u8, name, "CloneFailed") or
+        std.mem.eql(u8, name, "WorktreeFailed") or
+        std.mem.eql(u8, name, "CommitFailed") or
         std.mem.eql(u8, name, "PushFailed") or
         std.mem.eql(u8, name, "PrFailed") or
         std.mem.eql(u8, name, "CommandFailed") or
@@ -207,7 +222,7 @@ pub fn classify(err: anyerror, detail: ?[]const u8) Classified {
         };
     }
 
-    if (std.mem.eql(u8, name, "InvalidRequest") or std.mem.eql(u8, name, "InvalidResponse")) {
+    if (std.mem.eql(u8, name, "InvalidResponse")) {
         return .{
             .class = .invalid_request,
             .retryable = false,
@@ -257,4 +272,19 @@ test "classify pr rate limit error with retry-after from detail" {
     try std.testing.expect(c.retryable);
     try std.testing.expectEqual(@as(?u64, 9_000), c.retry_after_ms);
     try std.testing.expectEqual(types.ReasonCode.RATE_LIMITED, c.reason_code);
+}
+
+test "classify github installation token rate-limits with retry-after detail" {
+    const c = classify(error.RateLimited, "HTTP/2 429\nRetry-After: 11\n");
+    try std.testing.expectEqual(ErrorClass.rate_limited, c.class);
+    try std.testing.expect(c.retryable);
+    try std.testing.expectEqual(@as(?u64, 11_000), c.retry_after_ms);
+    try std.testing.expectEqual(types.ReasonCode.RATE_LIMITED, c.reason_code);
+}
+
+test "classify git commit failures as retryable server errors" {
+    const c = classify(error.CommitFailed, null);
+    try std.testing.expectEqual(ErrorClass.server_error, c.class);
+    try std.testing.expect(c.retryable);
+    try std.testing.expectEqual(types.ReasonCode.AGENT_TIMEOUT, c.reason_code);
 }
