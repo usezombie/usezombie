@@ -25,7 +25,7 @@ This workstream contains the must-have reliability and safety guardrails deferre
 - 1.6 DONE D9 Error-context logging consistency across all critical boundaries
 - 1.7 DONE D10 Error classification harmonization (worker + API)
 - 1.8 DONE D11 Secure execution boundary hardening
-- 1.9 PENDING D12 Graceful shutdown and stale runtime cleanup
+- 1.9 DONE D12 Graceful shutdown and stale runtime cleanup
 - 1.10 DONE D13 Exactly-once transactional correctness closure (run creation upsert + idempotent replay path)
 - 1.11 DONE D14 Side-effect idempotency ledger completion (`run_side_effects` + PR side-effect claim/done tracking)
 - 1.12 DONE D15 Cooperative cancellation for long-running calls
@@ -52,7 +52,7 @@ This workstream contains the must-have reliability and safety guardrails deferre
 **Dimensions:**
 - 2.2.1 DONE Close execution-boundary gaps (path/ref/env validation across worker + git + github auth boundaries)
 - 2.2.2 DONE Complete exactly-once + idempotency protections for all side effects (PR + push side-effect claim/recovery/done ledger coverage)
-- 2.2.3 IN_PROGRESS Enforce shutdown, cancellation, and thread/allocator correctness invariants (retry backoff now cooperative; thread/allocator invariants pending)
+- 2.2.3 IN_PROGRESS Enforce shutdown, cancellation, and thread/allocator correctness invariants (shutdown cleanup + cooperative waits complete; thread/allocator invariants pending)
 
 ### 2.3 Verification Track
 
