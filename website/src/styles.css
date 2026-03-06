@@ -256,6 +256,42 @@ a {
   border-color: var(--z-glow-green);
 }
 
+/* ── z-terminal-wrap + copy button ── */
+.z-terminal-wrap {
+  position: relative;
+}
+
+.z-terminal--copyable {
+  padding-right: 5.5rem; /* room for copy button */
+}
+
+.z-copy-btn {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  padding: 0.25rem 0.7rem;
+  border-radius: var(--z-radius-sm);
+  border: 1px solid var(--z-border);
+  background: var(--z-surface-1);
+  color: var(--z-text-muted);
+  font-family: var(--z-font-mono);
+  font-size: var(--z-text-xs);
+  cursor: pointer;
+  transition: color var(--z-ease-fast), border-color var(--z-ease-fast);
+  white-space: nowrap;
+}
+
+.z-copy-btn:hover {
+  color: var(--z-text-primary);
+  border-color: var(--z-orange);
+}
+
+/* Confirm state */
+.z-copy-btn[aria-label="Copied!"] {
+  color: var(--z-green);
+  border-color: var(--z-green);
+}
+
 /* ── z-grid ── */
 .z-grid {
   display: grid;
