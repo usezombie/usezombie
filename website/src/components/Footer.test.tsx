@@ -28,10 +28,10 @@ describe("Footer", () => {
     expect(screen.getByRole("link", { name: "Features" })).toHaveAttribute("href", "/");
     expect(screen.getByRole("link", { name: "Pricing" })).toHaveAttribute("href", "/pricing");
     expect(screen.getByRole("link", { name: "Docs" })).toHaveAttribute("href", "https://docs.usezombie.com");
-    expect(screen.getByRole("link", { name: "Agent Surface" })).toHaveAttribute("href", "/agents");
+    expect(screen.getByRole("link", { name: "Agents" })).toHaveAttribute("href", "/agents");
   });
 
-  it("renders Community column with external links", () => {
+  it("renders Community column with canonical Discord URL", () => {
     renderFooter();
     expect(screen.getByText("Community")).toBeInTheDocument();
     const github = screen.getByRole("link", { name: "GitHub" });
@@ -40,10 +40,12 @@ describe("Footer", () => {
     expect(github).toHaveAttribute("rel", "noopener noreferrer");
 
     const discord = screen.getByRole("link", { name: "Discord" });
+    expect(discord).toHaveAttribute("href", "https://discord.gg/H9hH2nqQjh");
     expect(discord).toHaveAttribute("target", "_blank");
+    expect(discord).toHaveAttribute("rel", "noopener noreferrer");
   });
 
-  it("renders Legal column", () => {
+  it("renders Legal column with router links", () => {
     renderFooter();
     expect(screen.getByText("Legal")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Privacy" })).toHaveAttribute("href", "/privacy");

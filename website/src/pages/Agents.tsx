@@ -1,3 +1,5 @@
+import { InstallBlock } from "../design-system";
+
 const jsonLd = {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
@@ -51,9 +53,20 @@ export default function Agents() {
 
       <p className="eyebrow">agent surface</p>
       <h1>This page is for autonomous agents.</h1>
-      <p className="lead" style={{ color: "var(--text-muted)" }}>
+      <p className="lead" style={{ color: "var(--z-text-muted)" }}>
         Use <code>/openapi.json</code> as canonical contract. Docs are secondary.
       </p>
+
+      {/* Install Zombiectl */}
+      <InstallBlock
+        title="Install Zombiectl"
+        command="curl -sSL https://usezombie.sh/install | bash"
+        actions={[
+          { label: "Install Zombiectl", to: "https://docs.usezombie.com/quickstart", variant: "primary" },
+          { label: "Read the docs", to: "https://docs.usezombie.com", variant: "ghost" },
+          { label: "Setup your personal dashboard", to: "https://app.usezombie.com", variant: "double-border" },
+        ]}
+      />
 
       {/* Bootstrap */}
       <div>
@@ -116,7 +129,7 @@ npx zombiectl login && zombiectl workspace add https://github.com/your-org/your-
       {/* Webhook example */}
       <div>
         <h2 style={{ marginBottom: "0.75rem" }}>Webhook Callback Example</h2>
-        <p style={{ color: "var(--text-muted)", marginBottom: "0.75rem" }}>
+        <p style={{ color: "var(--z-text-muted)", marginBottom: "0.75rem" }}>
           Register a webhook URL on your workspace. UseZombie posts event payloads on run completion:
         </p>
         <pre className="terminal" aria-label="Webhook payload example">

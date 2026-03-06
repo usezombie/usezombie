@@ -109,4 +109,7 @@ test {
     _ = @import("db/pool.zig");
     _ = @import("harness/control_plane.zig");
     _ = @import("cli/commands.zig");
+    _ = @import("auth/sessions.zig");
+    _ = @import("auth/claims.zig");
+    _ = @import("auth/jwks.zig");
 }

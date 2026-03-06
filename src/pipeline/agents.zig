@@ -58,34 +58,34 @@ pub const PromptFiles = struct {
     warden: []const u8,
 };
 
-pub const AdapterKind = enum {
+pub const SkillKind = enum {
     echo,
     scout,
     warden,
     custom,
 };
 
-pub const CustomAdapterFn = *const fn (std.mem.Allocator, RoleBinding, RoleInput) anyerror!AgentResult;
+pub const CustomSkillFn = *const fn (std.mem.Allocator, RoleBinding, RoleInput) anyerror!AgentResult;
 
-pub const AdapterBinding = struct {
-    adapter_id: []const u8,
+pub const SkillBinding = struct {
+    skill_id: []const u8,
     actor: types.Actor,
-    kind: AdapterKind,
-    custom_runner: ?CustomAdapterFn = null,
+    kind: SkillKind,
+    custom_runner: ?CustomSkillFn = null,
 };
 
 pub const RoleBinding = struct {
     role_id: []const u8,
-    adapter_id: []const u8,
+    skill_id: []const u8,
     actor: types.Actor,
-    kind: AdapterKind,
-    custom_runner: ?CustomAdapterFn = null,
+    kind: SkillKind,
+    custom_runner: ?CustomSkillFn = null,
 };
 
-const BUILTIN_ADAPTERS = [_]AdapterBinding{
-    .{ .adapter_id = "echo", .actor = .echo, .kind = .echo },
-    .{ .adapter_id = "scout", .actor = .scout, .kind = .scout },
-    .{ .adapter_id = "warden", .actor = .warden, .kind = .warden },
+const BUILTIN_SKILLS = [_]SkillBinding{
+    .{ .skill_id = "echo", .actor = .echo, .kind = .echo },
+    .{ .skill_id = "scout", .actor = .scout, .kind = .scout },
+    .{ .skill_id = "warden", .actor = .warden, .kind = .warden },
 };
 
 pub const RoleInput = struct {
@@ -108,84 +108,84 @@ pub fn lookupRole(role_id: []const u8) ?RoleBinding {
     return resolveRole(role_id, role_id);
 }
 
-pub fn resolveRole(role_id: []const u8, adapter_id: []const u8) ?RoleBinding {
-    for (BUILTIN_ADAPTERS) |adapter| {
-        if (!std.ascii.eqlIgnoreCase(adapter_id, adapter.adapter_id)) continue;
+pub fn resolveRole(role_id: []const u8, skill_id: []const u8) ?RoleBinding {
+    for (BUILTIN_SKILLS) |skill| {
+        if (!std.ascii.eqlIgnoreCase(skill_id, skill.skill_id)) continue;
         return .{
             .role_id = role_id,
-            .adapter_id = adapter.adapter_id,
-            .actor = adapter.actor,
-            .kind = adapter.kind,
+            .skill_id = skill.skill_id,
+            .actor = skill.actor,
+            .kind = skill.kind,
             .custom_runner = null,
         };
     }
     return null;
 }
 
-pub const AdapterRegistryError = error{
-    InvalidAdapterId,
-    DuplicateAdapterId,
+pub const SkillRegistryError = error{
+    InvalidSkillId,
+    DuplicateSkillId,
 };
 
-pub const AdapterRegistry = struct {
+pub const SkillRegistry = struct {
     alloc: std.mem.Allocator,
-    custom_adapters: std.ArrayList(AdapterBinding),
+    custom_skills: std.ArrayList(SkillBinding),
 
-    pub fn init(alloc: std.mem.Allocator) AdapterRegistry {
+    pub fn init(alloc: std.mem.Allocator) SkillRegistry {
         return .{
             .alloc = alloc,
-            .custom_adapters = std.ArrayList(AdapterBinding).empty,
+            .custom_skills = std.ArrayList(SkillBinding).empty,
         };
     }
 
-    pub fn deinit(self: *AdapterRegistry) void {
-        for (self.custom_adapters.items) |adapter| {
-            self.alloc.free(adapter.adapter_id);
+    pub fn deinit(self: *SkillRegistry) void {
+        for (self.custom_skills.items) |skill| {
+            self.alloc.free(skill.skill_id);
         }
-        self.custom_adapters.deinit(self.alloc);
+        self.custom_skills.deinit(self.alloc);
     }
 
-    pub fn registerCustom(
-        self: *AdapterRegistry,
-        adapter_id: []const u8,
+    pub fn registerCustomSkill(
+        self: *SkillRegistry,
+        skill_id: []const u8,
         actor: types.Actor,
-        runner: CustomAdapterFn,
-    ) AdapterRegistryError!void {
-        if (adapter_id.len == 0) return AdapterRegistryError.InvalidAdapterId;
-        if (resolveBuiltInAdapter(adapter_id) != null) return AdapterRegistryError.DuplicateAdapterId;
-        if (self.resolveAdapter(adapter_id) != null) return AdapterRegistryError.DuplicateAdapterId;
+        runner: CustomSkillFn,
+    ) SkillRegistryError!void {
+        if (skill_id.len == 0) return SkillRegistryError.InvalidSkillId;
+        if (resolveBuiltInSkill(skill_id) != null) return SkillRegistryError.DuplicateSkillId;
+        if (self.resolveSkill(skill_id) != null) return SkillRegistryError.DuplicateSkillId;
 
-        try self.custom_adapters.append(self.alloc, .{
-            .adapter_id = try self.alloc.dupe(u8, adapter_id),
+        try self.custom_skills.append(self.alloc, .{
+            .skill_id = try self.alloc.dupe(u8, skill_id),
             .actor = actor,
             .kind = .custom,
             .custom_runner = runner,
         });
     }
 
-    pub fn resolveAdapter(self: *const AdapterRegistry, adapter_id: []const u8) ?AdapterBinding {
-        for (self.custom_adapters.items) |adapter| {
-            if (std.ascii.eqlIgnoreCase(adapter_id, adapter.adapter_id)) return adapter;
+    pub fn resolveSkill(self: *const SkillRegistry, skill_id: []const u8) ?SkillBinding {
+        for (self.custom_skills.items) |skill| {
+            if (std.ascii.eqlIgnoreCase(skill_id, skill.skill_id)) return skill;
         }
         return null;
     }
 };
 
-pub fn resolveRoleWithRegistry(registry: *const AdapterRegistry, role_id: []const u8, adapter_id: []const u8) ?RoleBinding {
-    if (resolveRole(role_id, adapter_id)) |built_in| return built_in;
-    const adapter = registry.resolveAdapter(adapter_id) orelse return null;
+pub fn resolveRoleWithRegistry(registry: *const SkillRegistry, role_id: []const u8, skill_id: []const u8) ?RoleBinding {
+    if (resolveRole(role_id, skill_id)) |built_in| return built_in;
+    const skill = registry.resolveSkill(skill_id) orelse return null;
     return .{
         .role_id = role_id,
-        .adapter_id = adapter.adapter_id,
-        .actor = adapter.actor,
-        .kind = adapter.kind,
-        .custom_runner = adapter.custom_runner,
+        .skill_id = skill.skill_id,
+        .actor = skill.actor,
+        .kind = skill.kind,
+        .custom_runner = skill.custom_runner,
     };
 }
 
-fn resolveBuiltInAdapter(adapter_id: []const u8) ?AdapterBinding {
-    for (BUILTIN_ADAPTERS) |adapter| {
-        if (std.ascii.eqlIgnoreCase(adapter_id, adapter.adapter_id)) return adapter;
+fn resolveBuiltInSkill(skill_id: []const u8) ?SkillBinding {
+    for (BUILTIN_SKILLS) |skill| {
+        if (std.ascii.eqlIgnoreCase(skill_id, skill.skill_id)) return skill;
     }
     return null;
 }
@@ -621,16 +621,16 @@ test "parseObserverBackend supports known values" {
 test "lookupRole resolves built-in role ids" {
     const echo = lookupRole("echo") orelse return error.TestExpectedRole;
     try std.testing.expectEqual(types.Actor.echo, echo.actor);
-    try std.testing.expectEqual(AdapterKind.echo, echo.kind);
+    try std.testing.expectEqual(SkillKind.echo, echo.kind);
 
     const scout = lookupRole("SCOUT") orelse return error.TestExpectedRole;
     try std.testing.expectEqual(types.Actor.scout, scout.actor);
-    try std.testing.expectEqual(AdapterKind.scout, scout.kind);
+    try std.testing.expectEqual(SkillKind.scout, scout.kind);
 
     try std.testing.expectEqual(@as(?RoleBinding, null), lookupRole("security"));
 }
 
-fn testCustomAdapter(
+fn testCustomSkill(
     alloc: std.mem.Allocator,
     binding: RoleBinding,
     input: RoleInput,
@@ -645,13 +645,13 @@ fn testCustomAdapter(
     };
 }
 
-test "custom adapter registration and dispatch works for non built-in role" {
-    var registry = AdapterRegistry.init(std.testing.allocator);
+test "custom skill registration and dispatch works for non built-in role" {
+    var registry = SkillRegistry.init(std.testing.allocator);
     defer registry.deinit();
 
-    try registry.registerCustom("security-reviewer", .orchestrator, testCustomAdapter);
+    try registry.registerCustomSkill("security-reviewer", .orchestrator, testCustomSkill);
     const binding = resolveRoleWithRegistry(&registry, "security", "security-reviewer") orelse return error.TestExpectedRole;
-    try std.testing.expectEqual(AdapterKind.custom, binding.kind);
+    try std.testing.expectEqual(SkillKind.custom, binding.kind);
     try std.testing.expectEqual(types.Actor.orchestrator, binding.actor);
 
     const fake_prompts = PromptFiles{

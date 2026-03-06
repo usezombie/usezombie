@@ -6,6 +6,7 @@ const events_bus = @import("../events/bus.zig");
 const clerk_auth = @import("../auth/clerk.zig");
 const http_server = @import("../http/server.zig");
 const http_handler = @import("../http/handler.zig");
+const auth_sessions = @import("../auth/sessions.zig");
 const queue_redis = @import("../queue/redis.zig");
 const worker = @import("../pipeline/worker.zig");
 const git_ops = @import("../git/ops.zig");
@@ -206,6 +207,8 @@ pub fn run(alloc: std.mem.Allocator) !void {
     }
 
     var wstate = worker.WorkerState.init();
+    var sessions = auth_sessions.SessionStore.init(alloc);
+    defer sessions.deinit();
 
     var ctx = http_handler.Context{
         .pool = api_pool,
@@ -213,6 +216,8 @@ pub fn run(alloc: std.mem.Allocator) !void {
         .alloc = alloc,
         .api_keys = serve_cfg.api_keys,
         .clerk = null,
+        .auth_sessions = &sessions,
+        .app_url = serve_cfg.app_url,
         .worker_state = &wstate,
         .api_in_flight_requests = std.atomic.Value(u32).init(0),
         .api_max_in_flight_requests = serve_cfg.api_max_in_flight_requests,

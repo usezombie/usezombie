@@ -10,10 +10,9 @@ test.describe("Pricing page", () => {
   });
 
   test("renders all 4 pricing tiers", async ({ page }) => {
-    // Use exact + level to avoid matching footer headings like "Product"
-    await expect(page.getByRole("heading", { name: "Free", exact: true, level: 2 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Open Source", exact: true, level: 2 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Hobby", exact: true, level: 2 })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Pro", exact: true, level: 2 })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Team", exact: true, level: 2 })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Enterprise", exact: true, level: 2 })).toBeVisible();
   });
 
@@ -23,6 +22,14 @@ test.describe("Pricing page", () => {
     await expect(proCard).toContainText("Pro");
   });
 
+  test("Hobby tier lists default agents", async ({ page }) => {
+    await expect(page.getByText(/Scout, Echo, Warden/i)).toBeVisible();
+  });
+
+  test("Open Source tier has View on GitHub CTA", async ({ page }) => {
+    await expect(page.getByRole("link", { name: /view on github/i })).toBeVisible();
+  });
+
   test("renders workspace activation fee note", async ({ page }) => {
     await expect(page.getByText(/one-time workspace activation/i)).toBeVisible();
   });
@@ -30,10 +37,7 @@ test.describe("Pricing page", () => {
   test("FAQ accordion: first item opens on click", async ({ page }) => {
     const trigger = page.getByTestId("faq-trigger-0");
     await expect(trigger).toBeVisible();
-
-    // Answer hidden initially
     await expect(page.getByTestId("faq-answer-0")).not.toBeVisible();
-
     await trigger.click();
     await expect(page.getByTestId("faq-answer-0")).toBeVisible();
   });
@@ -42,7 +46,6 @@ test.describe("Pricing page", () => {
     const trigger = page.getByTestId("faq-trigger-0");
     await trigger.click();
     await expect(page.getByTestId("faq-answer-0")).toBeVisible();
-
     await trigger.click();
     await expect(page.getByTestId("faq-answer-0")).not.toBeVisible();
   });
@@ -50,7 +53,6 @@ test.describe("Pricing page", () => {
   test("FAQ accordion: only one item open at a time", async ({ page }) => {
     await page.getByTestId("faq-trigger-0").click();
     await expect(page.getByTestId("faq-answer-0")).toBeVisible();
-
     await page.getByTestId("faq-trigger-1").click();
     await expect(page.getByTestId("faq-answer-1")).toBeVisible();
     await expect(page.getByTestId("faq-answer-0")).not.toBeVisible();

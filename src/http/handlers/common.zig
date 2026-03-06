@@ -2,6 +2,7 @@ const std = @import("std");
 const zap = @import("zap");
 const pg = @import("pg");
 const clerk = @import("../../auth/clerk.zig");
+const auth_sessions = @import("../../auth/sessions.zig");
 const queue_redis = @import("../../queue/redis.zig");
 const worker = @import("../../pipeline/worker.zig");
 const metrics = @import("../../observability/metrics.zig");
@@ -14,6 +15,8 @@ pub const Context = struct {
     alloc: std.mem.Allocator,
     api_keys: []const u8,
     clerk: ?*clerk.Verifier,
+    auth_sessions: *auth_sessions.SessionStore,
+    app_url: []const u8,
     worker_state: *const worker.WorkerState,
     api_in_flight_requests: std.atomic.Value(u32),
     api_max_in_flight_requests: u32,

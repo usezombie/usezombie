@@ -32,24 +32,132 @@ Railway selected for:
 - Fly.io: Better for global edge deployment (35+ regions)
 - Render: Free tier available but unsuitable for always-on control plane
 
-### DNS Configuration
-
-| Record | Type | Target |
-|--------|------|--------|
-| `api.usezombie.com` | CNAME | Railway (zombied API) |
-
 ## 1. Prerequisites
 
-- `zig` 0.15.2+, `git`, `curl`, `jq`, `gh` installed
-- Access to Postgres 18.2 and Redis 7
-- Tailscale tailnet configured for control-plane and worker hosts
+- `zig` 0.15.2+, `git`, `curl`, `jq`, `gh`
+- `pass-cli` (Proton Pass CLI) — for vault-based secret injection
+- Docker + Docker Compose — for local Postgres and Redis
+- `bun` or `node` 22+ — for `zombiectl` CLI and website
+- Tailscale tailnet configured for dev/prod control-plane and worker hosts
 - GitHub App credentials and installation flow configured
 - Clerk application configured (device flow for CLI, JWT verification for API)
 - Cloudflare DNS for `usezombie.com`, `usezombie.sh`, `api.usezombie.com`, `docs.usezombie.com`
 
-## 2. One-Time Setup
+## 2. Environment Setup
 
-### 2.1 Network policy baseline (Tailscale)
+### 2.1 Local development topology
+
+All three client surfaces (CLI, web, mobile) connect to `zombied` running on the developer's machine. Postgres and Redis run in Docker. External services use their **DEV instances**.
+
+```mermaid
+flowchart TB
+    subgraph clients["Client Surfaces"]
+        CLI["zombiectl CLI"]
+        WEB["app.usezombie.com"]
+        MOB["Mobile Apps"]
+    end
+
+    subgraph local["Your Machine"]
+        API["zombied API :3000"]
+        WKR["zombied worker :3100"]
+        subgraph docker["Docker Compose"]
+            PG["Postgres :5432"]
+            RD["Redis :6379"]
+        end
+    end
+
+    subgraph ext["External Services — DEV instances"]
+        CK["Clerk DEV"]
+        GH["GitHub App DEV"]
+        PH["PostHog DEV"]
+        RS["Resend sandbox"]
+        DC["Discord dev webhook"]
+        SL["Slack dev webhook"]
+    end
+
+    CLI -->|"device auth"| CK
+    WEB -->|"browser auth"| CK
+    MOB -->|"PKCE auth"| CK
+
+    CLI --> API
+    WEB --> API
+    MOB --> API
+
+    API --> PG
+    API --> RD
+    WKR --> PG
+    WKR --> RD
+    WKR -->|"installation tokens"| GH
+    API -->|"events"| PH
+    API -->|"email"| RS
+    API -->|"notify"| DC
+    API -->|"notify"| SL
+```
+
+**Key principle:** LOCAL and DEV share the same external service instances (Clerk DEV, GitHub App DEV, PostHog DEV project, notification DEV webhooks). The only difference is infrastructure — local runs Postgres/Redis in Docker, DEV/PROD use managed services.
+
+### 2.2 Secrets management (`pass-cli inject`)
+
+Secrets are stored in three Proton Pass vaults and injected into `.env` via `pass-cli inject`. No scripts needed — the `.env.{local,dev,prod}.tpl` templates ARE the manifest.
+
+| Vault | Purpose |
+|-------|---------|
+| `ZOMBIE_LOCAL` | DEV instance credentials for local development |
+| `ZOMBIE_DEV` | DEV infra (managed DB, Upstash Redis) + DEV services |
+| `ZOMBIE_PROD` | Production everything |
+
+```bash
+# Generate .env from ZOMBIE_LOCAL vault (default)
+make env
+
+# Generate from ZOMBIE_DEV vault
+ENV=dev make env
+
+# Generate from ZOMBIE_PROD vault
+ENV=prod make env
+```
+
+This runs `pass-cli inject -i .env.{ENV}.tpl -o .env -f`, resolving all `{{ pass://ZOMBIE_*/... }}` references. Generated `.env` is gitignored and `chmod 600`.
+
+#### Vault items per environment
+
+| Item | LOCAL | DEV | PROD | Purpose |
+|------|:-----:|:---:|:----:|---------|
+| `CLERK_PUBLISHABLE_KEY` | ✅ | ✅ | ✅ | Auth (all clients) |
+| `CLERK_SECRET_KEY` | ✅ | ✅ | ✅ | API JWT verification |
+| `CLERK_WEBHOOK_SECRET` | ✅ | ✅ | ✅ | Webhook validation |
+| `CLERK_M2M_ISSUER` | ✅ | ✅ | ✅ | Agent/CI auth |
+| `CLERK_M2M_AUDIENCE` | ✅ | ✅ | ✅ | Agent/CI auth |
+| `GITHUB_APP_ID` | ✅ | ✅ | ✅ | GitHub App |
+| `GITHUB_APP_PRIVATE_KEY` | ✅ | ✅ | ✅ | GitHub App |
+| `GITHUB_CLIENT_ID` | ✅ | ✅ | ✅ | OAuth callback |
+| `GITHUB_CLIENT_SECRET` | ✅ | ✅ | ✅ | OAuth callback |
+| `POSTHOG_KEY` | ✅ | ✅ | ✅ | Product analytics |
+| `RESEND_API_KEY` | ✅ | ✅ | ✅ | Email notifications |
+| `DISCORD_WEBHOOK_URL` | ✅ | ✅ | ✅ | Notifications |
+| `SLACK_WEBHOOK_URL` | ✅ | ✅ | ✅ | Notifications |
+| `DATABASE_URL` | — | ✅ | ✅ | Managed DB (local uses docker) |
+| `DATABASE_URL_API` | — | ✅ | ✅ | Managed DB |
+| `DATABASE_URL_WORKER` | — | ✅ | ✅ | Managed DB |
+| `DATABASE_URL_CALLBACK` | — | ✅ | ✅ | Managed DB |
+| `REDIS_URL` | — | ✅ | ✅ | Upstash Redis |
+| `REDIS_URL_API` | — | ✅ | ✅ | Upstash Redis |
+| `REDIS_URL_WORKER` | — | ✅ | ✅ | Upstash Redis |
+| `ENCRYPTION_MASTER_KEY` | — | ✅ | ✅ | Runtime encryption (local uses hardcoded dev key) |
+| `CHECKLY_API_KEY` | — | — | ✅ | Monitoring |
+| `CHECKLY_ACCOUNT_ID` | — | — | ✅ | Monitoring |
+| `CLOUDFLARE_API_TOKEN` | — | — | ✅ | DNS management |
+| `MINTLIFY_API_KEY` | — | — | ✅ | Docs deployment |
+| `MINTLIFY_PROJECT_ID` | — | — | ✅ | Docs deployment |
+
+LOCAL uses hardcoded defaults for DB (`postgres://...@localhost`), Redis (`redis://localhost`), and encryption key (dev placeholder). These are baked into `.env.local.tpl`.
+
+Vault ownership and scope:
+- Runtime vault is `vault.secrets` inside UseZombie Postgres (created by migrations, maintained by UseZombie).
+- Proton Pass stores operator environment secrets; it is not the runtime `vault.secrets` data plane.
+- Current v1 callback implementation runs inside API process. If `/v1/github/callback` writes `github_app_installation_id`, the API DB credential must have vault write access for this path (or callback must be split to a dedicated `callback_accessor` process).
+
+### 2.3 Network policy baseline (Tailscale)
 
 1. Join API and worker nodes to the same Tailscale tailnet.
 2. Configure Tailscale ACLs:
@@ -59,21 +167,7 @@ Railway selected for:
    - External → Postgres, Redis, Worker: DENIED
 3. For managed Postgres/Redis: set IP allowlists to Tailscale exit node IPs.
 
-### 2.2 Control-plane identities and secrets
-
-1. Configure GitHub App (`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, callback URL `https://api.usezombie.com/v1/github/callback`).
-2. Configure Clerk application (device flow for CLI, secret key for API JWT verification).
-3. Configure runtime encryption key (`ENCRYPTION_MASTER_KEY` — 64 hex chars).
-4. Configure separate database credentials for API (`api_accessor`) and worker (`worker_accessor`) roles.
-5. Configure separate Redis credentials for API (`api_user`) and worker (`worker_user`).
-6. Store all secrets in environment-specific vault entries (Proton Pass: `CLW_{LOCAL,DEV,PROD}`).
-
-Vault ownership and scope:
-- Runtime vault is `vault.secrets` inside UseZombie Postgres (created by migrations, maintained by UseZombie).
-- Proton Pass stores operator environment secrets; it is not the runtime `vault.secrets` data plane.
-- Current v1 callback implementation runs inside API process. If `/v1/github/callback` writes `github_app_installation_id`, the API DB credential must have vault write access for this path (or callback must be split to a dedicated `callback_accessor` process).
-
-### 2.3 Redis setup
+### 2.4 Redis setup
 
 1. Create Redis stream and consumer group:
    ```
@@ -86,7 +180,7 @@ Vault ownership and scope:
    ACL SETUSER default off
    ```
 
-### 2.4 DNS (Cloudflare)
+### 2.5 DNS (Cloudflare)
 
 | Record | Type | Target |
 |---|---|---|
@@ -96,11 +190,75 @@ Vault ownership and scope:
 | `docs.usezombie.com` | CNAME | Mintlify |
 | `app.usezombie.com` | — | v2 (not configured for v1) |
 
+### 2.6 Local Redis TLS (for `rediss://`)
+
+This project supports Redis over TLS for Upstash (`rediss://`) and local development.
+
+#### Generate local CA + server cert
+
+```bash
+mkdir -p docker/redis/tls
+
+# 1. Local CA
+openssl req -x509 -nodes -newkey rsa:2048 \
+  -keyout docker/redis/tls/ca.key \
+  -out docker/redis/tls/ca.crt \
+  -days 3650 \
+  -subj "/CN=usezombie-local-ca"
+
+# 2. Server key + CSR (SAN includes redis + localhost)
+openssl req -nodes -newkey rsa:2048 \
+  -keyout docker/redis/tls/server.key \
+  -out docker/redis/tls/server.csr \
+  -subj "/CN=redis" \
+  -addext "subjectAltName=DNS:redis,DNS:localhost,IP:127.0.0.1"
+
+# 3. Sign server cert with local CA
+openssl x509 -req \
+  -in docker/redis/tls/server.csr \
+  -CA docker/redis/tls/ca.crt \
+  -CAkey docker/redis/tls/ca.key \
+  -CAcreateserial \
+  -out docker/redis/tls/server.crt \
+  -days 365 \
+  -copy_extensions copy
+```
+
+#### Configure environment
+
+For local host runs:
+
+```dotenv
+REDIS_URL=rediss://localhost:6379
+REDIS_TLS_CA_CERT_FILE=/absolute/path/to/usezombie/docker/redis/tls/ca.crt
+```
+
+For Docker Compose service-to-service (`zombied -> redis`), compose already sets:
+
+- `REDIS_URL=rediss://redis:6379`
+- `REDIS_TLS_CA_CERT_FILE=/app/docker/redis/tls/ca.crt`
+
+#### Verify
+
+```bash
+REDIS_URL=rediss://localhost:6379 REDIS_TLS_CA_CERT_FILE=$PWD/docker/redis/tls/ca.crt zig build run -- doctor
+```
+
+**Notes:**
+- `tls-auth-clients no` is correct for this setup because we are not doing mTLS client-certificate auth.
+- Upstash uses server-auth TLS with password auth in URL (for example `rediss://default:<password>@...:6379`).
+
 ## 3. Environment Matrix
 
 ### 3.1 Environment Local
 
 Purpose: local development and API/worker contract testing.
+
+```bash
+# Generate .env and start services
+make env
+make up
+```
 
 In scope:
 - `zombiectl` CLI development (Node.js 22)
@@ -108,18 +266,19 @@ In scope:
 - Postgres 18.2 (docker container)
 - Redis 7 (docker container with ACL config)
 - `docker-compose.yml` for local service orchestration
+- External services (Clerk, GitHub App, PostHog, Resend, Discord, Slack) use DEV instances
 
 Out of scope for local:
 - Vercel website (test with `npm run dev` locally)
 - Firecracker isolation (macOS has no KVM)
 - Full Tailscale network policy
-- PostHog analytics
 
 Local notes:
 1. Run API/worker/Postgres/Redis via Docker Compose.
-2. Clerk: reuse dev instance for auth E2E. Skip for pure API development (use `API_KEY` fallback).
-3. NullClaw sandbox may use bubblewrap on Linux Docker or degrade gracefully on macOS.
-4. Website: `cd website && npm run dev` for local preview.
+2. Generate `.env` with `make env` (injects from `ZOMBIE_LOCAL` vault via `pass-cli inject`).
+3. Clerk: reuse dev instance for auth E2E. Skip for pure API development (use `API_KEY` fallback).
+4. NullClaw sandbox may use bubblewrap on Linux Docker or degrade gracefully on macOS.
+5. Website: `cd website && npm run dev` for local preview.
 
 ### 3.2 Environment Development
 
@@ -162,13 +321,41 @@ Production expectations:
 5. Secrets rotation and audit reporting required before customer workloads.
 6. v2 additions (Firecracker, libgit2) required before multi-tenant customer workloads.
 
-## 4. Deploy
+## 4. Client Surface Testing
+
+Three client surfaces consume the same `zombied` API. Each follows the same local → dev → prod promotion path.
+
+### zombiectl (CLI)
+
+| Stage | API target | Auth | How to run |
+|-------|-----------|------|------------|
+| LOCAL | `http://localhost:3000` | Clerk DEV device flow or `API_KEY` | `bun run cli` / `npx zombiectl` |
+| DEV | `https://api.dev.usezombie.com` | Clerk DEV device flow | `npx zombiectl --api https://api.dev.usezombie.com` |
+| PROD | `https://api.usezombie.com` | Clerk PROD device flow | `npx zombiectl` |
+
+### app.usezombie.com (Web)
+
+| Stage | API target | Auth | How to run |
+|-------|-----------|------|------------|
+| LOCAL | `http://localhost:3000` | Clerk DEV browser flow | `cd website && npm run dev` |
+| DEV | `https://api.dev.usezombie.com` | Clerk DEV browser flow | Vercel preview deploy |
+| PROD | `https://api.usezombie.com` | Clerk PROD browser flow | Vercel production deploy |
+
+### Mobile (Swift / Android)
+
+| Stage | API target | Auth | How to run |
+|-------|-----------|------|------------|
+| LOCAL | `http://localhost:3000` | Clerk DEV PKCE flow | Simulator / emulator |
+| DEV | `https://api.dev.usezombie.com` | Clerk DEV PKCE flow | TestFlight / internal track |
+| PROD | `https://api.usezombie.com` | Clerk PROD PKCE flow | App Store / Play Store |
+
+## 5. Deploy
 
 Deploy in sequence.
 
 ### Step 1: DNS + Website
 
-1. Configure Cloudflare DNS records per section 2.4.
+1. Configure Cloudflare DNS records per section 2.5.
 2. Deploy static website to Vercel from `website/` directory.
 3. Verify `usezombie.com` and `usezombie.sh` load correctly.
 4. Verify `usezombie.sh/openapi.json` and `usezombie.sh/agent-manifest.json` return valid responses.
@@ -179,7 +366,7 @@ Deploy in sequence.
 2. Provision Redis 7 with TLS enabled.
 3. Create Postgres roles (`api_accessor`, `worker_accessor`, `callback_accessor`) with grants per M3_000.
 4. Apply all DB migrations in `schema/` (currently `001_initial.sql` through `005_side_effect_outbox.sql`).
-5. Create Redis stream and consumer group. Configure Redis ACLs per section 2.3.
+5. Create Redis stream and consumer group. Configure Redis ACLs per section 2.4.
 
 ### Step 3: Authentication (Clerk)
 
@@ -236,7 +423,7 @@ Deploy in sequence.
 2. Verify: `npx zombiectl login` → device auth → token stored.
 3. Verify: `npx zombiectl doctor` → all checks pass.
 
-## 5. Verify
+## 6. Verify and Smoke Tests
 
 ```bash
 # API liveness/readiness
@@ -267,7 +454,7 @@ redis-cli -u "$REDIS_URL" XINFO STREAM run_queue
 redis-cli -u "$REDIS_URL" XPENDING run_queue workers
 ```
 
-## 6. Smoke Tests
+### Smoke test checklist (all surfaces)
 
 1. `zombiectl login` → Clerk device auth completes → token stored.
 2. `zombiectl workspace add` → GitHub App installed → workspace created.
@@ -277,6 +464,8 @@ redis-cli -u "$REDIS_URL" XPENDING run_queue workers
 6. Force one validation failure and verify retry loop re-enqueues via Redis.
 7. Confirm successful run creates PR and marks `DONE`.
 8. Kill one worker mid-run and verify `XAUTOCLAIM` reclaims the stale message.
+9. PostHog event appears in DEV project dashboard.
+10. Notification fires to Discord/Slack DEV channel.
 
 **Acceptance test repo:** `https://github.com/indykish/terraform-provider-e2e`
 
@@ -292,8 +481,9 @@ redis-cli -u "$REDIS_URL" XPENDING run_queue workers
 | Cloudflare | Yes | Yes | DNS + CDN | All domains |
 | Vercel | Yes | Yes | Static website hosting | usezombie.com + usezombie.sh |
 | Mintlify | Yes | Yes | Docs portal | docs.usezombie.com |
+| PostHog | Yes | Yes | Product analytics | DEV project for local+dev, PROD project for prod |
+| Resend | Yes | Yes | Email notifications | Sandbox for local+dev |
 | Firecracker | No | Yes | Execution isolation | v2 — KVM required |
-| PostHog | Recommended | Yes | Product analytics | Not required for v1 launch |
 | Langfuse | Pending | Pending | Agent tracing | Decide before production hardening |
 | Dodo | Optional | Optional | Billing | Feature-flagged for initial free launch |
 

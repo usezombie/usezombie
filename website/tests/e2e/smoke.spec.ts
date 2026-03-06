@@ -22,9 +22,18 @@ test.describe("Smoke", () => {
     await expect(page.getByRole("heading", { level: 1 })).toContainText("autonomous agents");
   });
 
+  test("privacy page loads", async ({ page }) => {
+    await page.goto("/privacy");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Privacy Policy");
+  });
+
+  test("terms page loads", async ({ page }) => {
+    await page.goto("/terms");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Terms of Service");
+  });
+
   test("nav links are present on home", async ({ page }) => {
     await page.goto("/");
-    // Scope to primary nav to avoid footer link collisions
     const nav = page.getByRole("navigation", { name: /primary/i });
     await expect(nav.getByRole("link", { name: "Home" })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Pricing" })).toBeVisible();
@@ -32,9 +41,15 @@ test.describe("Smoke", () => {
   });
 
   test("footer renders on all routes", async ({ page }) => {
-    for (const route of ["/", "/pricing", "/agents"]) {
+    for (const route of ["/", "/pricing", "/agents", "/privacy", "/terms"]) {
       await page.goto(route);
       await expect(page.getByRole("contentinfo")).toBeVisible();
     }
+  });
+
+  test("Discord link uses canonical URL", async ({ page }) => {
+    await page.goto("/");
+    const discord = page.getByRole("contentinfo").getByRole("link", { name: "Discord" });
+    await expect(discord).toHaveAttribute("href", "https://discord.gg/H9hH2nqQjh");
   });
 });
