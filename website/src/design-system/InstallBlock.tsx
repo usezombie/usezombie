@@ -17,7 +17,7 @@ export default function InstallBlock({ title, command, actions }: Props) {
   return (
     <div className="z-install-block">
       <h2>{title}</h2>
-      <Terminal label={`${title} command`}>{command}</Terminal>
+      <Terminal label={`${title} command`} copyable>{command}</Terminal>
       <div className="z-btn-row">
         {actions.map((a) => (
           <Button key={a.label} to={a.to} variant={a.variant ?? "primary"}>
