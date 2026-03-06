@@ -5,6 +5,129 @@ const obs_log = @import("../../observability/logging.zig");
 const common = @import("common.zig");
 const log = std.log.scoped(.http);
 
+fn generateWorkspaceId(alloc: std.mem.Allocator) ![]const u8 {
+    var raw: [16]u8 = undefined;
+    std.crypto.random.bytes(&raw);
+    const hex = std.fmt.bytesToHex(raw, .lower);
+    return std.fmt.allocPrint(alloc, "ws_{s}", .{hex[0..12]});
+}
+
+fn normalizeDefaultBranch(default_branch: ?[]const u8) []const u8 {
+    const raw = default_branch orelse return "main";
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return "main";
+    return trimmed;
+}
+
+fn buildInstallUrl(alloc: std.mem.Allocator, app_slug: []const u8, workspace_id: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(
+        alloc,
+        "https://github.com/apps/{s}/installations/new?state={s}",
+        .{ app_slug, workspace_id },
+    );
+}
+
+pub fn handleCreateWorkspace(ctx: *common.Context, r: zap.Request) void {
+    var arena = std.heap.ArenaAllocator.init(ctx.alloc);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const req_id = common.requestId(alloc);
+
+    const principal = common.authenticate(alloc, r, ctx) catch |err| {
+        common.writeAuthError(r, req_id, err);
+        return;
+    };
+
+    const Req = struct {
+        repo_url: []const u8,
+        default_branch: ?[]const u8 = null,
+    };
+
+    const body = r.body orelse {
+        common.errorResponse(r, .bad_request, "INVALID_REQUEST", "Request body required", req_id);
+        return;
+    };
+    const parsed = std.json.parseFromSlice(Req, alloc, body, .{}) catch {
+        common.errorResponse(r, .bad_request, "INVALID_REQUEST", "Malformed JSON", req_id);
+        return;
+    };
+    defer parsed.deinit();
+
+    const repo_url = std.mem.trim(u8, parsed.value.repo_url, " \t\r\n");
+    if (repo_url.len == 0) {
+        common.errorResponse(r, .bad_request, "INVALID_REQUEST", "repo_url is required", req_id);
+        return;
+    }
+    const default_branch = normalizeDefaultBranch(parsed.value.default_branch);
+    const tenant_id = principal.tenant_id orelse "github_app";
+
+    const conn = ctx.pool.acquire() catch {
+        common.errorResponse(r, .service_unavailable, "INTERNAL_ERROR", "Database unavailable", req_id);
+        return;
+    };
+    defer ctx.pool.release(conn);
+
+    const now_ms = std.time.milliTimestamp();
+    var tenant_q = conn.query(
+        \\INSERT INTO tenants (tenant_id, name, api_key_hash, created_at)
+        \\VALUES ($1, $2, 'managed', $3)
+        \\ON CONFLICT (tenant_id) DO NOTHING
+    , .{ tenant_id, "Workspace Tenant", now_ms }) catch {
+        common.errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to upsert tenant", req_id);
+        return;
+    };
+    tenant_q.deinit();
+
+    const workspace_id = generateWorkspaceId(alloc) catch {
+        common.errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to allocate workspace id", req_id);
+        return;
+    };
+
+    var ws_q = conn.query(
+        \\INSERT INTO workspaces
+        \\  (workspace_id, tenant_id, repo_url, default_branch, paused, version, created_at, updated_at)
+        \\VALUES ($1, $2, $3, $4, false, 1, $5, $5)
+    , .{ workspace_id, tenant_id, repo_url, default_branch, now_ms }) catch {
+        common.errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to create workspace", req_id);
+        return;
+    };
+    ws_q.deinit();
+
+    const github_app_slug = std.process.getEnvVarOwned(alloc, "GITHUB_APP_SLUG") catch "usezombie";
+    const install_url = buildInstallUrl(alloc, github_app_slug, workspace_id) catch {
+        common.errorResponse(r, .internal_server_error, "INTERNAL_ERROR", "Failed to build install URL", req_id);
+        return;
+    };
+
+    common.writeJson(r, .created, .{
+        .workspace_id = workspace_id,
+        .repo_url = repo_url,
+        .default_branch = default_branch,
+        .install_url = install_url,
+        .request_id = req_id,
+    });
+}
+
+test "normalizeDefaultBranch falls back to main for null/blank input" {
+    try std.testing.expectEqualStrings("main", normalizeDefaultBranch(null));
+    try std.testing.expectEqualStrings("main", normalizeDefaultBranch(""));
+    try std.testing.expectEqualStrings("main", normalizeDefaultBranch("   "));
+}
+
+test "normalizeDefaultBranch trims provided value" {
+    try std.testing.expectEqualStrings("trunk", normalizeDefaultBranch("  trunk\t"));
+}
+
+test "buildInstallUrl renders GitHub app install URL" {
+    const alloc = std.testing.allocator;
+    const url = try buildInstallUrl(alloc, "usezombie", "ws_abc123");
+    defer alloc.free(url);
+    try std.testing.expectEqualStrings(
+        "https://github.com/apps/usezombie/installations/new?state=ws_abc123",
+        url,
+    );
+}
+
 pub fn handlePauseWorkspace(ctx: *common.Context, r: zap.Request, workspace_id: []const u8) void {
     var arena = std.heap.ArenaAllocator.init(ctx.alloc);
     defer arena.deinit();
