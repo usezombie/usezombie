@@ -44,6 +44,7 @@ pub const ServeConfig = struct {
     rate_limit_refill_per_sec: f64,
     ready_max_queue_depth: ?i64,
     ready_max_queue_age_ms: ?i64,
+    app_url: []u8,
     clerk_enabled: bool,
     clerk_jwks_url: ?[]u8,
     clerk_issuer: ?[]u8,
@@ -122,6 +123,9 @@ pub const ServeConfig = struct {
         const clerk_audience = std.process.getEnvVarOwned(alloc, "CLERK_AUDIENCE") catch null;
         errdefer if (clerk_audience) |v| alloc.free(v);
 
+        const app_url = try envOrDefaultOwned(alloc, "APP_URL", "https://app.usezombie.com");
+        errdefer alloc.free(app_url);
+
         return .{
             .port = port,
             .api_keys = api_keys,
@@ -141,6 +145,7 @@ pub const ServeConfig = struct {
             .rate_limit_refill_per_sec = rate_limit_refill_per_sec,
             .ready_max_queue_depth = ready_max_queue_depth,
             .ready_max_queue_age_ms = ready_max_queue_age_ms,
+            .app_url = app_url,
             .clerk_enabled = clerk_enabled,
             .clerk_jwks_url = clerk_jwks_url,
             .clerk_issuer = clerk_issuer,
@@ -157,6 +162,7 @@ pub const ServeConfig = struct {
         self.alloc.free(self.github_app_private_key);
         self.alloc.free(self.config_dir);
         self.alloc.free(self.pipeline_profile_path);
+        self.alloc.free(self.app_url);
         if (self.clerk_jwks_url) |v| self.alloc.free(v);
         if (self.clerk_issuer) |v| self.alloc.free(v);
         if (self.clerk_audience) |v| self.alloc.free(v);

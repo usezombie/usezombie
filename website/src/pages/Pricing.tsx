@@ -1,15 +1,29 @@
 import FAQ from "../components/FAQ";
+import { Button } from "../design-system";
 
 const tiers = [
   {
-    name: "Free",
+    name: "Open Source",
+    price: "Free",
+    featured: false,
+    points: [
+      "Self-host on your infra",
+      "Unlimited workspaces",
+      "Full pipeline access",
+      "Community support",
+      "BYOK — bring your own keys",
+    ],
+  },
+  {
+    name: "Hobby",
     price: "$0",
     featured: false,
     points: [
       "1 workspace",
+      "3 default agents (Scout, Echo, Warden)",
       "Low concurrency",
-      "Community support",
       "Basic run replay",
+      "Community support",
       "BYOK — bring your own keys",
     ],
   },
@@ -19,24 +33,11 @@ const tiers = [
     featured: true,
     points: [
       "5 workspaces",
+      "Unlimited agents + harness",
       "Priority queue",
       "Advanced run replay",
       "Artifact export",
       "Email support",
-      "BYOK — bring your own keys",
-    ],
-  },
-  {
-    name: "Team",
-    price: "$199/mo",
-    featured: false,
-    points: [
-      "Unlimited workspaces",
-      "Shared policies",
-      "Audit export",
-      "Team access control",
-      "Role-based permissions",
-      "Team support",
       "BYOK — bring your own keys",
     ],
   },
@@ -77,13 +78,17 @@ export default function Pricing() {
               ))}
             </ul>
             {tier.name === "Enterprise" ? (
-              <a className="cta ghost" href="mailto:team@usezombie.com?subject=Enterprise" style={{ marginTop: "0.75rem", display: "inline-flex" }}>
+              <Button variant="ghost" to="mailto:team@usezombie.com?subject=Enterprise" style={{ marginTop: "0.75rem" }}>
                 Contact sales
-              </a>
+              </Button>
+            ) : tier.name === "Open Source" ? (
+              <Button variant="ghost" to="https://github.com/usezombie" external style={{ marginTop: "0.75rem" }}>
+                View on GitHub
+              </Button>
             ) : (
-              <a className="cta" href="https://docs.usezombie.com/quickstart" style={{ marginTop: "0.75rem", display: "inline-flex" }}>
-                {tier.name === "Free" ? "Start free" : "Start trial"}
-              </a>
+              <Button to="https://docs.usezombie.com/quickstart" style={{ marginTop: "0.75rem" }}>
+                {tier.name === "Hobby" ? "Start free" : "Start trial"}
+              </Button>
             )}
           </article>
         ))}

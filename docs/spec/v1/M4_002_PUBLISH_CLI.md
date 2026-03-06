@@ -1,196 +1,52 @@
-## Task Spec for OpenCode
+# M4_002: Publish `zombiectl` npm Package
 
-### Objective
-
-Publish the existing `zombiectl` Node.js CLI to npm as an **unscoped package** named:
-
-```
-zombiectl
-```
-
-The CLI structure and commands already exist in:
-
-```
-~/Projects/usezombie/docs/spec/v1/M4_001_CLI_ZOMBIECTL.md
-```
-
-The scaffold skill must generate the CLI from that spec.
+**Prototype:** v1.0.0
+**Milestone:** M4
+**Workstream:** 002
+**Date:** Mar 06, 2026
+**Status:** PENDING
+**Priority:** P1 — distribution gate
+**Batch:** B3 — needs M4_001
+**Depends on:** M4_001 (Implement `zombiectl` CLI Runtime)
 
 ---
 
-# Inputs
+## 1.0 Singular Function
 
-CLI command specification.
+**Status:** PENDING
 
-```
-~/Projects/usezombie/docs/spec/v1/M4_001_CLI_ZOMBIECTL.md
-```
+Implement one working distribution function: publish and verify `zombiectl` as an installable npm CLI.
 
-Existing scaffold skill capable of generating the CLI structure.
-
----
-
-# Expected Result
-
-After execution the project must support:
-
-```
-npm install -g zombiectl
-```
-
-and expose the command:
-
-```
-zombiectl
-```
+**Dimensions:**
+- 1.1 PENDING Configure package metadata and executable `bin` mapping
+- 1.2 PENDING Validate local link/install (`npm link`, `zombiectl --help`)
+- 1.3 PENDING Validate publish readiness (`npm pack`, package contents, versioning)
+- 1.4 PENDING Publish package and verify global install behavior
 
 ---
 
-# Required Steps
+## 2.0 Verification Units
 
-### 1. Generate CLI
+**Status:** PENDING
 
-Use the scaffold skill to generate the CLI structure from:
-
-```
-docs/spec/v1/M4_001_CLI_ZOMBIECTL.md
-```
-
-Expected project root:
-
-```
-zombiectl/
-```
+**Dimensions:**
+- 2.1 PENDING Unit check: `bin/zombiectl.js` executable and entrypoint valid
+- 2.2 PENDING Unit check: package tarball contains expected runtime files only
+- 2.3 PENDING Integration check: fresh shell can execute installed `zombiectl`
 
 ---
 
-### 2. Ensure npm CLI Structure
+## 3.0 Acceptance Criteria
 
-Repository must contain:
+**Status:** PENDING
 
-```
-zombiectl/
- ├─ package.json
- ├─ README.md
- ├─ LICENSE
- ├─ bin/
- │   └─ zombiectl.js
- └─ src/
-```
+- [ ] 3.1 `npm install -g zombiectl` exposes working `zombiectl` command
+- [ ] 3.2 Published package behavior matches M4_001 command contract
+- [ ] 3.3 Demo evidence captured for local link test and global install test
 
 ---
 
-### 3. Configure CLI Entrypoint
+## 4.0 Out of Scope
 
-`bin/zombiectl.js`
-
-```
-#!/usr/bin/env node
-import "../src/cli.js"
-```
-
-File must be executable.
-
-```
-chmod +x bin/zombiectl.js
-```
-
----
-
-### 4. Configure package.json
-
-Requirements.
-
-```
-{
-  "name": "zombiectl",
-  "version": "0.1.0",
-  "description": "CLI for the UseZombie platform",
-  "license": "MIT",
-  "type": "module",
-  "bin": {
-    "zombiectl": "./bin/zombiectl.js"
-  },
-  "engines": {
-    "node": ">=18"
-  }
-}
-```
-
-Key requirement.
-
-```
-"bin": {
-  "zombiectl": "./bin/zombiectl.js"
-}
-```
-
-This exposes the global CLI command.
-
----
-
-### 5. Verify Name Availability
-
-Run:
-
-```
-npm view zombiectl
-```
-
-If the registry returns **404**, the name is available.
-
----
-
-### 6. Local CLI Test
-
-Link the package locally.
-
-```
-npm link
-```
-
-Verify command.
-
-```
-zombiectl --help
-```
-
----
-
-### 7. Publish Package
-
-Authenticate.
-
-```
-npm login
-```
-
-Publish.
-
-```
-npm publish --access public
-```
-
----
-
-# Success Criteria
-
-The following must work.
-
-Install.
-
-```
-npm install -g zombiectl
-```
-
-Run.
-
-```
-zombiectl
-```
-
-The CLI must implement all commands defined in:
-
-```
-docs/spec/v1/M4_001_CLI_ZOMBIECTL.md
-```
+- Feature changes to command semantics
+- Alternative package registries

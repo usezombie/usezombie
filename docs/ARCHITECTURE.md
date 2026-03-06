@@ -147,6 +147,41 @@ Worker claims run from Redis
 | GitHub operations | GitHub App installation token | `ghs_...` (1hr, repo-scoped) | Worker git ops |
 | Local dev fallback | Static API key | `API_KEY` env var | Dev only |
 
+### CLI Authentication Flow (Device Authorization)
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant CLI as zombiectl
+    participant Browser
+    participant CK as Clerk
+    participant API as zombied API
+
+    Note over User,API: zombiectl login (RFC 8628 Device Auth)
+    User->>CLI: zombiectl login
+    CLI->>CK: POST /oauth/device/authorize
+    CK-->>CLI: device_code + user_code + verification_uri
+    CLI->>CLI: Display "Open browser and enter code: XXXX-YYYY"
+    CLI->>Browser: Open verification_uri
+    User->>Browser: Enter user_code + authenticate
+    Browser->>CK: User approves
+    CLI->>CK: Poll POST /oauth/token (device_code)
+    CK-->>CLI: JWT access token
+    CLI->>CLI: Store JWT locally (~/.zombiectl/credentials)
+
+    Note over User,API: Authenticated API call
+    User->>CLI: zombiectl workspace add <repo_url>
+    CLI->>API: POST /v1/workspaces (Authorization: Bearer JWT)
+    API->>CK: Verify JWT via JWKS endpoint
+    CK-->>API: Valid claims (user_id, org_id)
+    API-->>CLI: 201 Created
+
+    Note over User,API: Local dev fallback (no Clerk needed)
+    User->>CLI: API_KEY=dev-key zombiectl workspace add <repo_url>
+    CLI->>API: POST /v1/workspaces (X-API-Key: dev-key)
+    API-->>CLI: 201 Created
+```
+
 ## Security Model
 
 ### Network (Tailscale)

@@ -1,20 +1,8 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import App from "./App";
-
-const storage: Record<string, string> = {};
-const mockLocalStorage = {
-  getItem: (key: string) => storage[key] ?? null,
-  setItem: (key: string, value: string) => { storage[key] = value; },
-  removeItem: (key: string) => { delete storage[key]; },
-  clear: () => { for (const k in storage) delete storage[k]; },
-  get length() { return Object.keys(storage).length; },
-  key: (i: number) => Object.keys(storage)[i] ?? null,
-};
-
-Object.defineProperty(globalThis, "localStorage", { value: mockLocalStorage, writable: true });
 
 function renderApp(initialRoute = "/") {
   return render(
@@ -25,10 +13,6 @@ function renderApp(initialRoute = "/") {
 }
 
 describe("App", () => {
-  beforeEach(() => {
-    mockLocalStorage.clear();
-  });
-
   it("renders the brand name in header and footer", () => {
     renderApp();
     const brands = screen.getAllByText("usezombie");
@@ -47,35 +31,36 @@ describe("App", () => {
     expect(screen.getByRole("tab", { name: "Agents" })).toBeInTheDocument();
   });
 
-  it("defaults to humans mode", () => {
-    renderApp();
+  it("defaults to humans mode on /", () => {
+    renderApp("/");
     expect(screen.getByRole("tab", { name: "Humans" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute("aria-selected", "false");
   });
 
-  it("switches to agents mode on click", async () => {
+  it("shows agents mode when on /agents", () => {
+    renderApp("/agents");
+    expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Humans" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("switches to agents mode on click and navigates to /agents", async () => {
     const user = userEvent.setup();
-    renderApp();
+    renderApp("/");
 
     await user.click(screen.getByRole("tab", { name: "Agents" }));
     expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute("aria-selected", "true");
+    // Should now show agents page content
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/autonomous agents/i);
   });
 
-  it("persists mode to localStorage", async () => {
+  it("switches to humans mode on click and navigates to /", async () => {
     const user = userEvent.setup();
-    renderApp();
+    renderApp("/agents");
 
-    await user.click(screen.getByRole("tab", { name: "Agents" }));
-    expect(mockLocalStorage.getItem("usezombie_mode")).toBe("agents");
-  });
-
-  it("reads saved mode from localStorage on mount", () => {
-    mockLocalStorage.setItem("usezombie_mode", "agents");
-    renderApp();
-    // App reads localStorage in useState initializer, so it should pick up agents.
-    // The mode-btn for Agents should have the active class.
-    const agentsTab = screen.getByRole("tab", { name: "Agents" });
-    expect(agentsTab).toHaveClass("active");
+    await user.click(screen.getByRole("tab", { name: "Humans" }));
+    expect(screen.getByRole("tab", { name: "Humans" })).toHaveAttribute("aria-selected", "true");
+    // Should now show home page content
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/ship ai/i);
   });
 
   it("renders primary navigation in header", () => {
@@ -105,8 +90,23 @@ describe("App", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/autonomous agents/i);
   });
 
+  it("renders privacy page at /privacy", () => {
+    renderApp("/privacy");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/privacy policy/i);
+  });
+
+  it("renders terms page at /terms", () => {
+    renderApp("/terms");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/terms of service/i);
+  });
+
   it("renders footer on all routes", () => {
     renderApp("/");
     expect(screen.getByRole("contentinfo")).toBeInTheDocument();
+  });
+
+  it("renders particle field for animated background", () => {
+    const { container } = renderApp();
+    expect(container.querySelector(".particle-field")).toBeInTheDocument();
   });
 });

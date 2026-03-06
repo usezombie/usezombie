@@ -1,35 +1,38 @@
 import { test, expect } from "@playwright/test";
 
 test.describe("Humans/Agents mode switch", () => {
-  test("defaults to Humans mode", async ({ page }) => {
+  test("defaults to Humans mode on /", async ({ page }) => {
     await page.goto("/");
     const humansBtn = page.getByTestId("mode-humans");
     await expect(humansBtn).toHaveAttribute("aria-selected", "true");
     await expect(humansBtn).toHaveClass(/active/);
   });
 
-  test("switches to Agents mode on click", async ({ page }) => {
+  test("switches to Agents mode and navigates to /agents", async ({ page }) => {
     await page.goto("/");
     await page.getByTestId("mode-agents").click();
+    await expect(page).toHaveURL(/\/agents/);
     await expect(page.getByTestId("mode-agents")).toHaveAttribute("aria-selected", "true");
     await expect(page.getByTestId("mode-humans")).toHaveAttribute("aria-selected", "false");
   });
 
-  test("persists Agents mode to localStorage", async ({ page }) => {
-    await page.goto("/");
-    await page.getByTestId("mode-agents").click();
-
-    const stored = await page.evaluate(() => localStorage.getItem("usezombie_mode"));
-    expect(stored).toBe("agents");
+  test("switches back to Humans mode and navigates to /", async ({ page }) => {
+    await page.goto("/agents");
+    await page.getByTestId("mode-humans").click();
+    await expect(page).toHaveURL(/^http:\/\/[^/]+\/$/);
+    await expect(page.getByTestId("mode-humans")).toHaveAttribute("aria-selected", "true");
   });
 
-  test("restores mode from localStorage on reload", async ({ page }) => {
-    await page.goto("/");
-    // Set agents mode in localStorage
-    await page.evaluate(() => localStorage.setItem("usezombie_mode", "agents"));
-    await page.reload();
-
+  test("mode is agents when on /agents URL", async ({ page }) => {
+    await page.goto("/agents");
     await expect(page.getByTestId("mode-agents")).toHaveClass(/active/);
+    await expect(page.getByTestId("mode-agents")).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("mode is humans when on /pricing URL", async ({ page }) => {
+    await page.goto("/pricing");
+    await expect(page.getByTestId("mode-humans")).toHaveClass(/active/);
+    await expect(page.getByTestId("mode-humans")).toHaveAttribute("aria-selected", "true");
   });
 
   test("eyebrow text changes with mode", async ({ page }) => {
@@ -37,7 +40,8 @@ test.describe("Humans/Agents mode switch", () => {
     await expect(page.getByText("for engineering teams")).toBeVisible();
 
     await page.getByTestId("mode-agents").click();
-    await expect(page.getByText("agent delivery control plane").first()).toBeVisible();
+    await expect(page).toHaveURL(/\/agents/);
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("autonomous agents");
   });
 
   test("mode switch is keyboard navigable", async ({ page }) => {

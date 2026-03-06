@@ -9,6 +9,19 @@ test.describe("Agents page (/agents)", () => {
     await expect(page.getByRole("heading", { level: 1 })).toContainText("autonomous agents");
   });
 
+  test("renders install block with curl command", async ({ page }) => {
+    await expect(page.getByRole("heading", { name: "Install Zombiectl" })).toBeVisible();
+    await expect(page.getByLabel(/install zombiectl command/i)).toContainText(
+      "curl -sSL https://usezombie.sh/install | bash"
+    );
+  });
+
+  test("renders install block action buttons", async ({ page }) => {
+    await expect(page.getByRole("link", { name: "Install Zombiectl" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Read the docs" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Setup your personal dashboard" })).toBeVisible();
+  });
+
   test("renders bootstrap commands", async ({ page }) => {
     const block = page.getByLabel(/bootstrap commands/i);
     await expect(block).toBeVisible();
@@ -39,7 +52,6 @@ test.describe("Agents page (/agents)", () => {
   });
 
   test("renders safety limit cards", async ({ page }) => {
-    // Target heading roles specifically to avoid matching body text
     await expect(page.getByRole("heading", { name: "Idempotency" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Audit Trail" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Secret Management" })).toBeVisible();

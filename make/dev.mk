@@ -2,7 +2,7 @@
 # DEV — local development
 # =============================================================================
 
-.PHONY: dev up down _clean
+.PHONY: dev up down _clean env
 
 VERSION ?= $(shell cat VERSION 2>/dev/null || echo "0.1.0")
 
@@ -25,6 +25,11 @@ down:  ## Stop all services, remove volumes, and cleanup
 	@docker compose down --volumes
 	@$(MAKE) _clean --no-print-directory
 	@echo "Cleanup complete."
+
+env:  ## Generate .env from Proton Pass vault (ENV=local|dev|prod)
+	@pass-cli inject -i .env.$(or $(ENV),local).tpl -o .env -f
+	@chmod 600 .env
+	@echo "✔ Generated .env from .env.$(or $(ENV),local).tpl"
 
 _clean:
 	@rm -rf zig-out zig-cache .zig-cache

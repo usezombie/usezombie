@@ -1,4 +1,4 @@
-# M4_006: v1 Acceptance E2E Gate
+# M4_006: Validate v1 Acceptance E2E Gate
 
 **Prototype:** v1.0.0
 **Milestone:** M4
@@ -6,7 +6,9 @@
 **Date:** Mar 05, 2026
 **Status:** PENDING
 **Priority:** P0 — release gate
-**Depends on:** M4_001 (zombiectl CLI), M3_004 (Redis streams), M3_006 (Clerk auth), M3_005 (security hardening)
+**Batch:** B4 — capstone release gate
+**Depends on:** M4_001 (Implement `zombiectl` CLI Runtime), M3_006 (Implement Clerk Authentication Contract)
+**Note:** M3_004 (Redis streams) and M3_005 (security hardening) already DONE
 
 ---
 

@@ -1,84 +1,53 @@
-# M5_004: Usage Metering And Billing Integration
+# M5_004: Integrate Usage Metering And Billing Adapter Contract
 
 **Prototype:** v1.0.0
 **Milestone:** M5
 **Workstream:** 004
 **Date:** Mar 06, 2026
 **Status:** PENDING
-**Priority:** P1 — required for automated subscription enforcement and billing automation
-**Depends on:** M5_003 Workspace Entitlements And Plan Limits
+**Priority:** P1 — commercial automation
+**Batch:** B3 — needs M5_003
+**Depends on:** M5_003 (Enforce Workspace Entitlements And Plan Limits)
 
 ---
 
-## 1.0 Objective
+## 1.0 Singular Function
 
 **Status:** PENDING
 
-Introduce deterministic workspace usage metering and billing integration contracts so plan enforcement can evolve from static policy to subscription-backed controls.
+Implement one working commercial function: replay-safe usage ledger and provider-agnostic billing adapter contract.
 
 **Dimensions:**
-- 1.1 PENDING Define billable usage units (`compute_seconds`, `run_count`, optional `token_units`)
-- 1.2 PENDING Define metering events emitted by compile/run lifecycle
-- 1.3 PENDING Define immutable usage ledger contract per workspace and billing period
+- 1.1 PENDING Define billable units and immutable usage ledger schema
+- 1.2 PENDING Emit and aggregate deterministic usage events from runtime lifecycle
+- 1.3 PENDING Define adapter interface (`Noop`, `Manual`, provider-specific)
+- 1.4 PENDING Define adapter outage behavior, retry/idempotency, and secure credential handling
 
 ---
 
-## 2.0 Metering Pipeline
+## 2.0 Verification Units
 
 **Status:** PENDING
-
-Capture and aggregate usage without relying on external providers at runtime.
 
 **Dimensions:**
-- 2.1 PENDING Emit usage events for run start/stop/fail with deterministic timestamps
-- 2.2 PENDING Aggregate per-workspace period totals with idempotent replay handling
-- 2.3 PENDING Define late event handling and backfill semantics
-- 2.4 PENDING Define reconciliation process from raw events to invoice-ready summaries
+- 2.1 PENDING Unit test: ledger replay yields identical totals
+- 2.2 PENDING Unit test: duplicate events do not double-charge
+- 2.3 PENDING Integration test: adapter outage preserves accounting state and retries safely
 
 ---
 
-## 3.0 Billing Adapter Contract
+## 3.0 Acceptance Criteria
 
 **Status:** PENDING
 
-Support provider integration later without coupling core runtime to one vendor.
-
-**Dimensions:**
-- 3.1 PENDING Define billing adapter interface (`Noop`, `Manual`, provider-specific)
-- 3.2 PENDING Define failure behavior when provider API is unavailable (fail closed for upgrades, no data loss)
-- 3.3 PENDING Define retry/idempotency keys for charge/report operations
-- 3.4 PENDING Define secure credential handling and audit trail for billing sync
+- [ ] 3.1 Usage ledger is deterministic and replay-safe
+- [ ] 3.2 Entitlement sync can consume billing state without manual edits
+- [ ] 3.3 Adapter outages do not corrupt usage or enforcement decisions
+- [ ] 3.4 Demo evidence captured for metering/replay and adapter-failure path
 
 ---
 
-## 4.0 Entitlement Sync And Enforcement
+## 4.0 Out of Scope
 
-**Status:** PENDING
-
-Connect billing state to plan entitlements safely.
-
-**Dimensions:**
-- 4.1 PENDING Define subscription state machine -> entitlement mapping
-- 4.2 PENDING Define grace period and downgrade behavior after failed payments
-- 4.3 PENDING Define deterministic enforcement timing (`next cycle` vs `immediate`)
-- 4.4 PENDING Define operator-safe override path for support interventions
-
----
-
-## 5.0 Acceptance Criteria
-
-**Status:** PENDING
-
-- [ ] 5.1 Usage ledger is reproducible from raw events and replay-safe
-- [ ] 5.2 Adapter outage does not corrupt usage accounting
-- [ ] 5.3 Entitlements can be derived from subscription state without manual edits
-- [ ] 5.4 Default deployment can run with `Noop`/`Manual` adapter until provider API is integrated
-- [ ] 5.5 Upgrade path from static plan policy (M5_003) to subscription-backed policy is documented and testable
-
----
-
-## 6.0 Out of Scope
-
-- Building a customer-facing billing dashboard UI
-- Implementing a specific third-party billing provider in this workstream
-- Reselling LLM tokens (BYOK remains the operating model)
+- Customer-facing invoice dashboard
+- Vendor-specific billing implementation lock-in

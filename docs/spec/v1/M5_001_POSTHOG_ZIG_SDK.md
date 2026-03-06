@@ -1,9 +1,13 @@
-# M5_001: posthog-zig — PostHog Analytics SDK for Zig
+# M5_001: Build `posthog-zig` Analytics SDK for Zig
 
-Date: Mar 4, 2026
-Status: PENDING
-Priority: P2
-Depends on: None (standalone library; integration into usezombie is M5 scope)
+**Prototype:** v1.0.0
+**Milestone:** M5
+**Workstream:** 001
+**Date:** Mar 06, 2026
+**Status:** PENDING
+**Priority:** P2 — standalone SDK with later control-plane integration
+**Batch:** B1 — separate repo, zero deps
+**Depends on:** None
 
 ---
 
@@ -257,6 +261,8 @@ Once `posthog-zig` is stable (v0.1.0+), integrate into the usezombie control pla
 ## Prior Art and References
 
 - [getsentry/sentry-zig](https://github.com/getsentry/sentry-zig) — Zig SDK architecture: `client.zig` + `transport.zig` + `types/` pattern. Uses `std.http.Client` for delivery.
+- Local reference: `~/Projects/oss/ghostty/src/crash/sentry_envelope.zig` — robust envelope parsing/serialization test style we can mirror for PostHog batch payload handling.
+- Local reusable candidate (MIT): `~/Projects/oss/ghostty/src/os/uri.zig` — URI parsing/validation patterns for SDK host/url handling. If copied/adapted, preserve attribution and include a third-party notice.
 - [PostHog /batch/ API](https://posthog.com/docs/api/capture) — Batch capture endpoint spec.
 - [PostHog /decide/ API](https://posthog.com/docs/api/decide) — Feature flag evaluation endpoint.
 - [posthog-python](https://github.com/PostHog/posthog-python) — Reference implementation: queue + consumer thread + flush-on-shutdown pattern.

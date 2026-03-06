@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import FeatureSection from "../components/FeatureSection";
 import ProviderStrip from "../components/ProviderStrip";
 import HowItWorks from "../components/HowItWorks";
@@ -37,9 +38,9 @@ const features = [
 ];
 
 const pricingPreview = [
-  { name: "Free", price: "$0", point: "1 workspace, low concurrency" },
-  { name: "Pro", price: "$39/mo", point: "5 workspaces, priority queue" },
-  { name: "Team", price: "$199/mo", point: "Shared policies, audit export" },
+  { name: "Open Source", price: "Free", point: "Self-host, unlimited" },
+  { name: "Hobby", price: "$0", point: "3 agents: Scout, Echo, Warden" },
+  { name: "Pro", price: "$39/mo", point: "Unlimited agents + harness" },
   { name: "Enterprise", price: "Contact", point: "Dedicated isolation, SLA" },
 ];
 
@@ -103,9 +104,9 @@ export default function Home({ mode }: Props) {
           ))}
         </div>
         <div className="cta-row" style={{ marginTop: "1rem" }}>
-          <a className="cta ghost" href="/pricing">
+          <Link className="cta ghost" to="/pricing">
             View full pricing
-          </a>
+          </Link>
         </div>
       </div>
 

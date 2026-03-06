@@ -72,17 +72,18 @@ describe("Home", () => {
     expect(screen.getByText("Validated PR opens")).toBeInTheDocument();
   });
 
-  it("renders pricing preview", () => {
+  it("renders updated pricing preview with Open Source and Hobby tiers", () => {
     renderHome();
-    expect(screen.getByText("$0")).toBeInTheDocument();
+    expect(screen.getByText("Open Source")).toBeInTheDocument();
+    expect(screen.getByText("Hobby")).toBeInTheDocument();
     expect(screen.getByText("$39/mo")).toBeInTheDocument();
-    expect(screen.getByText("$199/mo")).toBeInTheDocument();
     expect(screen.getByText("Contact")).toBeInTheDocument();
   });
 
-  it("renders View full pricing link", () => {
+  it("renders View full pricing as React Router Link to /pricing", () => {
     renderHome();
-    expect(screen.getByRole("link", { name: /view full pricing/i })).toHaveAttribute("href", "/pricing");
+    const link = screen.getByRole("link", { name: /view full pricing/i });
+    expect(link).toHaveAttribute("href", "/pricing");
   });
 
   it("renders CTA block", () => {
