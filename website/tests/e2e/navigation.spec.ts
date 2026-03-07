@@ -29,7 +29,7 @@ test.describe("Footer navigation", () => {
 
     await expect(page).toHaveURL(/\/pricing/);
     await expect(page.getByTestId("mode-humans")).toHaveClass(/active/);
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("BYOK");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Hobby and Scale plans");
   });
 
   test("footer Features link navigates to / and Humans mode is active", async ({ page }) => {
@@ -131,12 +131,12 @@ test.describe("Mode toggle — multi-step cycles", () => {
     await page.getByTestId("mode-humans").click();
     await expect(page).toHaveURL(/^http:\/\/[^/]+\/$/);
     await expect(page.getByTestId("mode-humans")).toHaveClass(/active/);
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("Ship AI");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Ship AI-generated PRs");
   });
 
   test("pricing → home → agents → home flow", async ({ page }) => {
     await page.goto("/pricing");
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("BYOK");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Hobby and Scale plans");
 
     // Nav to home
     await page.getByRole("navigation", { name: /primary/i }).getByRole("link", { name: "Home" }).click();
@@ -151,18 +151,18 @@ test.describe("Mode toggle — multi-step cycles", () => {
     // Toggle back to humans
     await page.getByTestId("mode-humans").click();
     await expect(page).toHaveURL(/^http:\/\/[^/]+\/$/);
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("Ship AI");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Ship AI-generated PRs");
   });
 
-  test("View full pricing → /pricing → back to home via nav", async ({ page }) => {
+  test("home nav Pricing → /pricing → back to home via nav", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("link", { name: /view full pricing/i }).click();
+    await page.getByRole("navigation", { name: /primary/i }).getByRole("link", { name: "Pricing" }).click();
     await expect(page).toHaveURL(/\/pricing/);
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("BYOK");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Hobby and Scale plans");
 
     await page.getByRole("navigation", { name: /primary/i }).getByRole("link", { name: "Home" }).click();
     await expect(page).toHaveURL(/^http:\/\/[^/]+\/$/);
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("Ship AI");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Ship AI-generated PRs");
   });
 });
 
@@ -202,14 +202,14 @@ test.describe("Direct URL navigation — mode consistency", () => {
 });
 
 test.describe("SPA routing — no full page reloads", () => {
-  test("View full pricing navigates without reload", async ({ page }) => {
+  test("header Pricing navigates without reload", async ({ page }) => {
     await page.goto("/");
     const navEvents: string[] = [];
     page.on("framenavigated", (frame) => {
       if (frame === page.mainFrame()) navEvents.push(frame.url());
     });
 
-    await page.getByRole("link", { name: /view full pricing/i }).click();
+    await page.getByRole("navigation", { name: /primary/i }).getByRole("link", { name: "Pricing" }).click();
     await expect(page).toHaveURL(/\/pricing/);
 
     // SPA navigation — only the initial load should be in navEvents

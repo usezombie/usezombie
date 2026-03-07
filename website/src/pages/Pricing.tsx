@@ -1,57 +1,38 @@
 import FAQ from "../components/FAQ";
 import { Button } from "../design-system";
+import { DOCS_QUICKSTART_URL, MAILTO_SCALE_WAITLIST } from "../config";
 
 const tiers = [
-  {
-    name: "Open Source",
-    price: "Free",
-    featured: false,
-    points: [
-      "Self-host on your infra",
-      "Unlimited workspaces",
-      "Full pipeline access",
-      "Community support",
-      "BYOK — bring your own keys",
-    ],
-  },
   {
     name: "Hobby",
     price: "$0",
     featured: false,
     points: [
-      "1 workspace",
-      "3 default agents (Scout, Echo, Warden)",
-      "Low concurrency",
-      "Basic run replay",
+      "1 project workspace",
+      "1 free runtime hour per day",
+      "Automated pull request generation",
+      "Built-in harness validation in PR flow",
+      "Open-source model path included",
       "Community support",
-      "BYOK — bring your own keys",
+      "BYOK/BYOM support",
     ],
   },
   {
-    name: "Pro",
-    price: "$39/mo",
+    name: "Scale",
+    price: "Coming soon",
     featured: true,
     points: [
-      "5 workspaces",
-      "Unlimited agents + harness",
-      "Priority queue",
-      "Advanced run replay",
-      "Artifact export",
-      "Email support",
-      "BYOK — bring your own keys",
-    ],
-  },
-  {
-    name: "Enterprise",
-    price: "Contact",
-    featured: false,
-    points: [
-      "Dedicated isolation",
-      "Contractual SLA",
-      "Deployment support",
-      "Compliance features",
-      "Custom integrations",
-      "BYOK — bring your own keys",
+      "Everything in Hobby, plus:",
+      "Multiple repos",
+      "Multiple harness playbooks",
+      "Save learnings across runs",
+      "Bring your own frontier models",
+      "Longer runtime and higher concurrency",
+      "Custom harness controls",
+      "Custom agent profiles per workflow",
+      "Team-level run observability and replay",
+      "Sandboxed execution with tighter isolation",
+      "Priority support",
     ],
   },
 ];
@@ -60,53 +41,48 @@ export default function Pricing() {
   return (
     <section className="stack">
       <p className="eyebrow">pricing</p>
-      <h1>BYOK + compute billing</h1>
+      <h1>Hobby and Scale plans</h1>
       <p className="lead">
-        UseZombie never resells model tokens. You bring your own LLM API keys from any provider and
-        pay them directly. We charge only for agent compute time — per second of wall-clock time that
-        workers (Echo, Scout, Warden) run your pipeline.
+        UseZombie never resells model tokens. Bring your own keys/models and pay providers directly.
+        UseZombie charges for agent compute runtime with clear plan boundaries.
       </p>
 
-      <div className="grid four">
+      <div className="grid two">
         {tiers.map((tier) => (
           <article key={tier.name} className={`card${tier.featured ? " featured" : ""}`}>
             <h2>{tier.name}</h2>
             <p className="price">{tier.price}</p>
-            <ul>
+            <ul className="pricing-points">
               {tier.points.map((point) => (
                 <li key={point}>{point}</li>
               ))}
             </ul>
-            {tier.name === "Enterprise" ? (
-              <Button variant="ghost" to="mailto:team@usezombie.com?subject=Enterprise" style={{ marginTop: "0.75rem" }}>
-                Contact sales
-              </Button>
-            ) : tier.name === "Open Source" ? (
-              <Button variant="ghost" to="https://github.com/usezombie" external style={{ marginTop: "0.75rem" }}>
-                View on GitHub
+            {tier.name === "Scale" ? (
+              <Button variant="ghost" to={MAILTO_SCALE_WAITLIST} style={{ marginTop: "0.75rem" }}>
+                Join waitlist — I want this now
               </Button>
             ) : (
-              <Button to="https://docs.usezombie.com/quickstart" style={{ marginTop: "0.75rem" }}>
-                {tier.name === "Hobby" ? "Start free" : "Start trial"}
+              <Button to={DOCS_QUICKSTART_URL} style={{ marginTop: "0.75rem" }}>
+                Start free
               </Button>
             )}
           </article>
         ))}
       </div>
 
-      <p className="fine">One-time workspace activation: $5. All plans include BYOK — you pay your LLM provider directly for tokens.</p>
+      <p className="fine">One-time workspace activation: $5. All plans include BYOK/BYOM and direct provider billing for token usage.</p>
 
       <FAQ />
 
       <div className="cta-block">
         <h2>Not sure which plan?</h2>
-        <p>Start free with a single workspace. Upgrade when you need more capacity or team features.</p>
+        <p>Start with Hobby for fast onboarding. Move to Scale for multi-repo orchestration, richer harness control, and saved team learnings.</p>
         <div className="cta-row">
-          <a className="cta" href="https://docs.usezombie.com/quickstart">
+          <a className="cta" href={DOCS_QUICKSTART_URL}>
             Start free
           </a>
-          <a className="cta ghost" href="mailto:team@usezombie.com?subject=Team%20Pilot">
-            Book team pilot
+          <a className="cta ghost" href={MAILTO_SCALE_WAITLIST}>
+            Join Scale waitlist
           </a>
         </div>
       </div>

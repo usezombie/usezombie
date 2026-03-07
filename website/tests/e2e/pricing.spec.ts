@@ -5,29 +5,23 @@ test.describe("Pricing page", () => {
     await page.goto("/pricing");
   });
 
-  test("renders BYOK heading", async ({ page }) => {
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("BYOK");
+  test("renders pricing heading", async ({ page }) => {
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Hobby and Scale plans");
   });
 
-  test("renders all 4 pricing tiers", async ({ page }) => {
-    await expect(page.getByRole("heading", { name: "Open Source", exact: true, level: 2 })).toBeVisible();
+  test("renders Hobby and Scale tiers", async ({ page }) => {
     await expect(page.getByRole("heading", { name: "Hobby", exact: true, level: 2 })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Pro", exact: true, level: 2 })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Enterprise", exact: true, level: 2 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Scale", exact: true, level: 2 })).toBeVisible();
   });
 
-  test("Pro tier has featured styling", async ({ page }) => {
-    const proCard = page.locator(".card.featured");
-    await expect(proCard).toBeVisible();
-    await expect(proCard).toContainText("Pro");
+  test("Scale tier has featured styling", async ({ page }) => {
+    const teamCard = page.locator(".card.featured");
+    await expect(teamCard).toBeVisible();
+    await expect(teamCard).toContainText("Scale");
   });
 
-  test("Hobby tier lists default agents", async ({ page }) => {
-    await expect(page.getByText(/Scout, Echo, Warden/i)).toBeVisible();
-  });
-
-  test("Open Source tier has View on GitHub CTA", async ({ page }) => {
-    await expect(page.getByRole("link", { name: /view on github/i })).toBeVisible();
+  test("Hobby tier lists free runtime window", async ({ page }) => {
+    await expect(page.getByText(/1 free runtime hour per day/i)).toBeVisible();
   });
 
   test("renders workspace activation fee note", async ({ page }) => {
@@ -63,9 +57,9 @@ test.describe("Pricing page", () => {
     await expect(cta).toHaveAttribute("href", "https://docs.usezombie.com/quickstart");
   });
 
-  test("Enterprise Contact sales CTA is a mailto link", async ({ page }) => {
-    const cta = page.getByRole("link", { name: /contact sales/i });
-    await expect(cta).toHaveAttribute("href", /mailto:/);
+  test("Scale waitlist CTA is a mailto link", async ({ page }) => {
+    const cta = page.getByRole("link", { name: /join waitlist/i });
+    await expect(cta).toHaveAttribute("href", /Scale%20Waitlist/);
   });
 
   test("footer renders on pricing page", async ({ page }) => {

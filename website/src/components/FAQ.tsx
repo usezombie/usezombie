@@ -11,7 +11,7 @@ const items = [
   },
   {
     q: "Can I try it before committing?",
-    a: "Yes. The Free tier gives you 1 workspace with low concurrency. No credit card required. Upgrade when you need more workspaces or priority queue access.",
+    a: "Yes. Hobby gives you a single workspace and a free daily runtime window. No credit card required. Upgrade to Team when you need higher limits and controls.",
   },
   {
     q: "What happens to my code?",
@@ -23,7 +23,7 @@ const items = [
   },
   {
     q: "Is there an SLA?",
-    a: "Enterprise tier includes contractual SLAs with dedicated isolation. Free, Pro, and Team tiers operate on best-effort with high availability targets.",
+    a: "Team runs with priority support and stronger execution boundaries. Contractual SLAs are handled through dedicated enterprise agreements when offered.",
   },
 ];
 

@@ -5,12 +5,12 @@ import CTABlock from "./CTABlock";
 describe("CTABlock", () => {
   it("renders the heading", () => {
     render(<CTABlock />);
-    expect(screen.getByRole("heading", { level: 2, name: /reliable PRs/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: /queue work\. review prs\. sleep\./i })).toBeInTheDocument();
   });
 
   it("renders the description", () => {
     render(<CTABlock />);
-    expect(screen.getByText(/start with a single workspace/i)).toBeInTheDocument();
+    expect(screen.getByText(/start with Hobby, then move to Team/i)).toBeInTheDocument();
   });
 
   it("renders Start free CTA with correct href", () => {

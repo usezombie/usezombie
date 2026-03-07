@@ -58,6 +58,20 @@ describe("Terminal — basic", () => {
     const pre = container.querySelector("pre");
     expect(pre).toHaveAttribute("data-command", "curl -sSL https://usezombie.sh/install | bash");
   });
+
+  it("renders sr-only fallback label when label prop is not provided", () => {
+    const { container } = render(<Terminal>cmd</Terminal>);
+    expect(container.querySelector(".sr-only")).toHaveTextContent("Code block");
+  });
+
+  it("does not set data-command for non-string children", () => {
+    const { container } = render(
+      <Terminal>
+        <span>cmd</span>
+      </Terminal>,
+    );
+    expect(container.querySelector("pre")).not.toHaveAttribute("data-command");
+  });
 });
 
 describe("Terminal — copyable", () => {
@@ -82,6 +96,18 @@ describe("Terminal — copyable", () => {
       fireEvent.click(screen.getByRole("button"));
     });
     expect(mockWriteText).toHaveBeenCalledWith("curl test");
+  });
+
+  it("copies empty string when children is not plain text", async () => {
+    render(
+      <Terminal copyable>
+        <span>cmd</span>
+      </Terminal>,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    expect(mockWriteText).toHaveBeenCalledWith("");
   });
 
   it("button shows Copied! state after click", async () => {

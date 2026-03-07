@@ -5,6 +5,7 @@ import Agents from "./pages/Agents";
 import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
 import Footer from "./components/Footer";
+import { APP_BASE_URL, DOCS_URL } from "./config";
 
 type Mode = "humans" | "agents";
 
@@ -92,8 +93,16 @@ export default function App() {
           <NavLink to="/">Home</NavLink>
           <NavLink to="/pricing">Pricing</NavLink>
           <NavLink to="/agents">Agents</NavLink>
-          <a href="https://docs.usezombie.com" target="_blank" rel="noopener noreferrer">Docs</a>
+          <a href={DOCS_URL} target="_blank" rel="noopener noreferrer">Docs</a>
         </nav>
+
+        {mode === "humans" && (
+          <div className="header-actions">
+            <a className="cta ghost" href={APP_BASE_URL}>
+              Log in
+            </a>
+          </div>
+        )}
       </header>
 
       <main className="site-main">

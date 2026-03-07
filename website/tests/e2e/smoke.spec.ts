@@ -14,7 +14,7 @@ test.describe("Smoke", () => {
 
   test("pricing page loads", async ({ page }) => {
     await page.goto("/pricing");
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("BYOK");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Hobby and Scale plans");
   });
 
   test("agents page loads", async ({ page }) => {

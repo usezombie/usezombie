@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, it, expect } from "vitest";
 import App from "./App";
+import { APP_BASE_URL } from "./config";
 
 function renderApp(initialRoute = "/") {
   return render(
@@ -60,7 +61,7 @@ describe("App", () => {
     await user.click(screen.getByRole("tab", { name: "Humans" }));
     expect(screen.getByRole("tab", { name: "Humans" })).toHaveAttribute("aria-selected", "true");
     // Should now show home page content
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/ship ai/i);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/ship ai-generated prs/i);
   });
 
   it("renders primary navigation in header", () => {
@@ -75,14 +76,27 @@ describe("App", () => {
     );
   });
 
+  it("renders only login header action in humans mode", () => {
+    renderApp("/");
+    const header = screen.getByRole("banner");
+    expect(within(header).getByRole("link", { name: "Log in" })).toHaveAttribute("href", APP_BASE_URL);
+    expect(within(header).queryByRole("link", { name: "Connect GitHub, automate PRs" })).not.toBeInTheDocument();
+  });
+
+  it("does not render humans header actions in agents mode", () => {
+    renderApp("/agents");
+    expect(screen.queryByRole("link", { name: "Log in" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Connect GitHub, automate PRs" })).not.toBeInTheDocument();
+  });
+
   it("renders home page by default", () => {
     renderApp("/");
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/ship ai/i);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/ship ai-generated prs/i);
   });
 
   it("renders pricing page at /pricing", () => {
     renderApp("/pricing");
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/byok/i);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/hobby and scale plans/i);
   });
 
   it("renders agents page at /agents", () => {

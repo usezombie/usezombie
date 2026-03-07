@@ -1,6 +1,5 @@
 import { Link } from "react-router-dom";
-
-const DISCORD_URL = "https://discord.gg/H9hH2nqQjh";
+import { DISCORD_URL, DOCS_URL, GITHUB_URL } from "../config";
 
 export default function Footer() {
   return (
@@ -8,7 +7,7 @@ export default function Footer() {
       <div className="footer-grid">
         <div className="footer-brand">
           <span className="brand">usezombie</span>
-          <p>Agent delivery control plane. Specs in, validated PRs out.</p>
+          <p>Agent delivery control plane for governed, review-ready pull requests.</p>
         </div>
 
         <div className="footer-col">
@@ -16,7 +15,7 @@ export default function Footer() {
           <ul>
             <li><Link to="/">Features</Link></li>
             <li><Link to="/pricing">Pricing</Link></li>
-            <li><a href="https://docs.usezombie.com" target="_blank" rel="noopener noreferrer">Docs</a></li>
+            <li><a href={DOCS_URL} target="_blank" rel="noopener noreferrer">Docs</a></li>
             <li><Link to="/agents">Agents</Link></li>
           </ul>
         </div>
@@ -24,7 +23,7 @@ export default function Footer() {
         <div className="footer-col">
           <h4>Community</h4>
           <ul>
-            <li><a href="https://github.com/usezombie" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+            <li><a href={GITHUB_URL} target="_blank" rel="noopener noreferrer">GitHub</a></li>
             <li><a href={DISCORD_URL} target="_blank" rel="noopener noreferrer">Discord</a></li>
           </ul>
         </div>
@@ -40,7 +39,6 @@ export default function Footer() {
 
       <div className="footer-bottom">
         <span>&copy; {new Date().getFullYear()} UseZombie. All rights reserved.</span>
-        <span>BYOK &middot; Compute billing &middot; CLI-first</span>
       </div>
     </footer>
   );

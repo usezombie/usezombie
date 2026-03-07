@@ -1,12 +1,12 @@
-# M4_002: Publish `zombiectl` npm Package
+# M6_005: Publish `zombiectl` npm Package
 
 **Prototype:** v1.0.0
-**Milestone:** M4
-**Workstream:** 002
+**Milestone:** M6
+**Workstream:** 005
 **Date:** Mar 06, 2026
 **Status:** PENDING
 **Priority:** P1 — distribution gate
-**Batch:** B3 — needs M4_001
+**Batch:** B7 — deferred after M6_003
 **Depends on:** M4_001 (Implement `zombiectl` CLI Runtime)
 
 ---

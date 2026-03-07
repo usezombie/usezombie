@@ -45,6 +45,9 @@ Railway selected for:
 
 ## 2. Environment Setup
 
+Canonical runtime env contract for `zombied` and `zombiectl`:
+- `docs/RUNTIME_ENV_CONTRACT.md`
+
 ### 2.1 Local development topology
 
 All three client surfaces (CLI, web, mobile) connect to `zombied` running on the developer's machine. Postgres and Redis run in Docker. External services use their **DEV instances**.
@@ -136,14 +139,7 @@ This runs `pass-cli inject -i .env.{ENV}.tpl -o .env -f`, resolving all `{{ pass
 | `RESEND_API_KEY` | ✅ | ✅ | ✅ | Email notifications |
 | `DISCORD_WEBHOOK_URL` | ✅ | ✅ | ✅ | Notifications |
 | `SLACK_WEBHOOK_URL` | ✅ | ✅ | ✅ | Notifications |
-| `DATABASE_URL` | — | ✅ | ✅ | Managed DB (local uses docker) |
-| `DATABASE_URL_API` | — | ✅ | ✅ | Managed DB |
-| `DATABASE_URL_WORKER` | — | ✅ | ✅ | Managed DB |
-| `DATABASE_URL_CALLBACK` | — | ✅ | ✅ | Managed DB |
-| `REDIS_URL` | — | ✅ | ✅ | Upstash Redis |
-| `REDIS_URL_API` | — | ✅ | ✅ | Upstash Redis |
-| `REDIS_URL_WORKER` | — | ✅ | ✅ | Upstash Redis |
-| `ENCRYPTION_MASTER_KEY` | — | ✅ | ✅ | Runtime encryption (local uses hardcoded dev key) |
+| `DATABASE_URL*`, `REDIS_URL*`, `ENCRYPTION_MASTER_KEY` | — | ✅ | ✅ | Runtime contract keys (see `docs/RUNTIME_ENV_CONTRACT.md`) |
 | `CHECKLY_API_KEY` | — | — | ✅ | Monitoring |
 | `CHECKLY_ACCOUNT_ID` | — | — | ✅ | Monitoring |
 | `CLOUDFLARE_API_TOKEN` | — | — | ✅ | DNS management |
@@ -379,19 +375,9 @@ Deploy in sequence.
 
 1. Deploy API instance(s) on selected host.
 2. Configure env vars:
-   - `DATABASE_URL_API`
-   - `REDIS_URL_API`
-   - `CLERK_SECRET_KEY`
-   - `CLERK_JWKS_URL`
-   - `ENCRYPTION_MASTER_KEY`
-   - `GITHUB_APP_ID`
-   - `GITHUB_APP_PRIVATE_KEY`
-   - `GITHUB_CLIENT_ID`
-   - `GITHUB_CLIENT_SECRET`
-   - `API_HTTP_THREADS` (default `1`)
-   - `API_HTTP_WORKERS` (default `1`)
-   - `API_MAX_CLIENTS` (default `1024`)
-   - `API_MAX_IN_FLIGHT_REQUESTS` (default `256`, local-process backpressure guard)
+   - Set required keys per `docs/RUNTIME_ENV_CONTRACT.md`.
+   - Keep role-separated DB/Redis URLs and Redis TLS (`rediss://`) requirements exactly as documented there.
+   - Keep operational knobs aligned (`API_HTTP_THREADS`, `API_HTTP_WORKERS`, `API_MAX_CLIENTS`, `API_MAX_IN_FLIGHT_REQUESTS`).
 3. Configure migration startup policy explicitly:
    - `MIGRATE_ON_START=0` (default/fail-closed): `serve` refuses startup if migrations are pending.
    - `MIGRATE_ON_START=1`: `serve` acquires DB migration advisory lock and applies pending migrations before serving traffic.
@@ -409,12 +395,8 @@ Deploy in sequence.
 
 1. Deploy worker on Linux host (Tailscale-connected).
 2. Configure env vars:
-   - `DATABASE_URL_WORKER`
-   - `REDIS_URL_WORKER`
-   - `ENCRYPTION_MASTER_KEY`
-   - `GITHUB_APP_ID`
-   - `GITHUB_APP_PRIVATE_KEY`
-   - `NULLCLAW_API_KEY` (default LLM key, or rely on BYOK per workspace)
+   - Set required worker/runtime keys per `docs/RUNTIME_ENV_CONTRACT.md`.
+   - `NULLCLAW_API_KEY` (default LLM key, or rely on BYOK per workspace).
 3. Verify worker joins Redis consumer group and claims queued runs.
 
 ### Step 6: CLI distribution
