@@ -1,23 +1,23 @@
 const steps = [
   {
-    title: "Queue a spec",
-    description: "Push a PENDING_*.md file to your repo or call the API. UseZombie picks it up automatically.",
+    title: "Queue work",
+    description: "Drop intent into your backlog and trigger a run from CLI or API. UseZombie picks up execution automatically.",
   },
   {
-    title: "Agent pipeline runs",
-    description: "Echo plans, Scout patches, Warden validates. Every transition is recorded with reason codes and artifacts.",
+    title: "Agents execute with guardrails",
+    description: "Echo plans, Scout patches, and Warden validates with policy controls, retries, and auditable artifacts.",
   },
   {
-    title: "Validated PR opens",
-    description: "A verified pull request lands in your repo with full audit trail, retry history, and artifact links.",
+    title: "Review a validated PR",
+    description: "A pull request opens with run replay, validation output, and clear context for fast reviewer decisions.",
   },
 ];
 
 export default function HowItWorks() {
   return (
     <div className="section-gap">
-      <p className="eyebrow">How it works</p>
-      <h2>Specs in. Validated PRs out.</h2>
+      <p className="eyebrow">Why UseZombie</p>
+      <h2>From queued intent to validated pull requests.</h2>
       <div className="how-steps">
         {steps.map((step) => (
           <div key={step.title} className="how-step">

@@ -1,4 +1,5 @@
 import { InstallBlock } from "../design-system";
+import { APP_BASE_URL, DOCS_QUICKSTART_URL, DOCS_URL } from "../config";
 
 const jsonLd = {
   "@context": "https://schema.org",
@@ -62,9 +63,9 @@ export default function Agents() {
         title="Install Zombiectl"
         command="curl -sSL https://usezombie.sh/install | bash"
         actions={[
-          { label: "Install Zombiectl", to: "https://docs.usezombie.com/quickstart", variant: "primary" },
-          { label: "Read the docs", to: "https://docs.usezombie.com", variant: "ghost" },
-          { label: "Setup your personal dashboard", to: "https://app.usezombie.com", variant: "double-border" },
+          { label: "Install Zombiectl", to: DOCS_QUICKSTART_URL, variant: "primary" },
+          { label: "Read the docs", to: DOCS_URL, variant: "ghost" },
+          { label: "Setup your personal dashboard", to: APP_BASE_URL, variant: "double-border" },
         ]}
       />
 

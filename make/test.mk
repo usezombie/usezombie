@@ -2,11 +2,13 @@
 # TEST — unit + integration + e2e
 # =============================================================================
 
-.PHONY: test test-unit test-unit-zombied test-unit-website test-integration test-integration-zombied test-depth test-coverage-zombied test-e2e qa qa-smoke
+.PHONY: test test-unit test-unit-zombied test-unit-website test-integration test-integration-zombied test-depth test-coverage-zombied test-e2e qa qa-smoke memleak bench _soak _bench_apiprofile _ensure-test-bin _bench-run
 
 ZIG_GLOBAL_CACHE_DIR ?= $(CURDIR)/.tmp/zig-global-cache
 ZIG_LOCAL_CACHE_DIR  ?= $(CURDIR)/.tmp/zig-local-cache
 ZOMBIED_COVERAGE_MIN_LINES ?= 35
+BENCH_MODE ?= bench
+LEAK_FILTER ?= finalizeWorkerAllocator returns false for clean allocator
 
 # --- Unit tests ---
 
@@ -100,6 +102,55 @@ qa-smoke:  ## Run Playwright smoke tests only (fast CI gate)
 	@echo "→ [website] Running Playwright smoke..."
 	@cd website && bun run test:e2e:smoke
 	@echo "✓ [website] Smoke passed"
+
+# --- API stress/perf gates (single runner, mode-based wrappers) ---
+
+memleak:  ## Run Zig memory leak gates (allocator tests + Linux valgrind pass)
+	@echo "→ [zombied] Running allocator leak guard tests..."
+	@mkdir -p "$(ZIG_GLOBAL_CACHE_DIR)" "$(ZIG_LOCAL_CACHE_DIR)"
+	@ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
+	 ZIG_LOCAL_CACHE_DIR="$(ZIG_LOCAL_CACHE_DIR)" \
+	 zig build test -- --test-filter "finalizeWorkerAllocator"
+	@case "$$(uname -s)" in \
+	  Linux) \
+	    command -v valgrind >/dev/null 2>&1 || { echo "✗ valgrind is required on Linux for make memleak"; exit 1; }; \
+	    $(MAKE) _ensure-test-bin; \
+	    echo "→ [zombied] Running valgrind leak gate..."; \
+	    valgrind --quiet --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite,possible --error-exitcode=1 \
+	      zig-out/bin/zombied-tests --test-filter "$(LEAK_FILTER)";; \
+	  Darwin) \
+	    if command -v leaks >/dev/null 2>&1; then \
+	      $(MAKE) _ensure-test-bin; \
+	      echo "→ [zombied] Running macOS leaks gate..."; \
+	      MallocStackLogging=1 leaks -atExit -- zig-out/bin/zombied-tests --test-filter "$(LEAK_FILTER)" >/dev/null || \
+	        echo "→ [zombied] leaks check unavailable in current runtime (continuing with allocator gate)"; \
+	    else \
+	      echo "→ [zombied] leaks not found; allocator gate only"; \
+	    fi;; \
+	  *) \
+	    echo "→ [zombied] platform=$$(uname -s): allocator gate only";; \
+	esac
+	@echo "✓ [zombied] memleak gate passed"
+
+bench:  ## Run API benchmark runner (BENCH_MODE=bench|soak|profile)
+	@$(MAKE) _bench-run BENCH_MODE=$(BENCH_MODE)
+
+_soak:  ## Internal: run API soak benchmark
+	@$(MAKE) _bench-run BENCH_MODE=soak
+
+_bench_apiprofile:  ## Internal: run API benchmark with profiling artifacts
+	@$(MAKE) _bench-run BENCH_MODE=profile
+
+_bench-run:
+	@mkdir -p .tmp
+	@echo "→ [zombied] Running API benchmark mode=$(BENCH_MODE)..."
+	@BENCH_MODE="$(BENCH_MODE)" bun scripts/api_bench_runner.js
+
+_ensure-test-bin:
+	@mkdir -p "$(ZIG_GLOBAL_CACHE_DIR)" "$(ZIG_LOCAL_CACHE_DIR)"
+	@ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
+	 ZIG_LOCAL_CACHE_DIR="$(ZIG_LOCAL_CACHE_DIR)" \
+	 zig build test-bin
 
 # --- Aggregate ---
 

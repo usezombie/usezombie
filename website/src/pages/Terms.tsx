@@ -7,7 +7,7 @@ export default function Terms() {
 
       <h2>1. Acceptance</h2>
       <p>
-        By accessing or using UseZombie ("the Service"), you agree to these Terms of Service.
+        By accessing or using UseZombie (&quot;the Service&quot;), you agree to these Terms of Service.
         If you do not agree, do not use the Service.
       </p>
 
@@ -42,7 +42,7 @@ export default function Terms() {
 
       <h2>6. Limitation of Liability</h2>
       <p>
-        UseZombie is provided "as is" without warranty. We are not liable for damages arising
+        UseZombie is provided &quot;as is&quot; without warranty. We are not liable for damages arising
         from agent-generated code, pipeline failures, or third-party service outages. Enterprise
         tier customers may negotiate contractual SLAs.
       </p>

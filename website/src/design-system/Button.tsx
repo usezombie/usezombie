@@ -33,7 +33,8 @@ export default function Button(props: ButtonProps) {
   const cls = classNames(variant);
 
   if (isLink(props)) {
-    const { to, external, variant: _, children, ...rest } = props;
+    const { to, external, variant, children, ...rest } = props;
+    void variant;
     if (external || to.startsWith("http") || to.startsWith("mailto:")) {
       return (
         <a className={cls} href={to} target={external ? "_blank" : undefined} rel={external ? "noopener noreferrer" : undefined} {...rest}>
@@ -48,7 +49,8 @@ export default function Button(props: ButtonProps) {
     );
   }
 
-  const { variant: _, children, ...rest } = props;
+  const { variant: propsVariant, children, ...rest } = props;
+  void propsVariant;
   return (
     <button className={cls} type="button" {...rest}>
       {children}

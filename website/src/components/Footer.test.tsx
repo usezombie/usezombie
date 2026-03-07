@@ -35,7 +35,7 @@ describe("Footer", () => {
     renderFooter();
     expect(screen.getByText("Community")).toBeInTheDocument();
     const github = screen.getByRole("link", { name: "GitHub" });
-    expect(github).toHaveAttribute("href", "https://github.com/usezombie");
+    expect(github).toHaveAttribute("href", "https://github.com/usezombie/usezombie");
     expect(github).toHaveAttribute("target", "_blank");
     expect(github).toHaveAttribute("rel", "noopener noreferrer");
 
@@ -58,8 +58,8 @@ describe("Footer", () => {
     expect(screen.getByText(new RegExp(year))).toBeInTheDocument();
   });
 
-  it("renders the BYOK tagline in footer bottom", () => {
+  it("does not render the legacy BYOK filler footer text", () => {
     renderFooter();
-    expect(screen.getByText(/BYOK/)).toBeInTheDocument();
+    expect(screen.queryByText(/BYOK/)).not.toBeInTheDocument();
   });
 });

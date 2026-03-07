@@ -15,7 +15,7 @@ function renderPricing() {
 describe("Pricing", () => {
   it("renders the heading", () => {
     renderPricing();
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/byok \+ compute billing/i);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/hobby and scale plans/i);
   });
 
   it("renders the BYOK explanation", () => {
@@ -23,39 +23,34 @@ describe("Pricing", () => {
     expect(screen.getByText(/never resells model tokens/i)).toBeInTheDocument();
   });
 
-  it("renders all 4 pricing tiers (Open Source, Hobby, Pro, Enterprise)", () => {
+  it("renders Hobby and Scale tiers", () => {
     renderPricing();
-    expect(screen.getByText("Open Source")).toBeInTheDocument();
     expect(screen.getByText("Hobby")).toBeInTheDocument();
-    expect(screen.getByText("Pro")).toBeInTheDocument();
-    expect(screen.getByText("Enterprise")).toBeInTheDocument();
+    expect(screen.getByText("Scale")).toBeInTheDocument();
   });
 
   it("renders prices for each tier", () => {
     renderPricing();
-    const freeTexts = screen.getAllByText("Free");
-    expect(freeTexts.length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("$0")).toBeInTheDocument();
-    expect(screen.getByText("$39/mo")).toBeInTheDocument();
-    expect(screen.getByText("Contact")).toBeInTheDocument();
+    expect(screen.getByText("Coming soon")).toBeInTheDocument();
   });
 
-  it("marks Pro tier as featured", () => {
+  it("marks Scale tier as featured", () => {
     const { container } = renderPricing();
     const featured = container.querySelector(".card.featured");
     expect(featured).not.toBeNull();
-    expect(featured!.textContent).toContain("Pro");
+    expect(featured!.textContent).toContain("Scale");
   });
 
-  it("renders Hobby tier with default agents", () => {
+  it("renders Hobby tier with free runtime window", () => {
     renderPricing();
-    expect(screen.getByText(/3 default agents \(Scout, Echo, Warden\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 free runtime hour per day/i)).toBeInTheDocument();
   });
 
-  it("renders BYOK feature in each tier", () => {
+  it("renders BYOK/BYOM feature language", () => {
     renderPricing();
-    const byokItems = screen.getAllByText(/byok/i);
-    expect(byokItems.length).toBeGreaterThanOrEqual(4);
+    const byokItems = screen.getAllByText(/byok\/byom/i);
+    expect(byokItems.length).toBeGreaterThanOrEqual(2);
   });
 
   it("renders Start free CTA for Hobby tier", () => {
@@ -64,19 +59,11 @@ describe("Pricing", () => {
     expect(startFree.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("renders View on GitHub CTA for Open Source tier", () => {
+  it("renders waitlist CTA for Scale", () => {
     renderPricing();
-    expect(screen.getByRole("link", { name: /view on github/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /join waitlist/i })).toHaveAttribute(
       "href",
-      "https://github.com/usezombie"
-    );
-  });
-
-  it("renders Contact sales CTA for Enterprise", () => {
-    renderPricing();
-    expect(screen.getByRole("link", { name: /contact sales/i })).toHaveAttribute(
-      "href",
-      expect.stringContaining("mailto:")
+      expect.stringContaining("Scale%20Waitlist")
     );
   });
 

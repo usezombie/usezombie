@@ -1,47 +1,44 @@
 import { Link } from "react-router-dom";
+import Hero from "../components/Hero";
 import FeatureSection from "../components/FeatureSection";
 import ProviderStrip from "../components/ProviderStrip";
+import FeatureFlow from "../components/FeatureFlow";
 import HowItWorks from "../components/HowItWorks";
 import CTABlock from "../components/CTABlock";
+import InstallBlock from "../design-system/InstallBlock";
+import { APP_BASE_URL, DOCS_URL } from "../config";
 
 const features = [
   {
     number: "01",
-    title: "Deterministic Lifecycle",
+    title: "Automated PR delivery",
     description:
-      "Every spec follows a strict state machine: SPEC_QUEUED, RUN_PLANNED, PATCH_IN_PROGRESS, VERIFICATION_IN_PROGRESS, PR_PREPARED, PR_OPENED, NOTIFIED, DONE. No ambiguity, no silent failures. Each transition is recorded with reason codes and timestamps.",
+      "Move from queued engineering intent to review-ready pull requests without manually orchestrating each run.",
   },
   {
     number: "02",
-    title: "BYOK Trust Model",
+    title: "Bring your own models",
     description:
-      "You bring your own LLM API keys from Anthropic, OpenAI, Google, or any provider. UseZombie never touches your tokens and never marks them up. You pay your provider directly. We bill only for agent compute time.",
+      "Connect the model providers your team already uses. UseZombie focuses on controlled execution and delivery, not token resale.",
   },
   {
     number: "03",
-    title: "Run Replay and Audit Trail",
+    title: "Built-in harness and validation",
     description:
-      "Every run produces artifacts: plan.json, implementation.md, validation.md, defect reports, and a run summary. Inspect any transition, see why a patch was retried, and replay failed attempts with full context.",
+      "Run checks before reviewers are pulled in. Validation output and run context ship with each PR so issues are found earlier.",
   },
   {
     number: "04",
-    title: "Operational Controls",
+    title: "Custom agent profiles",
     description:
-      "Pause workspaces, enforce policies by command class (safe, sensitive, critical), and lock down destructive operations. Encrypted vault secrets, subprocess timeouts, and Git hook disabling keep your repos safe.",
+      "Define team-specific workflows for Echo, Scout, and Warden so each repo gets the right behavior and constraints.",
   },
   {
     number: "05",
-    title: "CLI-First, Agent-Ready",
+    title: "Replay, observability, and isolation",
     description:
-      "Launch with npx zombiectl. Machine-readable onboarding at usezombie.sh with OpenAPI spec, agent manifests, and skill.md. Built for both human operators and autonomous agents from day one.",
+      "Investigate retries with full run replay, track agent output quality, and keep execution boundaries tighter for untrusted code.",
   },
-];
-
-const pricingPreview = [
-  { name: "Open Source", price: "Free", point: "Self-host, unlimited" },
-  { name: "Hobby", price: "$0", point: "3 agents: Scout, Echo, Warden" },
-  { name: "Pro", price: "$39/mo", point: "Unlimited agents + harness" },
-  { name: "Enterprise", price: "Contact", point: "Dedicated isolation, SLA" },
 ];
 
 type Props = {
@@ -49,69 +46,46 @@ type Props = {
 };
 
 export default function Home({ mode }: Props) {
+  if (mode === "humans") {
+    return (
+      <section className="stack home-stack">
+        <Hero mode={mode} />
+        <FeatureFlow />
+        <HowItWorks />
+        <div className="section-gap">
+          <InstallBlock
+            title="Install zombiectl and connect GitHub"
+            command="curl -fsSL https://usezombie.sh/install.sh | bash"
+            actions={[
+              { label: "Read the docs", to: DOCS_URL, variant: "ghost" },
+              { label: "Connect GitHub, automate PRs", to: APP_BASE_URL, variant: "double-border" },
+            ]}
+          />
+        </div>
+      </section>
+    );
+  }
+
   return (
-    <section className="stack">
-      {/* Hero */}
-      <p className="eyebrow">
-        {mode === "humans" ? "for engineering teams" : "agent delivery control plane"}
-      </p>
-      <h1>Ship AI&#8209;generated PRs with policy, replay, and reliability.</h1>
-      <p className="lead">
-        UseZombie turns spec queues into validated pull requests. Deterministic lifecycle, transition
-        audits, artifact trails, and retry-safe delivery — for teams that need their agent output to
-        actually ship.
-      </p>
-      <div className="cta-row">
-        <a className="cta" href="https://docs.usezombie.com/quickstart">
-          Start free
-        </a>
-        <a className="cta ghost" href="mailto:team@usezombie.com?subject=Team%20Pilot">
-          Book team pilot
-        </a>
-      </div>
-
-      <pre className="terminal" aria-label="Quick start command">
-        <code>npx zombiectl login &amp;&amp; zombiectl workspace add https://github.com/your-org/your-repo</code>
-      </pre>
-
-      {/* BYOK Provider strip */}
+    <section className="stack home-stack">
+      <Hero mode={mode} />
       <ProviderStrip />
-
-      {/* Features */}
-      <div className="section-gap">
+      <div className="section-gap home-section-head">
         <p className="eyebrow">Features</p>
-        <h2>What UseZombie handles for you</h2>
+        <h2>What teams get from UseZombie</h2>
       </div>
-      {features.map((f) => (
-        <FeatureSection key={f.number} number={f.number} title={f.title} description={f.description} />
-      ))}
-
-      {/* How it works */}
+      <div className="grid two features-grid">
+        {features.map((f) => (
+          <FeatureSection key={f.number} number={f.number} title={f.title} description={f.description} />
+        ))}
+      </div>
       <HowItWorks />
-
-      {/* Pricing preview */}
-      <div className="section-gap">
-        <p className="eyebrow">Pricing</p>
-        <h2>BYOK + compute billing</h2>
-        <p className="lead">No token markup. Pay for agent runtime only.</p>
-        <div className="grid four">
-          {pricingPreview.map((tier) => (
-            <article key={tier.name} className="card">
-              <h3>{tier.name}</h3>
-              <p className="price">{tier.price}</p>
-              <p>{tier.point}</p>
-            </article>
-          ))}
-        </div>
-        <div className="cta-row" style={{ marginTop: "1rem" }}>
-          <Link className="cta ghost" to="/pricing">
-            View full pricing
-          </Link>
-        </div>
-      </div>
-
-      {/* CTA block */}
       <CTABlock />
+      <div className="cta-row" style={{ marginTop: "1rem" }}>
+        <Link className="cta ghost" to="/pricing">
+          View full pricing
+        </Link>
+      </div>
     </section>
   );
 }
