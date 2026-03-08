@@ -91,7 +91,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: website
+        working-directory: ui/packages/website
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -107,7 +107,7 @@ jobs:
     needs: lint-website
     defaults:
       run:
-        working-directory: website
+        working-directory: ui/packages/website
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -118,7 +118,7 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
-          files: website/coverage/lcov.info
+          files: ui/packages/website/coverage/lcov.info
           flags: website
           fail_ci_if_error: true
         env:
@@ -127,7 +127,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: website-coverage
-          path: website/coverage/
+          path: ui/packages/website/coverage/
           retention-days: 7
 
   # ── website: Playwright smoke (every push, dev server) ───────────────────
@@ -136,7 +136,7 @@ jobs:
     needs: lint-website
     defaults:
       run:
-        working-directory: website
+        working-directory: ui/packages/website
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -152,7 +152,7 @@ jobs:
         if: always()
         with:
           name: playwright-report
-          path: website/playwright-report/
+          path: ui/packages/website/playwright-report/
           retention-days: 7
 
   # ── Push dev container on develop branch merges ──────────────────────────

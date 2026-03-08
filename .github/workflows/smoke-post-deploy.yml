@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: website
+        working-directory: ui/packages/website
     steps:
       - uses: actions/checkout@v4
 
@@ -36,5 +36,5 @@ jobs:
         if: always()
         with:
           name: smoke-post-deploy-${{ github.sha }}
-          path: website/playwright-report/
+          path: ui/packages/website/playwright-report/
           retention-days: 7

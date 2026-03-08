@@ -14,8 +14,8 @@ _fmt_check:
 
 _website_lint:
 	@echo "→ [website] Running ESLint + TypeScript check..."
-	@cd website && bun run lint
-	@cd website && bun run typecheck
+	@cd ui/packages/website && bun run lint
+	@cd ui/packages/website && bun run typecheck
 	@echo "✓ [website] Lint passed"
 
 lint-zig: _fmt_check _fmt  ## Lint zombied only (Zig fmt)
