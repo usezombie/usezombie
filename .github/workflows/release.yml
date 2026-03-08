@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build and push production image
         run: |
@@ -76,9 +76,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 25
           registry-url: https://registry.npmjs.org
 
       - run: npm ci
@@ -107,7 +107,7 @@ jobs:
           sed -n "/^## \[$VERSION\]/,/^## \[/p" CHANGELOG.md | sed '$d' > release_notes.txt
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           body_path: release_notes.txt
           files: dist/*.tar.gz
