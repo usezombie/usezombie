@@ -29,7 +29,7 @@ test-unit-zombied:  ## Run zombied unit tests (Zig)
 
 test-unit-website:  ## Run website unit tests (vitest)
 	@echo "→ [website] Running Vitest unit tests..."
-	@cd website && bun run test
+	@cd ui/packages/website && bun run test
 	@echo "✓ [website] Unit tests passed"
 
 test-unit: test-unit-zombied test-unit-website  ## Run all unit tests (zombied + website)
@@ -95,12 +95,12 @@ test-e2e:  ## Run e2e API flow against a running local service
 
 qa:  ## Run Playwright e2e tests (full suite)
 	@echo "→ [website] Running Playwright e2e..."
-	@cd website && bun run test:e2e
+	@cd ui/packages/website && bun run test:e2e
 	@echo "✓ [website] E2E passed"
 
 qa-smoke:  ## Run Playwright smoke tests only (fast CI gate)
 	@echo "→ [website] Running Playwright smoke..."
-	@cd website && bun run test:e2e:smoke
+	@cd ui/packages/website && bun run test:e2e:smoke
 	@echo "✓ [website] Smoke passed"
 
 # --- API stress/perf gates (single runner, mode-based wrappers) ---

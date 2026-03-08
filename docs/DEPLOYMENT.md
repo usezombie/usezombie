@@ -46,7 +46,7 @@ Railway selected for:
 ## 2. Environment Setup
 
 Canonical runtime env contract for `zombied` and `zombiectl`:
-- `docs/RUNTIME_ENV_CONTRACT.md`
+- `docs/CONFIGURATION.md`
 
 ### 2.1 Local development topology
 
@@ -139,7 +139,7 @@ This runs `pass-cli inject -i .env.{ENV}.tpl -o .env -f`, resolving all `{{ pass
 | `RESEND_API_KEY` | ✅ | ✅ | ✅ | Email notifications |
 | `DISCORD_WEBHOOK_URL` | ✅ | ✅ | ✅ | Notifications |
 | `SLACK_WEBHOOK_URL` | ✅ | ✅ | ✅ | Notifications |
-| `DATABASE_URL*`, `REDIS_URL*`, `ENCRYPTION_MASTER_KEY` | — | ✅ | ✅ | Runtime contract keys (see `docs/RUNTIME_ENV_CONTRACT.md`) |
+| `DATABASE_URL*`, `REDIS_URL*`, `ENCRYPTION_MASTER_KEY` | — | ✅ | ✅ | Runtime contract keys (see `docs/CONFIGURATION.md`) |
 | `CHECKLY_API_KEY` | — | — | ✅ | Monitoring |
 | `CHECKLY_ACCOUNT_ID` | — | — | ✅ | Monitoring |
 | `CLOUDFLARE_API_TOKEN` | — | — | ✅ | DNS management |
@@ -162,6 +162,10 @@ Vault ownership and scope:
    - External → API only (443 via load balancer)
    - External → Postgres, Redis, Worker: DENIED
 3. For managed Postgres/Redis: set IP allowlists to Tailscale exit node IPs.
+4. TLS termination model:
+   - Terminate HTTPS at the load balancer / ingress.
+   - Run `zombied serve` on private HTTP behind the load balancer.
+   - Do not expose `zombied serve` directly on the public internet.
 
 ### 2.4 Redis setup
 
@@ -274,7 +278,7 @@ Local notes:
 2. Generate `.env` with `make env` (injects from `ZOMBIE_LOCAL` vault via `pass-cli inject`).
 3. Clerk: reuse dev instance for auth E2E. Skip for pure API development (use `API_KEY` fallback).
 4. NullClaw sandbox may use bubblewrap on Linux Docker or degrade gracefully on macOS.
-5. Website: `cd website && npm run dev` for local preview.
+5. Website: `cd ui/packages/website && npm run dev` for local preview.
 
 ### 3.2 Environment Development
 
@@ -333,7 +337,7 @@ Three client surfaces consume the same `zombied` API. Each follows the same loca
 
 | Stage | API target | Auth | How to run |
 |-------|-----------|------|------------|
-| LOCAL | `http://localhost:3000` | Clerk DEV browser flow | `cd website && npm run dev` |
+| LOCAL | `http://localhost:3000` | Clerk DEV browser flow | `cd ui/packages/website && npm run dev` |
 | DEV | `https://api.dev.usezombie.com` | Clerk DEV browser flow | Vercel preview deploy |
 | PROD | `https://api.usezombie.com` | Clerk PROD browser flow | Vercel production deploy |
 
@@ -352,7 +356,7 @@ Deploy in sequence.
 ### Step 1: DNS + Website
 
 1. Configure Cloudflare DNS records per section 2.5.
-2. Deploy static website to Vercel from `website/` directory.
+2. Deploy static website to Vercel from `ui/packages/website/` directory.
 3. Verify `usezombie.com` and `usezombie.sh` load correctly.
 4. Verify `usezombie.sh/openapi.json` and `usezombie.sh/agent-manifest.json` return valid responses.
 
@@ -375,7 +379,7 @@ Deploy in sequence.
 
 1. Deploy API instance(s) on selected host.
 2. Configure env vars:
-   - Set required keys per `docs/RUNTIME_ENV_CONTRACT.md`.
+   - Set required keys per `docs/CONFIGURATION.md`.
    - Keep role-separated DB/Redis URLs and Redis TLS (`rediss://`) requirements exactly as documented there.
    - Keep operational knobs aligned (`API_HTTP_THREADS`, `API_HTTP_WORKERS`, `API_MAX_CLIENTS`, `API_MAX_IN_FLIGHT_REQUESTS`).
 3. Configure migration startup policy explicitly:
@@ -386,7 +390,11 @@ Deploy in sequence.
    - If migration lock is busy, `serve` exits immediately (`migration in progress`) and should be restarted after lock holder completes.
    - If DB schema version is newer than binary's canonical migrations, `serve` exits (binary/schema mismatch).
 5. Verify `/healthz` and `/readyz` endpoints.
-6. Security hardening guardrail:
+6. Ingress/TLS contract:
+   - Public clients must use `https://` endpoints.
+   - TLS terminates at LB/ingress; upstream from LB to `zombied serve` remains private network HTTP.
+   - If your platform supports end-to-end TLS upstream, keep it enabled; otherwise private network HTTP is acceptable for v1.
+7. Security hardening guardrail:
    - `DATABASE_URL_API` and `DATABASE_URL_WORKER` must both be set and must differ.
    - `REDIS_URL_API` and `REDIS_URL_WORKER` must both be set, must differ, and must use `rediss://`.
    - Shared fallback URLs are rejected at startup (fail closed).
@@ -395,7 +403,7 @@ Deploy in sequence.
 
 1. Deploy worker on Linux host (Tailscale-connected).
 2. Configure env vars:
-   - Set required worker/runtime keys per `docs/RUNTIME_ENV_CONTRACT.md`.
+   - Set required worker/runtime keys per `docs/CONFIGURATION.md`.
    - `NULLCLAW_API_KEY` (default LLM key, or rely on BYOK per workspace).
 3. Verify worker joins Redis consumer group and claims queued runs.
 
@@ -418,6 +426,9 @@ curl -sS https://api.usezombie.com/readyz | jq '.queue_dependency,.ready'
 # CLI auth
 npx zombiectl login
 npx zombiectl doctor
+
+# Machine-readable runtime checks
+zombied doctor --format=json
 
 # Workspace setup
 npx zombiectl workspace add https://github.com/indykish/terraform-provider-e2e
