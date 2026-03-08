@@ -14,7 +14,7 @@ jobs:
       run:
         working-directory: ui/packages/website
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -32,7 +32,7 @@ jobs:
           BASE_URL: ${{ github.event.deployment_status.target_url }}
 
       - name: Upload Playwright report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: smoke-post-deploy-${{ github.sha }}
