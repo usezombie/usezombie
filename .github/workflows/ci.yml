@@ -9,7 +9,7 @@ jobs:
   lint-zig:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
@@ -20,25 +20,30 @@ jobs:
     runs-on: ubuntu-latest
     needs: lint-zig
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
       - run: make test-unit-zombied
 
   # ── zombied: Zig line coverage (kcov + codecov) ─────────────────────────
+  # Debian Trixie ships kcov v43 in its repos.
   coverage-zig:
     runs-on: ubuntu-latest
+    container:
+      image: debian:trixie-slim
+      options: --security-opt seccomp=unconfined
     needs: test-zig
     steps:
-      - uses: actions/checkout@v4
+      - name: Install kcov and toolchain deps
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            kcov git curl xz-utils ca-certificates make gpg
+      - uses: actions/checkout@v6
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-      - name: Install kcov
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y kcov
       - name: Run backend coverage gate
         run: make test-coverage-zombied
       - name: Upload backend coverage to Codecov
@@ -50,7 +55,7 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload backend coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: zombied-coverage
           path: coverage/zombied/
@@ -63,7 +68,7 @@ jobs:
       run:
         working-directory: cli
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -79,7 +84,7 @@ jobs:
       run:
         working-directory: cli
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -93,7 +98,7 @@ jobs:
       run:
         working-directory: ui/packages/website
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.10
@@ -109,7 +114,7 @@ jobs:
       run:
         working-directory: ui/packages/website
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.10
@@ -124,7 +129,7 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: website-coverage
           path: ui/packages/website/coverage/
@@ -138,7 +143,7 @@ jobs:
       run:
         working-directory: ui/packages/website
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.10
@@ -148,7 +153,7 @@ jobs:
       - name: Run smoke tests
         run: bun run test:e2e:smoke
       - name: Upload Playwright report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: playwright-report
@@ -163,7 +168,7 @@ jobs:
     permissions:
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Build and push dev image
