@@ -13,3 +13,11 @@ docker/redis/tls/*.srl
 node_modules/
 dist/
 coverage/
+.next/
+**/.next/
+playwright-report/
+playwright-results/
+playwright-tests/
+test-results/
+blob-report/
+**/tsconfig.tsbuildinfo

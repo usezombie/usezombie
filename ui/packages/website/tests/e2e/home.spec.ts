@@ -53,7 +53,7 @@ test.describe("Home page", () => {
   test("header Pricing link navigates to /pricing via React Router", async ({ page }) => {
     await page.getByRole("navigation", { name: /primary/i }).getByRole("link", { name: "Pricing" }).click();
     await expect(page).toHaveURL(/\/pricing/);
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("Hobby and Scale plans");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Free and Scale plans");
   });
 
   test("footer is present with canonical Discord URL", async ({ page }) => {
