@@ -4,12 +4,12 @@ import { DOCS_QUICKSTART_URL, MAILTO_SCALE_WAITLIST } from "../config";
 
 const tiers = [
   {
-    name: "Hobby",
+    name: "Free",
     price: "$0",
     featured: false,
     points: [
-      "1 project workspace",
-      "1 free runtime hour per day",
+      "$10 credit included (no expiry)",
+      "1 workspace",
       "Automated pull request generation",
       "Built-in harness validation in PR flow",
       "Open-source model path included",
@@ -22,12 +22,14 @@ const tiers = [
     price: "Coming soon",
     featured: true,
     points: [
-      "Everything in Hobby, plus:",
+      "Everything in Free, plus:",
       "Multiple repos",
       "Multiple harness playbooks",
       "Save learnings across runs",
       "Bring your own frontier models",
       "Longer runtime and higher concurrency",
+      "Usage-based billing for completed agent execution",
+      "No charge for failed or incomplete agent runs",
       "Custom harness controls",
       "Custom agent profiles per workflow",
       "Team-level run observability and replay",
@@ -41,7 +43,7 @@ export default function Pricing() {
   return (
     <section className="stack">
       <p className="eyebrow">pricing</p>
-      <h1>Hobby and Scale plans</h1>
+      <h1>Free and Scale plans</h1>
       <p className="lead">
         UseZombie never resells model tokens. Bring your own keys/models and pay providers directly.
         UseZombie charges for agent compute runtime with clear plan boundaries.
@@ -70,13 +72,15 @@ export default function Pricing() {
         ))}
       </div>
 
-      <p className="fine">One-time workspace activation: $5. All plans include BYOK/BYOM and direct provider billing for token usage.</p>
+      <p className="fine">
+        All plans include BYOK/BYOM and direct provider billing for token usage. Rate limits, abuse checks, and policy controls apply to all plans.
+      </p>
 
       <FAQ />
 
       <div className="cta-block">
         <h2>Not sure which plan?</h2>
-        <p>Start with Hobby for fast onboarding. Move to Scale for multi-repo orchestration, richer harness control, and saved team learnings.</p>
+        <p>Start with Free for fast onboarding. Move to Scale for multi-repo orchestration, richer harness control, and saved team learnings.</p>
         <div className="cta-row">
           <a className="cta" href={DOCS_QUICKSTART_URL}>
             Start free

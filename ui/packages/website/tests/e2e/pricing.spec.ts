@@ -6,11 +6,11 @@ test.describe("Pricing page", () => {
   });
 
   test("renders pricing heading", async ({ page }) => {
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("Hobby and Scale plans");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Free and Scale plans");
   });
 
-  test("renders Hobby and Scale tiers", async ({ page }) => {
-    await expect(page.getByRole("heading", { name: "Hobby", exact: true, level: 2 })).toBeVisible();
+  test("renders Free and Scale tiers", async ({ page }) => {
+    await expect(page.getByRole("heading", { name: "Free", exact: true, level: 2 })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Scale", exact: true, level: 2 })).toBeVisible();
   });
 
@@ -20,12 +20,12 @@ test.describe("Pricing page", () => {
     await expect(teamCard).toContainText("Scale");
   });
 
-  test("Hobby tier lists free runtime window", async ({ page }) => {
-    await expect(page.getByText(/1 free runtime hour per day/i)).toBeVisible();
+  test("Free tier lists no-expiry credit", async ({ page }) => {
+    await expect(page.getByText(/\$10 credit included \(no expiry\)/i)).toBeVisible();
   });
 
-  test("renders workspace activation fee note", async ({ page }) => {
-    await expect(page.getByText(/one-time workspace activation/i)).toBeVisible();
+  test("renders protections note for all plans", async ({ page }) => {
+    await expect(page.getByText(/rate limits, abuse checks, and policy controls apply to all plans/i)).toBeVisible();
   });
 
   test("FAQ accordion: first item opens on click", async ({ page }) => {

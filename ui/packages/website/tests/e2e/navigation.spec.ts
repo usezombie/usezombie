@@ -29,7 +29,7 @@ test.describe("Footer navigation", () => {
 
     await expect(page).toHaveURL(/\/pricing/);
     await expect(page.getByTestId("mode-humans")).toHaveClass(/active/);
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("Hobby and Scale plans");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Free and Scale plans");
   });
 
   test("footer Features link navigates to / and Humans mode is active", async ({ page }) => {
@@ -136,7 +136,7 @@ test.describe("Mode toggle — multi-step cycles", () => {
 
   test("pricing → home → agents → home flow", async ({ page }) => {
     await page.goto("/pricing");
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("Hobby and Scale plans");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Free and Scale plans");
 
     // Nav to home
     await page.getByRole("navigation", { name: /primary/i }).getByRole("link", { name: "Home" }).click();
@@ -158,7 +158,7 @@ test.describe("Mode toggle — multi-step cycles", () => {
     await page.goto("/");
     await page.getByRole("navigation", { name: /primary/i }).getByRole("link", { name: "Pricing" }).click();
     await expect(page).toHaveURL(/\/pricing/);
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("Hobby and Scale plans");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Free and Scale plans");
 
     await page.getByRole("navigation", { name: /primary/i }).getByRole("link", { name: "Home" }).click();
     await expect(page).toHaveURL(/^http:\/\/[^/]+\/$/);

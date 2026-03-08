@@ -15,7 +15,7 @@ function renderPricing() {
 describe("Pricing", () => {
   it("renders the heading", () => {
     renderPricing();
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/hobby and scale plans/i);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/free and scale plans/i);
   });
 
   it("renders the BYOK explanation", () => {
@@ -23,9 +23,9 @@ describe("Pricing", () => {
     expect(screen.getByText(/never resells model tokens/i)).toBeInTheDocument();
   });
 
-  it("renders Hobby and Scale tiers", () => {
+  it("renders Free and Scale tiers", () => {
     renderPricing();
-    expect(screen.getByText("Hobby")).toBeInTheDocument();
+    expect(screen.getByText("Free")).toBeInTheDocument();
     expect(screen.getByText("Scale")).toBeInTheDocument();
   });
 
@@ -42,9 +42,9 @@ describe("Pricing", () => {
     expect(featured!.textContent).toContain("Scale");
   });
 
-  it("renders Hobby tier with free runtime window", () => {
+  it("renders Free tier with no-expiry credit", () => {
     renderPricing();
-    expect(screen.getByText(/1 free runtime hour per day/i)).toBeInTheDocument();
+    expect(screen.getByText(/\$10 credit included \(no expiry\)/i)).toBeInTheDocument();
   });
 
   it("renders BYOK/BYOM feature language", () => {
@@ -53,7 +53,7 @@ describe("Pricing", () => {
     expect(byokItems.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("renders Start free CTA for Hobby tier", () => {
+  it("renders Start free CTA for Free tier", () => {
     renderPricing();
     const startFree = screen.getAllByRole("link", { name: /start free/i });
     expect(startFree.length).toBeGreaterThanOrEqual(1);
@@ -67,9 +67,15 @@ describe("Pricing", () => {
     );
   });
 
-  it("renders workspace activation fee note", () => {
+  it("renders note that protections apply to all plans", () => {
     renderPricing();
-    expect(screen.getByText(/one-time workspace activation: \$5/i)).toBeInTheDocument();
+    expect(screen.getByText(/rate limits, abuse checks, and policy controls apply to all plans/i)).toBeInTheDocument();
+  });
+
+  it("renders usage billing language for Scale", () => {
+    renderPricing();
+    expect(screen.getByText(/usage-based billing for completed agent execution/i)).toBeInTheDocument();
+    expect(screen.getByText(/no charge for failed or incomplete agent runs/i)).toBeInTheDocument();
   });
 
   it("renders FAQ section", () => {

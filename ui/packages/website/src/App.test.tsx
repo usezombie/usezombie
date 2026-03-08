@@ -104,7 +104,7 @@ describe("App", () => {
 
   it("renders pricing page at /pricing", () => {
     renderApp("/pricing");
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/hobby and scale plans/i);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/free and scale plans/i);
   });
 
   it("renders agents page at /agents", () => {
