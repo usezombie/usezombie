@@ -1,6 +1,0 @@
-{
-  "version": 3,
-  "sources": [],
-  "sections": [
-    {"offset": {"line": 22, "column": 0}, "map": {"version":3,"sources":["file:///Users/kishore/Projects/usezombie/app/app/layout.tsx"],"sourcesContent":["import type { Metadata } from \"next\";\nimport { ClerkProvider } from \"@clerk/nextjs\";\nimport \"./globals.css\";\n\nexport const metadata: Metadata = {\n  title: \"UseZombie — Mission Control\",\n  description: \"Agent delivery control plane. Manage workspaces, runs, and pipeline visibility.\",\n};\n\nexport default function RootLayout({ children }: { children: React.ReactNode }) {\n  return (\n    <ClerkProvider>\n      <html lang=\"en\" suppressHydrationWarning>\n        <body>{children}</body>\n      </html>\n    </ClerkProvider>\n  );\n}\n"],"names":[],"mappings":";;;;;;;AACA;;;;AAGO,MAAM,WAAqB;IAChC,OAAO;IACP,aAAa;AACf;AAEe,SAAS,WAAW,EAAE,QAAQ,EAAiC;IAC5E,qBACE,8OAAC,0LAAa;kBACZ,cAAA,8OAAC;YAAK,MAAK;YAAK,wBAAwB;sBACtC,cAAA,8OAAC;0BAAM;;;;;;;;;;;;;;;;AAIf"}}]
-}

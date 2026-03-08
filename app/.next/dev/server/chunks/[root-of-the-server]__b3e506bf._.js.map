@@ -1,6 +1,0 @@
-{
-  "version": 3,
-  "sources": [],
-  "sections": [
-    {"offset": {"line": 58, "column": 0}, "map": {"version":3,"sources":["file:///Users/kishore/Projects/usezombie/app/proxy.ts"],"sourcesContent":["import { clerkMiddleware, createRouteMatcher } from \"@clerk/nextjs/server\";\n\nconst isPublicRoute = createRouteMatcher([\n  \"/sign-in(.*)\",\n  \"/sign-up(.*)\",\n]);\n\nexport default clerkMiddleware(async (auth, request) => {\n  if (!isPublicRoute(request)) {\n    await auth.protect();\n  }\n});\n\nexport const config = {\n  matcher: [\n    // Skip Next.js internals and static files\n    \"/((?!_next|[^?]*\\\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)\",\n    \"/(api|trpc)(.*)\",\n  ],\n};\n"],"names":[],"mappings":";;;;;;AAAA;AAAA;;AAEA,MAAM,gBAAgB,IAAA,gMAAkB,EAAC;IACvC;IACA;CACD;uCAEc,IAAA,gMAAe,EAAC,OAAO,MAAM;IAC1C,IAAI,CAAC,cAAc,UAAU;QAC3B,MAAM,KAAK,OAAO;IACpB;AACF;AAEO,MAAM,SAAS;IACpB,SAAS;QACP,0CAA0C;QAC1C;QACA;KACD;AACH"}}]
-}
