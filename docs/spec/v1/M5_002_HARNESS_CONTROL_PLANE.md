@@ -4,7 +4,7 @@
 **Milestone:** M5
 **Workstream:** 002
 **Date:** Mar 06, 2026
-**Status:** IN_PROGRESS
+**Status:** DONE
 **Priority:** P0 — multi-tenant runtime core
 **Batch:** B2 — finish tenant isolation (M4_003 already DONE)
 **Depends on:** None (M4_003 already DONE)
@@ -13,7 +13,7 @@
 
 ## 1.0 Singular Function
 
-**Status:** IN_PROGRESS
+**Status:** DONE
 
 Implement one working control-plane function: compile, validate, activate, and resolve workspace harness profiles deterministically.
 
@@ -27,7 +27,7 @@ Implement one working control-plane function: compile, validate, activate, and r
 
 ## 2.0 Verification Units
 
-**Status:** IN_PROGRESS
+**Status:** DONE
 
 **Dimensions:**
 - 2.1 DONE Unit test: invalid profile cannot activate
@@ -39,7 +39,7 @@ Implement one working control-plane function: compile, validate, activate, and r
 
 ## 3.0 Acceptance Criteria
 
-**Status:** IN_PROGRESS
+**Status:** DONE
 
 - [x] 3.1 Harness profiles compile into executable graph JSON
 - [x] 3.2 Runtime resolves and executes active profile deterministically
