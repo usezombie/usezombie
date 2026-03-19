@@ -159,3 +159,16 @@ test "scoring metrics remain low-cardinality without agent labels" {
     try std.testing.expect(!std.mem.containsAtLeast(u8, body, 1, "zombie_agent_score_latest{"));
     try std.testing.expect(!std.mem.containsAtLeast(u8, body, 1, "agent_id="));
 }
+
+// T3 — worker_running=false path; guards against the gauge always emitting 1
+test "prometheus render emits zombie_worker_running 0 when worker is not running" {
+    const alloc = std.testing.allocator;
+    const body = try renderPrometheus(alloc, false, 0, 0);
+    defer alloc.free(body);
+    try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_worker_running 0"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, body, 1, "zombie_queue_depth 0"));
+}
+
+test {
+    _ = @import("metrics_counters_test.zig");
+}

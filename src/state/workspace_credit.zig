@@ -177,6 +177,23 @@ pub fn runtimeUsageCostCents(agent_seconds: u64) i64 {
     return std.math.mul(i64, seconds, FREE_PLAN_CENTS_PER_AGENT_SECOND) catch std.math.maxInt(i64);
 }
 
+// T1 + T2 — runtimeUsageCostCents: zero, normal, and u64 overflow all clamp safely
+test "runtimeUsageCostCents handles zero, normal, and overflow inputs" {
+    try std.testing.expectEqual(@as(i64, 0), runtimeUsageCostCents(0));
+    try std.testing.expectEqual(@as(i64, 42), runtimeUsageCostCents(42));
+    try std.testing.expectEqual(std.math.maxInt(i64), runtimeUsageCostCents(std.math.maxInt(u64)));
+}
+
+// T10 — errorCode and errorMessage cover the CreditExhausted branch and unknown passthrough
+test "errorCode and errorMessage map CreditExhausted; return null for unknown errors" {
+    try std.testing.expect(errorCode(error.CreditExhausted) != null);
+    try std.testing.expectEqual(@as(?[]const u8, null), errorCode(error.OutOfMemory));
+    const msg = errorMessage(error.CreditExhausted);
+    try std.testing.expect(msg != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg.?, "Free plan") != null);
+    try std.testing.expectEqual(@as(?[]const u8, null), errorMessage(error.OutOfMemory));
+}
+
 test "provisionWorkspaceCredit grants initial free credit deterministically" {
     const db_ctx = (try openTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
     defer db_ctx.pool.deinit();

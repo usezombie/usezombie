@@ -117,3 +117,47 @@ pub fn buildScoringContextForEcho(
 
     return buildScoringContextBlock(alloc, rows.items, config.scoring_context_max_tokens);
 }
+
+// T1 — orientationContext returns the expected constant block
+test "orientationContext returns orientation block content" {
+    const alloc = std.testing.allocator;
+    const ctx = try orientationContext(alloc);
+    defer alloc.free(ctx);
+    try std.testing.expect(std.mem.indexOf(u8, ctx, "Agent Performance Context") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ctx, "no prior score history") != null);
+}
+
+// T1 + T2 — estimateScoringContextTokens: formula (len+3)/4
+test "estimateScoringContextTokens applies (len+3)/4 heuristic" {
+    try std.testing.expectEqual(@as(u32, 0), estimateScoringContextTokens(""));
+    try std.testing.expectEqual(@as(u32, 1), estimateScoringContextTokens("ab"));
+    try std.testing.expectEqual(@as(u32, 1), estimateScoringContextTokens("abc"));
+    try std.testing.expectEqual(@as(u32, 1), estimateScoringContextTokens("abcd"));
+    try std.testing.expectEqual(@as(u32, 2), estimateScoringContextTokens("abcde"));
+}
+
+// T2 — buildScoringContextForEcho early-returns for empty agent_id
+test "buildScoringContextForEcho returns empty string for empty agent_id" {
+    const alloc = std.testing.allocator;
+    // conn is never dereferenced on this early-return path; aligned address satisfies type system
+    const conn: *pg.Conn = @ptrFromInt(@alignOf(pg.Conn));
+    const config = types.ScoringConfig{ .enabled = true, .enable_score_context_injection = true };
+    const result = try buildScoringContextForEcho(conn, alloc, "ws-001", "", config);
+    defer alloc.free(result);
+    try std.testing.expectEqualStrings("", result);
+}
+
+// T2 — buildScoringContextForEcho early-returns when scoring disabled
+test "buildScoringContextForEcho returns empty string when scoring disabled" {
+    const alloc = std.testing.allocator;
+    const conn: *pg.Conn = @ptrFromInt(@alignOf(pg.Conn));
+    const config_disabled = types.ScoringConfig{ .enabled = false };
+    const r1 = try buildScoringContextForEcho(conn, alloc, "ws-001", "agent-abc", config_disabled);
+    defer alloc.free(r1);
+    try std.testing.expectEqualStrings("", r1);
+
+    const config_no_inject = types.ScoringConfig{ .enabled = true, .enable_score_context_injection = false };
+    const r2 = try buildScoringContextForEcho(conn, alloc, "ws-001", "agent-abc", config_no_inject);
+    defer alloc.free(r2);
+    try std.testing.expectEqualStrings("", r2);
+}

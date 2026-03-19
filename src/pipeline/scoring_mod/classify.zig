@@ -174,3 +174,109 @@ pub fn scrubStderrTail(alloc: std.mem.Allocator, raw_tail: ?[]const u8) !?[]cons
     const scrubbed = try scrubSecretAssignments(alloc, tail);
     return scrubbed;
 }
+
+// T1 + T9 — classifyFailureFromErrorName: each known error name group routes to its class
+test "classifyFailureFromErrorName routes known error names" {
+    inline for (.{
+        .{ "RunDeadlineExceeded", types.FailureClass.timeout },
+        .{ "CommandTimedOut", types.FailureClass.timeout },
+        .{ "Timeout", types.FailureClass.timeout },
+        .{ "TimedOut", types.FailureClass.timeout },
+        .{ "OutOfMemory", types.FailureClass.oom },
+        .{ "NoSpaceLeft", types.FailureClass.oom },
+        .{ "AuthFailed", types.FailureClass.auth_failure },
+        .{ "TokenExpired", types.FailureClass.auth_failure },
+        .{ "MissingConfig", types.FailureClass.auth_failure },
+        .{ "FileNotFound", types.FailureClass.tool_call_failure },
+        .{ "CommandFailed", types.FailureClass.tool_call_failure },
+    }) |pair| {
+        const result = classifyFailureFromErrorName(pair[0]);
+        try std.testing.expect(result != null);
+        try std.testing.expectEqual(pair[1], result.?);
+    }
+}
+
+// T2 — empty string and unknown names return null
+test "classifyFailureFromErrorName returns null for unknown names" {
+    try std.testing.expectEqual(@as(?types.FailureClass, null), classifyFailureFromErrorName(""));
+    try std.testing.expectEqual(@as(?types.FailureClass, null), classifyFailureFromErrorName("SomethingRandom"));
+    try std.testing.expectEqual(@as(?types.FailureClass, null), classifyFailureFromErrorName("NetworkError"));
+}
+
+// T2 — context overflow matched case-insensitively via substring
+test "classifyFailureFromErrorName detects context overflow variants" {
+    try std.testing.expectEqual(types.FailureClass.context_overflow, classifyFailureFromErrorName("ContextWindowExhausted").?);
+    try std.testing.expectEqual(types.FailureClass.context_overflow, classifyFailureFromErrorName("TokenLimitExceeded").?);
+    try std.testing.expectEqual(types.FailureClass.context_overflow, classifyFailureFromErrorName("context_overflow").?);
+}
+
+// T1 + T9 — scoreTierLabel at all tier boundaries
+test "scoreTierLabel returns correct tier at all boundaries" {
+    inline for (.{
+        .{ @as(i32, 0), "Bronze" },
+        .{ @as(i32, 39), "Bronze" },
+        .{ @as(i32, 40), "Silver" },
+        .{ @as(i32, 69), "Silver" },
+        .{ @as(i32, 70), "Gold" },
+        .{ @as(i32, 89), "Gold" },
+        .{ @as(i32, 90), "Elite" },
+        .{ @as(i32, 100), "Elite" },
+    }) |pair| {
+        try std.testing.expectEqualStrings(pair[1], scoreTierLabel(pair[0]));
+    }
+}
+
+// T1 + T8 — scrubSecretAssignments redacts NEVER_FLAG_KEY assignments
+test "scrubSecretAssignments redacts known secret key assignments" {
+    const alloc = std.testing.allocator;
+    const input = "API_KEY=supersecret other=value";
+    const out = try scrubSecretAssignments(alloc, input);
+    defer alloc.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "supersecret") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "API_KEY=[REDACTED]") != null);
+}
+
+// T8 — Bearer token redacted; T2 — innocuous text passes through unchanged
+test "scrubSecretAssignments redacts Bearer tokens and passes innocuous text" {
+    const alloc = std.testing.allocator;
+    const bearer_input = "Authorization: Bearer ghp_xyz123";
+    const bearer_out = try scrubSecretAssignments(alloc, bearer_input);
+    defer alloc.free(bearer_out);
+    try std.testing.expect(std.mem.indexOf(u8, bearer_out, "ghp_xyz123") == null);
+    try std.testing.expect(std.mem.indexOf(u8, bearer_out, "[REDACTED]") != null);
+
+    const safe_input = "exit code 0: task completed";
+    const safe_out = try scrubSecretAssignments(alloc, safe_input);
+    defer alloc.free(safe_out);
+    try std.testing.expectEqualStrings(safe_input, safe_out);
+}
+
+// T2 — scrubStderrTail: null and whitespace-only inputs return null
+test "scrubStderrTail returns null for null and whitespace-only inputs" {
+    const alloc = std.testing.allocator;
+    try std.testing.expectEqual(@as(?[]const u8, null), try scrubStderrTail(alloc, null));
+    try std.testing.expectEqual(@as(?[]const u8, null), try scrubStderrTail(alloc, "   \n\t  "));
+}
+
+// T1 — classifyFailure uses failure_class_override when set
+test "classifyFailure honours failure_class_override over error_name and outcome" {
+    var state = types.ScoringState{};
+    state.outcome = .done;
+    state.failure_class_override = .oom;
+    state.failure_error_name = "RunDeadlineExceeded";
+    try std.testing.expectEqual(types.FailureClass.oom, classifyFailure(&state).?);
+}
+
+// T1 — classifyFailure falls through to outcome-based classification
+test "classifyFailure maps outcome variants when no override or error_name" {
+    inline for (.{
+        .{ types.TerminalOutcome.done, @as(?types.FailureClass, null) },
+        .{ types.TerminalOutcome.blocked_retries_exhausted, @as(?types.FailureClass, types.FailureClass.timeout) },
+        .{ types.TerminalOutcome.blocked_stage_graph, @as(?types.FailureClass, types.FailureClass.bad_output_format) },
+        .{ types.TerminalOutcome.error_propagation, @as(?types.FailureClass, types.FailureClass.unhandled_exception) },
+        .{ types.TerminalOutcome.pending, @as(?types.FailureClass, types.FailureClass.unknown) },
+    }) |pair| {
+        const state = types.ScoringState{ .outcome = pair[0] };
+        try std.testing.expectEqual(pair[1], classifyFailure(&state));
+    }
+}
