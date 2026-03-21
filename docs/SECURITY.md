@@ -118,8 +118,56 @@ GitHub App private keys (RSA 2048) are used to sign JWTs for installation token 
 
 | Priority | Action | Depends on | Target |
 |----------|--------|-----------|--------|
-| P3 | Quarterly SSH key rotation for worker nodes | Ops process | Q2 2026 |
+| P3 | Quarterly SSH key rotation for worker nodes | Agent: `autorotate-ssh` | Q2 2026 |
 | P3 | Enable `sntrup761x25519-sha512` KEX on workers | Debian OpenSSH 9.x | When available |
-| P3 | Annual GitHub App PEM rotation | Ops process | Mar 2027 |
+| P3 | Annual GitHub App PEM rotation | Agent: `autorotate-github-app` | Mar 2027 |
 | P4 | PQC SSH host keys (ML-DSA) | OpenSSH 9.9+ in Debian stable | 2027+ |
 | — | Monitor JOSE/JWA ML-DSA standard for JWT signing | IETF draft progress | No action until standard finalized |
+
+---
+
+## Agent-Driven Key Rotation
+
+Key rotation must not be a human ops task. Build it as a usezombie spec — the agent reads the current key from vault, generates a replacement, deploys it, verifies connectivity, updates vault, and opens a PR with the evidence.
+
+### autorotate-ssh (quarterly)
+
+For each worker node (`zombie-{env}-worker-{name}`):
+
+1. Generate new Ed25519 key pair: `ssh-keygen -t ed25519 -f /tmp/rotate -N ""`
+2. SSH to node using current key from vault: `op read "op://{vault}/{node}/ssh-private-key"`
+3. Install new public key in `~/.ssh/authorized_keys` (append, don't replace yet)
+4. Verify SSH connectivity using new key
+5. Remove old public key from `authorized_keys`
+6. Update vault item with new private key: `op item edit {node} ssh-private-key="$(cat /tmp/rotate)"`
+7. Verify SSH connectivity using vault-sourced key (round-trip confirmation)
+8. Open PR with evidence: rotation date, node name, key fingerprint (public only), vault item updated
+
+**Vault references:**
+
+| Environment | Vault | Items |
+|-------------|-------|-------|
+| DEV | `ZMB_CD_DEV` | `zombie-dev-worker-ant/ssh-private-key` |
+| PROD | `ZMB_CD_PROD` | `zombie-prod-worker-ant/ssh-private-key`, `zombie-prod-worker-bird/ssh-private-key` |
+
+**Rollback:** If step 4 fails (new key doesn't connect), the old key is still in `authorized_keys` and vault. Remove the new public key from the node and abort. No downtime.
+
+### autorotate-github-app (annually)
+
+1. Read current App ID from vault: `op read "op://ZMB_CD_PROD/github-app/app-id"`
+2. Generate new private key via GitHub API: `POST /app/installations` (or manually via GitHub UI — API support for key generation is limited)
+3. Update vault items in both vaults:
+   - `op item edit github-app private-key="$(cat new-key.pem)" --vault ZMB_CD_PROD`
+   - `op item edit github-app private-key="$(cat new-key.pem)" --vault ZMB_CD_DEV`
+4. Sync Fly secrets (CI does this on next deploy, or trigger manually): `fly secrets set GITHUB_APP_PRIVATE_KEY="$(op read 'op://{vault}/github-app/private-key')" --app {app} --stage`
+5. Trigger deploy to pick up new secret
+6. Verify: `zombied doctor` reports GitHub App connectivity OK
+7. Revoke old key in GitHub UI
+8. Open PR with evidence: rotation date, new key fingerprint, doctor output
+
+**Vault references:**
+
+| Vault | Item | Field |
+|-------|------|-------|
+| `ZMB_CD_PROD` | `github-app` | `app-id`, `private-key` |
+| `ZMB_CD_DEV` | `github-app` | `app-id`, `private-key` |
