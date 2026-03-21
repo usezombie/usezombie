@@ -65,6 +65,14 @@ pub fn build(b: *std.Build) void {
     });
     const pg_mod = pg_dep.module("pg");
 
+    // Ubuntu/Debian multiarch: opensslconf.h lives in /usr/include/{arch}-linux-gnu/
+    // rather than /usr/include/. Add the arch-specific include path so @cImport finds it.
+    if (enable_openssl and host_is_linux) {
+        pg_mod.addIncludePath(.{
+            .cwd_relative = b.fmt("/usr/include/{s}-linux-gnu", .{@tagName(builtin.cpu.arch)}),
+        });
+    }
+
     // ── posthog-zig (server-side PostHog SDK) ───────────────────────────────
     const posthog_dep = b.dependency("posthog", .{
         .target = target,
