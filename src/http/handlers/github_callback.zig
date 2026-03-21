@@ -5,6 +5,7 @@ const error_codes = @import("../../errors/codes.zig");
 const id_format = @import("../../types/id_format.zig");
 const workspace_billing = @import("../../state/workspace_billing.zig");
 const workspace_credit = @import("../../state/workspace_credit.zig");
+const posthog_events = @import("../../observability/posthog_events.zig");
 const common = @import("common.zig");
 
 const log = std.log.scoped(.http);
@@ -141,6 +142,7 @@ pub fn handleGitHubCallback(ctx: *Context, r: zap.Request) void {
     };
 
     log.info("github callback processed workspace_id={s} installation_id={s}", .{ workspace_id, installation_id });
+    posthog_events.trackWorkspaceGithubConnected(ctx.posthog, workspace_id, installation_id, req_id);
 
     common.writeJson(r, .ok, .{
         .workspace_id = workspace_id,

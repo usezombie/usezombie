@@ -3,6 +3,7 @@ const zap = @import("zap");
 const workspace_billing = @import("../../state/workspace_billing.zig");
 const workspace_credit = @import("../../state/workspace_credit.zig");
 const obs_log = @import("../../observability/logging.zig");
+const posthog_events = @import("../../observability/posthog_events.zig");
 const error_codes = @import("../../errors/codes.zig");
 const id_format = @import("../../types/id_format.zig");
 const common = @import("common.zig");
@@ -35,7 +36,7 @@ pub fn handleCreateWorkspace(ctx: *common.Context, r: zap.Request) void {
     const req_id = common.requestId(alloc);
 
     const principal = common.authenticate(alloc, r, ctx) catch |err| {
-        common.writeAuthError(r, req_id, err);
+        common.writeAuthErrorWithTracking(r, req_id, err, ctx.posthog);
         return;
     };
 
@@ -87,6 +88,7 @@ pub fn handleCreateWorkspace(ctx: *common.Context, r: zap.Request) void {
     workspace_billing.enforceFreeWorkspaceCreationAllowed(conn, tenant_id, null) catch |err| {
         if (workspace_billing.errorCode(err)) |code| {
             log.err("billing enforcement failed tenant_id={s} code={s}", .{ tenant_id, code });
+            posthog_events.trackApiError(ctx.posthog, principal.user_id orelse "", code, workspace_billing.errorMessage(err) orelse "Workspace billing failure", req_id);
             common.errorResponse(r, .forbidden, code, workspace_billing.errorMessage(err) orelse "Workspace billing failure", req_id);
             return;
         }
@@ -125,6 +127,7 @@ pub fn handleCreateWorkspace(ctx: *common.Context, r: zap.Request) void {
     };
 
     log.info("workspace created workspace_id={s} tenant_id={s} repo_url={s}", .{ workspace_id, tenant_id, repo_url });
+    posthog_events.trackWorkspaceCreated(ctx.posthog, principal.user_id orelse "", workspace_id, tenant_id, repo_url, req_id);
 
     common.writeJson(r, .created, .{
         .workspace_id = workspace_id,

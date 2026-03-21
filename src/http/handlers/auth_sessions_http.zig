@@ -1,6 +1,7 @@
 const std = @import("std");
 const zap = @import("zap");
 const error_codes = @import("../../errors/codes.zig");
+const posthog_events = @import("../../observability/posthog_events.zig");
 const common = @import("common.zig");
 
 const log = std.log.scoped(.http);
@@ -55,7 +56,7 @@ pub fn handleCompleteAuthSession(ctx: *Context, r: zap.Request, session_id: []co
 
     const principal = common.authenticate(alloc, r, ctx) catch |err| {
         log.debug("auth_session_complete auth_failed session_id={s} err={s}", .{ session_id, @errorName(err) });
-        common.writeAuthError(r, req_id, err);
+        common.writeAuthErrorWithTracking(r, req_id, err, ctx.posthog);
         return;
     };
     _ = principal;
@@ -88,5 +89,6 @@ pub fn handleCompleteAuthSession(ctx: *Context, r: zap.Request, session_id: []co
     };
 
     log.info("auth_session_completed session_id={s} req_id={s}", .{ session_id, req_id });
+    posthog_events.trackAuthLoginCompleted(ctx.posthog, session_id, req_id);
     common.writeJson(r, .ok, .{ .status = "complete", .request_id = req_id });
 }

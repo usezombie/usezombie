@@ -58,7 +58,7 @@ pub fn handleStartRun(ctx: *common.Context, r: zap.Request) void {
     const req_id = common.requestId(alloc);
 
     const principal = common.authenticate(alloc, r, ctx) catch |err| {
-        common.writeAuthError(r, req_id, err);
+        common.writeAuthErrorWithTracking(r, req_id, err, ctx.posthog);
         return;
     };
 

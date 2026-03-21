@@ -14,6 +14,7 @@ const worker = @import("../pipeline/worker.zig");
 const git_ops = @import("../git/ops.zig");
 const metrics = @import("../observability/metrics.zig");
 const obs_log = @import("../observability/logging.zig");
+const posthog_events = @import("../observability/posthog_events.zig");
 const common = @import("common.zig");
 
 const log = std.log.scoped(.zombied);
@@ -330,6 +331,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
         serve_cfg.api_max_clients,
         serve_cfg.api_max_in_flight_requests,
     });
+    posthog_events.trackServerStarted(ph_client, serve_cfg.port, @intCast(serve_cfg.worker_concurrency));
     http_server.serve(&ctx, .{
         .port = serve_cfg.port,
         .threads = serve_cfg.api_http_threads,

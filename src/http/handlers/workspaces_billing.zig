@@ -58,6 +58,7 @@ pub fn handleUpgradeWorkspaceToScale(ctx: *common.Context, r: zap.Request, works
         .actor = principal.user_id orelse "api",
     }) catch |err| switch (err) {
         error.InvalidSubscriptionId => {
+            posthog_events.trackApiErrorWithContext(ctx.posthog, principal.user_id orelse "", error_codes.ERR_BILLING_INVALID_SUBSCRIPTION_ID, "subscription_id is required", workspace_id, req_id);
             common.errorResponse(r, .bad_request, error_codes.ERR_BILLING_INVALID_SUBSCRIPTION_ID, "subscription_id is required", req_id);
             return;
         },
@@ -211,6 +212,7 @@ pub fn handleApplyWorkspaceBillingEvent(ctx: *common.Context, r: zap.Request, wo
         .actor = principal.user_id orelse "api",
     }) catch |err| {
         if (workspace_billing.errorCode(err)) |code| {
+            posthog_events.trackApiErrorWithContext(ctx.posthog, principal.user_id orelse "", code, workspace_billing.errorMessage(err) orelse "Workspace billing failure", workspace_id, req_id);
             common.errorResponse(r, .bad_request, code, workspace_billing.errorMessage(err) orelse "Workspace billing failure", req_id);
             return;
         }

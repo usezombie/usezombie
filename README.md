@@ -58,7 +58,7 @@ cp .env.example .env
 ```bash
 make up                # Start Postgres + Redis + zombied
 make down              # Stop all services
-make test              # Run unit tests + backend e2e
+make test              # Run all unit tests (zombied + zombiectl + website + app)
 make test-integration  # Run all integration tests (Zig + DB + Redis via docker compose)
 make lint              # Format + lint
 make doctor            # Check config, Postgres, LLM key

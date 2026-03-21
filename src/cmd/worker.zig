@@ -8,6 +8,8 @@ const events_bus = @import("../events/bus.zig");
 const worker = @import("../pipeline/worker.zig");
 const git_ops = @import("../git/ops.zig");
 const obs_log = @import("../observability/logging.zig");
+const posthog_events = @import("../observability/posthog_events.zig");
+const error_codes = @import("../errors/codes.zig");
 const langfuse = @import("../observability/langfuse.zig");
 const common = @import("common.zig");
 
@@ -105,6 +107,8 @@ pub fn run(alloc: std.mem.Allocator) !void {
     log.info("phase=db_connect role=worker status=start", .{});
     const worker_pool = db.initFromEnvForRole(alloc, .worker) catch |err| {
         log.err("phase=db_connect role=worker status=fail err={s}", .{@errorName(err)});
+        posthog_events.trackStartupFailed(ph_client, "worker", "db_connect", @errorName(err), error_codes.ERR_STARTUP_DB_CONNECT);
+        if (ph_client) |c| c.deinit();
         std.process.exit(1);
     };
     defer worker_pool.deinit();
@@ -127,6 +131,8 @@ pub fn run(alloc: std.mem.Allocator) !void {
             ),
             else => log.err("phase=migration_check status=fail err={s}", .{@errorName(err)}),
         }
+        posthog_events.trackStartupFailed(ph_client, "worker", "migration_check", @errorName(err), error_codes.ERR_STARTUP_MIGRATION_CHECK);
+        if (ph_client) |c| c.deinit();
         std.process.exit(1);
     };
     log.info("phase=migration_check status=ok", .{});
@@ -192,6 +198,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
     event_thread = try std.Thread.spawn(.{}, events_bus.runThread, .{&event_bus});
 
     log.info("worker threads started concurrency={d}", .{thread_count});
+    posthog_events.trackWorkerStarted(ph_client, @intCast(thread_count));
 
     for (worker_threads) |*t| t.join();
     shutdown_requested.store(true, .release);
