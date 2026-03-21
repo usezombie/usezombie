@@ -3,152 +3,170 @@
 **Milestone:** M4
 **Workstream:** 001
 **Updated:** Mar 21, 2026
-**Prerequisite:** `docs/M2_002_PLAYBOOK_PRIMING_INFRA.md` complete — vaults populated, Tailscale authkey in `ZMB_CD_PROD/tailscale/authkey`, SSH key in `ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key`.
+**Prerequisite:** Vault items exist (`ZMB_CD_DEV`, `ZMB_CD_PROD`). Tailscale authkey in `ZMB_CD_PROD/tailscale/authkey`. 1Password service account token available as `OP_SERVICE_ACCOUNT_TOKEN`.
 
-Bootstrap the DEV bare-metal worker node (`zombie-dev-worker-ant`) so CI can deploy the `zombied worker` process to it. Each section below is one atomic workstream — complete and verify before advancing.
+Bootstrap the DEV bare-metal worker node so CI can deploy the `zombied worker` process autonomously. After step 0 (human buys the server), every remaining step is agent-executable — no human interaction required.
+
+**Current provider:** OVHCloud (Beauharnois CA). See `docs/spec/v2/M001_AUTOPROCURER_PROVIDER.md` for the multi-provider design that will replace step 0 entirely.
 
 ---
 
 ## Human vs Agent Split
 
-| Step | Owner | Why |
-|------|-------|-----|
-| 1.0 Provision server + OS | Human | OVHCloud console, requires account |
-| 2.0 Generate + store SSH key | Human | Key must be stored in vault before agent can use it |
-| 3.0 Join Tailscale | Human | Requires console/KVM access at first boot |
-| 4.0 Install Docker | Agent | SSH via Tailscale, fully scriptable |
-| 5.0 Install Firecracker + KVM | Agent | SSH via Tailscale, fully scriptable |
-| 6.0 Bootstrap `/opt/zombie/` | Agent | SSH via Tailscale, fully scriptable |
-| 7.0 Smoke test | Agent | SSH via Tailscale, verify deploy.sh end-to-end |
+| Step | Owner | What |
+|------|-------|------|
+| 0.0 | Human | Buy server from provider, get IP + initial root credentials |
+| 1.0 | Agent | Generate deploy SSH key → store in vault → authorize on server |
+| 2.0 | Agent | Verify KVM (`kvm-ok`) |
+| 3.0 | Agent | Install Tailscale + join tailnet |
+| 4.0 | Agent | Install Docker, verify GHCR pull |
+| 5.0 | Agent | Install Firecracker |
+| 6.0 | Agent | Bootstrap `/opt/zombie/` (deploy.sh + .env from vault) |
+| 7.0 | Agent | Smoke test + activate CI |
+
+After step 0 the agent runs steps 1–7 in sequence without human intervention.
 
 ---
 
-## 1.0 Provision Server + OS
+## 0.0 Human: Buy Server
 
-**Owner:** Human
-**Goal:** OVHCloud KS-1 bare-metal node running Debian Trixie, reachable via console.
+**Goal:** A bare-metal server is provisioned with a known IP and initial root credentials.
 
-### Steps
+1. Log in to your provider console
+2. Order a bare-metal node with KVM support (required for Firecracker, M4_008)
+3. Install **Debian 12 (Bookworm)** via the provider reinstall wizard
+4. Set a root password or upload your personal public key for first login
+5. Record: `<server-ip>` and the initial root credential
 
-1. Log in to [OVHCloud Manager](https://ca.ovh.com/manager/)
-2. Order KS-1 in Beauharnois, CA (BHS) region
-3. Install **Debian 12 (Bookworm)** or **Debian Trixie** via the reinstall wizard
-4. Set root password or add your public key during reinstall
-5. Wait for delivery email — typically 15–60 min
+Hand off to agent: `server_ip=<ip>` and either `root_password=<pass>` or `initial_ssh_key=<path>`.
 
 ### Acceptance
 
 ```bash
-# From your Mac (public SSH during bootstrap — before Tailscale locks it down)
-ssh root@<ovhcloud-ip> "uname -r && lscpu | grep -i virt"
+# Agent confirms KVM is available before proceeding
+ssh root@<server-ip> "grep -c vmx /proc/cpuinfo || grep -c svm /proc/cpuinfo"
+# Expected: integer > 0
 ```
-
-Expected: kernel version printed, `Virtualization type: full` present (KVM available on bare-metal).
 
 ---
 
-## 2.0 Generate + Store SSH Key
+## 1.0 Agent: Deploy SSH Key → Vault → Authorize on Server
 
-**Owner:** Human
-**Goal:** A dedicated deploy SSH key pair exists. Private key is in the vault. Public key is on the server.
+**Goal:** A dedicated deploy key pair exists. Private key is in the vault. Root credentials are no longer needed after this step.
 
-This is the key CI uses — not your personal key.
-
-### Steps
+This replaces root access with a scoped, vaulted deploy key that CI and future agents use.
 
 ```bash
-# Generate a new Ed25519 key (no passphrase — CI needs unattended access)
-ssh-keygen -t ed25519 -C "zombie-dev-worker-ant deploy key" -f ~/.ssh/zombie-dev-worker-ant -N ""
+# Generate Ed25519 deploy key — no passphrase (CI needs unattended access)
+ssh-keygen -t ed25519 -C "zombie-dev-worker-ant deploy key" \
+  -f /tmp/zombie-dev-worker-ant -N ""
 
-# Store private key in vault (ZMB_CD_DEV)
+# Store private key in vault
 op item edit "zombie-dev-worker-ant" --vault ZMB_CD_DEV \
-  "ssh-private-key[concealed]=$(cat ~/.ssh/zombie-dev-worker-ant)"
+  "ssh-private-key[concealed]=$(cat /tmp/zombie-dev-worker-ant)"
 
-# Add public key to server authorized_keys
-ssh root@<ovhcloud-ip> \
-  "mkdir -p ~/.ssh && echo '$(cat ~/.ssh/zombie-dev-worker-ant.pub)' >> ~/.ssh/authorized_keys"
+# Authorize the public key on the server using initial root credentials
+# (use -i <initial_key> or sshpass -p <root_password> as appropriate)
+ssh root@<server-ip> \
+  "mkdir -p ~/.ssh && chmod 700 ~/.ssh && \
+   echo '$(cat /tmp/zombie-dev-worker-ant.pub)' >> ~/.ssh/authorized_keys && \
+   chmod 600 ~/.ssh/authorized_keys"
+
+# Discard the temporary key files
+rm /tmp/zombie-dev-worker-ant /tmp/zombie-dev-worker-ant.pub
 ```
 
 ### Acceptance
 
 ```bash
-# Confirm private key reads back from vault (non-empty)
-op read "op://ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key" | head -1
+KEY=$(op read "op://ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key")
+
+# Vault key is present
+echo "$KEY" | head -1
 # Expected: -----BEGIN OPENSSH PRIVATE KEY-----
 
-# Confirm passwordless SSH using the vault key
-KEY=$(op read "op://ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key")
-ssh -i <(printf '%s\n' "$KEY") root@<ovhcloud-ip> "echo ok"
+# Passwordless SSH works using the vault key
+ssh -i <(printf '%s\n' "$KEY") -o StrictHostKeyChecking=no root@<server-ip> "echo ok"
 # Expected: ok
 ```
 
 ---
 
-## 3.0 Join Tailscale
+## 2.0 Agent: Verify KVM
 
-**Owner:** Human (requires SSH or console access to server)
-**Goal:** `zombie-dev-worker-ant` is in the tailnet and reachable by hostname from any node in the tailnet (Mac, CI runner).
-
-Tailscale replaces public SSH — once joined, disable password auth and restrict `sshd` to tailnet interface.
-
-### Steps
+**Goal:** KVM acceleration is available on the node. Fail early — all Firecracker work (M4_008) depends on this. Do not proceed if this fails.
 
 ```bash
-# SSH into the server (public IP, before Tailscale)
-ssh root@<ovhcloud-ip>
+KEY=$(op read "op://ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key")
 
-# On the server: install Tailscale
-curl -fsSL https://tailscale.com/install.sh | sh
-
-# Join tailnet — authkey from vault (read on your Mac, paste into server session)
-# On your Mac:
-op read "op://ZMB_CD_PROD/tailscale/authkey"
-
-# On the server (paste the authkey):
-tailscale up --authkey "<authkey>" --hostname zombie-dev-worker-ant
-
-# Verify node is visible
-tailscale status
+ssh -i <(printf '%s\n' "$KEY") -o StrictHostKeyChecking=no root@<server-ip> << 'REMOTE'
+set -euo pipefail
+apt-get install -y cpu-checker -qq
+if ! kvm-ok 2>&1 | grep -q "KVM acceleration can be used"; then
+  echo "ERROR: KVM not available — this host cannot run Firecracker microVMs." >&2
+  echo "Abort bootstrap. Order a different server (bare-metal with hardware virt)." >&2
+  exit 1
+fi
+echo "KVM OK"
+REMOTE
 ```
 
-After joining, harden SSH (optional but recommended):
+### Acceptance
+
+```
+INFO: /dev/kvm exists
+KVM acceleration can be used
+KVM OK
+```
+
+Abort and reprovision if this fails — do not continue.
+
+---
+
+## 3.0 Agent: Install Tailscale + Join Tailnet
+
+**Goal:** Node is reachable in the tailnet as `zombie-dev-worker-ant`. After this step, all subsequent SSH uses the Tailscale hostname — not the public IP.
 
 ```bash
-# Restrict sshd to tailnet interface only
-echo "ListenAddress $(tailscale ip -4)" >> /etc/ssh/sshd_config
-systemctl restart sshd
+KEY=$(op read "op://ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key")
+TAILSCALE_AUTHKEY=$(op read "op://ZMB_CD_PROD/tailscale/authkey")
+
+ssh -i <(printf '%s\n' "$KEY") -o StrictHostKeyChecking=no root@<server-ip> << REMOTE
+set -euo pipefail
+curl -fsSL https://tailscale.com/install.sh | sh
+tailscale up --authkey "$TAILSCALE_AUTHKEY" --hostname zombie-dev-worker-ant
+tailscale status
+REMOTE
 ```
 
 ### Acceptance
 
 ```bash
-# From your Mac — SSH via Tailscale hostname (no IP needed)
 KEY=$(op read "op://ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key")
-ssh -i <(printf '%s\n' "$KEY") zombie-dev-worker-ant "tailscale status | grep zombie-dev-worker-ant"
-# Expected: zombie-dev-worker-ant  <tailscale-ip>  ... active
+
+# SSH via Tailscale hostname (no more public IP needed)
+ssh -i <(printf '%s\n' "$KEY") zombie-dev-worker-ant \
+  "tailscale status | grep zombie-dev-worker-ant"
+# Expected: zombie-dev-worker-ant  <tailscale-ip>  ...  active
 ```
+
+All remaining steps use the Tailscale hostname `zombie-dev-worker-ant`.
 
 ---
 
-## 4.0 Install Docker
+## 4.0 Agent: Install Docker
 
-**Owner:** Agent
-**Goal:** Docker daemon is running on the node. Agent can pull GHCR images.
-
-### Steps
+**Goal:** Docker daemon is running. Agent can pull GHCR public images.
 
 ```bash
 KEY=$(op read "op://ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key")
 
 ssh -i <(printf '%s\n' "$KEY") zombie-dev-worker-ant << 'REMOTE'
 set -euo pipefail
-
 apt-get update -qq
 apt-get install -y docker.io
 systemctl enable docker
 systemctl start docker
-
-# Smoke pull — image is public on GHCR, no auth needed
 docker pull ghcr.io/usezombie/zombied:dev-latest
 REMOTE
 ```
@@ -158,42 +176,27 @@ REMOTE
 ```bash
 KEY=$(op read "op://ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key")
 ssh -i <(printf '%s\n' "$KEY") zombie-dev-worker-ant \
-  "docker ps && docker images ghcr.io/usezombie/zombied"
-# Expected: docker ps header (no error), zombied image listed
+  "docker images ghcr.io/usezombie/zombied | grep dev-latest"
+# Expected: zombied  dev-latest  ...
 ```
 
 ---
 
-## 5.0 Install Firecracker + KVM
+## 5.0 Agent: Install Firecracker
 
-**Owner:** Agent
-**Goal:** KVM is accessible on the node. Firecracker binary is installed. The `zombied worker` process can boot microVMs (required for M4_008 sandbox execution).
-
-### Steps
+**Goal:** Firecracker binary is installed. The `debian` user can access `/dev/kvm` without root (required for M4_008 sandbox execution — each spec run boots a Firecracker microVM).
 
 ```bash
 KEY=$(op read "op://ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key")
 
 ssh -i <(printf '%s\n' "$KEY") zombie-dev-worker-ant << 'REMOTE'
 set -euo pipefail
-
-# Verify KVM is available — bail early if not
-apt-get install -y cpu-checker
-if ! kvm-ok 2>&1 | grep -q "KVM acceleration can be used"; then
-  echo "ERROR: KVM not available on this host — cannot proceed" >&2
-  exit 1
-fi
-
-# Install Firecracker
 ARCH=$(uname -m)
 FC_VERSION=v1.7.0
 curl -fsSL \
   "https://github.com/firecracker-microvm/firecracker/releases/download/${FC_VERSION}/firecracker-${FC_VERSION}-${ARCH}.tgz" \
   | tar xz -C /usr/local/bin --strip-components=1
-
 firecracker --version
-
-# Allow deploy user (debian) to access KVM device without root
 usermod -aG kvm debian
 REMOTE
 ```
@@ -203,27 +206,23 @@ REMOTE
 ```bash
 KEY=$(op read "op://ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key")
 ssh -i <(printf '%s\n' "$KEY") zombie-dev-worker-ant \
-  "kvm-ok && firecracker --version && ls -l /dev/kvm"
+  "firecracker --version && ls -l /dev/kvm && groups debian | grep kvm"
 # Expected:
-#   INFO: /dev/kvm exists
-#   KVM acceleration can be used
 #   Firecracker v1.7.0
 #   crw-rw---- 1 root kvm ... /dev/kvm
+#   debian : ... kvm
 ```
 
 ---
 
-## 6.0 Bootstrap `/opt/zombie/`
+## 6.0 Agent: Bootstrap `/opt/zombie/`
 
-**Owner:** Agent
-**Goal:** `/opt/zombie/deploy.sh` and `/opt/zombie/.env` exist on the node. CI can call `deploy.sh` to pull and restart the worker container.
-
-### Steps
+**Goal:** `deploy.sh` and `.env` exist on the node, populated from vault. CI calls `deploy.sh` on every push.
 
 ```bash
 KEY=$(op read "op://ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key")
 
-# Read secrets from vault (on your Mac, before SSH)
+# Read secrets from vault (on the agent machine)
 DB_URL=$(op read "op://ZMB_CD_DEV/planetscale-dev/connection-string")
 REDIS_URL=$(op read "op://ZMB_CD_DEV/upstash-dev/url")
 ENC_KEY=$(op read "op://ZMB_CD_DEV/zombied-local-config/encryption-master-key")
@@ -236,34 +235,26 @@ set -euo pipefail
 mkdir -p /opt/zombie
 chown debian:debian /opt/zombie
 
-# deploy.sh — CI calls this on every push to main
 cat > /opt/zombie/deploy.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-
 IMAGE="ghcr.io/usezombie/zombied:dev-latest"
-
 echo "Pulling \$IMAGE..."
 docker pull "\$IMAGE"
-
-echo "Restarting zombied-worker..."
 docker stop zombied-worker 2>/dev/null || true
 docker rm   zombied-worker 2>/dev/null || true
-
-docker run -d \\
-  --name zombied-worker \\
-  --restart unless-stopped \\
-  --device /dev/kvm \\
-  --env-file /opt/zombie/.env \\
-  "\$IMAGE" \\
+docker run -d \
+  --name zombied-worker \
+  --restart unless-stopped \
+  --device /dev/kvm \
+  --env-file /opt/zombie/.env \
+  "\$IMAGE" \
   zombied worker
-
 echo "Done."
 docker ps --filter name=zombied-worker
 EOF
 chmod +x /opt/zombie/deploy.sh
 
-# .env — worker-only vars (no PORT or MIGRATE_ON_START; web API is on Fly)
 cat > /opt/zombie/.env << EOF
 DATABASE_URL_WORKER=$DB_URL
 REDIS_URL_WORKER=$REDIS_URL
@@ -273,9 +264,6 @@ GITHUB_APP_PRIVATE_KEY=$GH_APP_KEY
 ENVIRONMENT=dev
 EOF
 chmod 600 /opt/zombie/.env
-
-echo "Bootstrap complete."
-ls -la /opt/zombie/
 REMOTE
 ```
 
@@ -284,86 +272,60 @@ REMOTE
 ```bash
 KEY=$(op read "op://ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key")
 ssh -i <(printf '%s\n' "$KEY") zombie-dev-worker-ant \
-  "ls -la /opt/zombie/ && head -1 /opt/zombie/deploy.sh && stat -c '%a' /opt/zombie/.env"
+  "stat -c '%a %n' /opt/zombie/deploy.sh /opt/zombie/.env"
 # Expected:
-#   deploy.sh  (executable)
-#   .env       (600 permissions)
-#   #!/usr/bin/env bash
+#   755 /opt/zombie/deploy.sh
+#   600 /opt/zombie/.env
 ```
 
 ---
 
-## 7.0 Smoke Test — First Manual Deploy
+## 7.0 Agent: Smoke Test + Activate CI
 
-**Owner:** Agent
-**Goal:** `deploy.sh` runs end-to-end: pulls image, starts container with KVM access, container stays running.
-
-Run this before CI is activated. If it fails here, fix it before enabling the CI job.
-
-### Steps
+**Goal:** `deploy.sh` runs end-to-end. Container stays up. CI is activated.
 
 ```bash
 KEY=$(op read "op://ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key")
 
+# Run deploy.sh
 ssh -i <(printf '%s\n' "$KEY") zombie-dev-worker-ant \
   "cd /opt/zombie && ./deploy.sh"
-```
 
-### Acceptance
-
-```bash
-KEY=$(op read "op://ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key")
+# Verify container health
 ssh -i <(printf '%s\n' "$KEY") zombie-dev-worker-ant << 'REMOTE'
-# Container is running
-docker ps --filter name=zombied-worker --format "{{.Status}}" | grep -i "up"
-
-# KVM device was passed into the container
-docker inspect zombied-worker | grep -i kvm
-
-# Worker process started (give it 5s)
 sleep 5
+docker ps --filter name=zombied-worker --format "{{.Status}}" | grep -i "^Up"
+docker inspect zombied-worker --format '{{range .HostConfig.Devices}}{{.PathOnHost}}{{end}}' | grep kvm
 docker logs zombied-worker 2>&1 | tail -5
 REMOTE
-# Expected:
-#   Up X seconds
-#   /dev/kvm listed in HostConfig.Devices
-#   Worker log lines (no crash/panic)
+
+# Activate CI — set GitHub variable so deploy-dev-worker job runs
+gh variable set DEV_WORKER_READY --body "true" --repo usezombie/usezombie
+echo "CI activated. Next push to main will deploy to zombie-dev-worker-ant."
 ```
-
----
-
-## 8.0 Activate CI
-
-**Owner:** Human (flip a GitHub variable)
-**Goal:** `deploy-dev-worker` job in `deploy-dev.yml` starts running against this node on every push to main.
-
-Once §7.0 smoke test passes, enable the CI job:
-
-1. Go to GitHub → Settings → Variables → Actions
-2. Set `DEV_WORKER_READY=true`
-
-CI will SSH to `zombie-dev-worker-ant` via Tailscale on the next push and call `deploy.sh` — same script you just tested manually.
 
 ### Acceptance
 
-Push a commit to `main` (or re-run the last `deploy-dev.yml` run). Verify:
-
-- `deploy-dev-worker` job reaches the SSH step and exits 0
-- `docker ps` on the node shows a freshly-restarted `zombied-worker` container with a recent start time
+```
+Up X seconds          ← container running
+/dev/kvm              ← KVM device passed in
+<worker log lines>    ← no crash or panic
+DEV_WORKER_READY set  ← CI guard lifted
+```
 
 ---
 
 ## Sequence Summary
 
 ```
-1.0 Provision server (Human)         ← OVHCloud KS-1, Debian
-2.0 SSH key → vault (Human)          ← Ed25519, ZMB_CD_DEV
-3.0 Tailscale join (Human)           ← zombie-dev-worker-ant hostname
-4.0 Docker (Agent via SSH)           ← docker.io, GHCR pull verified
-5.0 Firecracker + KVM (Agent)        ← v1.7.0, kvm-ok must pass
-6.0 /opt/zombie/ bootstrap (Agent)   ← deploy.sh + .env from vault
-7.0 Smoke test (Agent)               ← manual deploy.sh run, container up
-8.0 Activate CI (Human)              ← flip DEV_WORKER_READY=true
+0.0  Human: Buy server → get IP + root creds
+1.0  Agent: Deploy key → vault → authorized_keys (root no longer needed)
+2.0  Agent: kvm-ok (abort if fails — no bare-metal without KVM)
+3.0  Agent: Tailscale install + join (switch to hostname, drop public IP)
+4.0  Agent: Docker install + GHCR pull verify
+5.0  Agent: Firecracker install + kvm group
+6.0  Agent: /opt/zombie/ bootstrap from vault
+7.0  Agent: Smoke test + gh variable set DEV_WORKER_READY=true
 ```
 
-**PROD workers** (`zombie-prod-worker-ant`, `zombie-prod-worker-bird`) follow the same sequence. Replace `ZMB_CD_DEV` with `ZMB_CD_PROD`, image tag `dev-latest` with `latest`, and `ENVIRONMENT=dev` with `ENVIRONMENT=prod`.
+**PROD workers** follow the same sequence. Replace `ZMB_CD_DEV` → `ZMB_CD_PROD`, image tag `dev-latest` → `latest`, `ENVIRONMENT=dev` → `ENVIRONMENT=prod`, hostnames accordingly.
