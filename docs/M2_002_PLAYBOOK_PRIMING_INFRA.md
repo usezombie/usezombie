@@ -334,6 +334,9 @@ For local docker-compose Redis, static credentials are configured in `docker-com
 
 ## 4.0 Worker Infrastructure (OVHCloud + Tailscale)
 
+> **Full bootstrap detail is in [`docs/M4_001_PLAYBOOK_WORKER_BOOTSTRAP_DEV.md`](M4_001_PLAYBOOK_WORKER_BOOTSTRAP_DEV.md).**
+> Sections 4.1–4.8 below are a summary reference only.
+
 **DEV:** One bare-metal node (`zombie-dev-worker-ant`) — OVHCloud KS-1, Beauharnois CA. KVM required for Firecracker. SSH key stored in `ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key`. Bootstrap follows §4.1–4.7 below using `VAULT_DEV` and the DEV image (`dev-latest`).
 
 **PROD:** Two bare-metal nodes (`zombie-prod-worker-ant`, `zombie-prod-worker-bird`). Worker naming: alphabetical animals, prefixed by environment.

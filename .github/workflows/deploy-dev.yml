@@ -91,9 +91,12 @@ jobs:
           FLY_API_TOKEN: ${{ env.FLY_API_TOKEN }}
 
   # ── 3. Deploy DEV worker to bare-metal via Tailscale SSH ─────────────────
+  # Skips until zombie-dev-worker-ant bootstrap is complete (M4_001).
+  # Enable by setting DEV_WORKER_READY=true in GitHub → Settings → Variables.
   deploy-dev-worker:
     runs-on: ubuntu-latest
     needs: build-dev
+    if: vars.DEV_WORKER_READY == 'true'
     steps:
       - name: Load DEV worker secrets from 1Password
         uses: 1password/load-secrets-action@v3
@@ -132,7 +135,7 @@ jobs:
           STATUS="000"
           for i in $(seq 1 18); do
             BODY=$(curl -sf -w "\n%{http_code}" \
-              https://dev.api.usezombie.com/healthz 2>&1 || echo -e "\n000")
+              https://api-dev.usezombie.com/healthz 2>&1 || echo -e "\n000")
             STATUS=$(echo "$BODY" | tail -1)
             RESP=$(echo "$BODY" | head -1)
             if [ "$STATUS" = "200" ]; then
@@ -149,7 +152,7 @@ jobs:
 
       - name: Check /readyz
         run: |
-          curl -sf https://dev.api.usezombie.com/readyz | jq -e '.ready == true'
+          curl -sf https://api-dev.usezombie.com/readyz | jq -e '.ready == true'
 
   # ── 4. QA smoke tests against DEV ───────────────────────────────────────
   qa-dev:
@@ -174,7 +177,7 @@ jobs:
         run: bun run test:e2e:smoke
         working-directory: ui/packages/app
         env:
-          BASE_URL: https://dev.api.usezombie.com
+          BASE_URL: https://api-dev.usezombie.com
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v7
