@@ -195,15 +195,4 @@ picking it up in 3 months understands the motivation and where to start.
 **Priority:** P2
 **Depends on:** OTLP log exporter (establishes shared auth config pattern), fix/tls-startup-logging PR
 
----
 
-## Build: Static OpenSSL + musl Target for Fully Static Binary
-
-**What:** Cross-compile OpenSSL for `x86_64-linux-musl`, switch zombied build target to musl, produce a fully static binary.
-**Why:** Static binary runs on Alpine/scratch containers — smaller image, no runtime lib dependencies. Aligns with nullclaw's musl build approach.
-**Pros:** ~8MB binary, zero runtime deps, alpine-compatible, simpler Dockerfile (FROM scratch).
-**Cons:** Significant build complexity — need to vendor or cross-compile OpenSSL static libs for musl target. CI build time increases.
-**Context:** Current target is `x86_64-linux` (glibc) with dynamic OpenSSL linking. Option A (dynamic) unblocks DEV deploy. Musl migration is a build-system project that can be done independently. Zig's cross-compile makes this feasible but OpenSSL's C build system is the hard part.
-**Effort:** L
-**Priority:** P3
-**Depends on:** fix/tls-startup-logging PR (OpenSSL linking pattern established)
