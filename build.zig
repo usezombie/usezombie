@@ -31,24 +31,28 @@ pub fn build(b: *std.Build) void {
     // host can provide headers. macOS cross-compile from Linux skips OpenSSL
     // (no macOS OpenSSL headers on Linux runners). macOS native dev uses Homebrew.
     const target_os = target.result.os.tag;
+    const target_arch = target.result.cpu.arch;
     const host_is_linux = builtin.os.tag == .linux;
     const host_is_darwin = builtin.os.tag == .macos;
-    // Enable OpenSSL when headers are available for the target:
-    //   Linux host + Linux target: CI deploy build (system libssl-dev)
-    //   macOS host: local dev (Homebrew OpenSSL, native target only)
-    // Skip for cross-compile where host can't provide target's headers
-    // (e.g. Linux host → macOS target has no macOS OpenSSL).
-    const enable_openssl = (host_is_linux and target_os == .linux) or (host_is_darwin and target_os == .macos);
+    const same_arch = builtin.cpu.arch == target_arch;
+    // Enable OpenSSL when headers AND matching-arch libs are available:
+    //   Linux host + Linux target + same arch: CI deploy build (system libssl-dev)
+    //   macOS host + macOS target: local dev (Homebrew OpenSSL, native only)
+    // Skip for cross-arch (e.g. x86_64 host → aarch64 target: libssl-dev
+    // provides x86_64 libs, can't link into aarch64 binary) and cross-OS.
+    const enable_openssl = (host_is_linux and target_os == .linux and same_arch) or (host_is_darwin and target_os == .macos);
 
     const pg_dep = if (enable_openssl) blk: {
+        // Homebrew installs to /opt/homebrew on Apple Silicon, /usr/local on Intel.
+        const homebrew_prefix = if (builtin.cpu.arch == .aarch64) "/opt/homebrew" else "/usr/local";
         const ssl_include: std.Build.LazyPath = .{ .cwd_relative = if (host_is_linux)
             "/usr/include"
         else
-            "/opt/homebrew/opt/openssl@3/include" };
+            homebrew_prefix ++ "/opt/openssl@3/include" };
         const ssl_lib: std.Build.LazyPath = .{ .cwd_relative = if (host_is_linux)
             b.fmt("/usr/lib/{s}", .{@tagName(builtin.cpu.arch) ++ "-linux-gnu"})
         else
-            "/opt/homebrew/opt/openssl@3/lib" };
+            homebrew_prefix ++ "/opt/openssl@3/lib" };
         break :blk b.dependency("pg", .{
             .target = target,
             .optimize = optimize,
