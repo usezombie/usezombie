@@ -8,9 +8,7 @@
 #   2 -> procurement readiness gate (required refs + role separation checks)
 #
 # Usage:
-#   ./scripts/checks/m2_001/run.sh
-#   ENV=dev ./scripts/checks/m2_001/run.sh
-#   ENV=prod SECTIONS=1,2 ./scripts/checks/m2_001/run.sh
+#   ./scripts/checks/m2_001/run.sh    # runs all sections, both environments
 
 set -euo pipefail
 

@@ -29,12 +29,12 @@ jobs:
 
       - uses: 1password/install-cli-action@v1
 
-      - name: Check DEV vault credentials
+      - name: Check vault credentials
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           VAULT_DEV: ${{ vars.VAULT_DEV }}
           VAULT_PROD: ${{ vars.VAULT_PROD }}
-        run: ENV=dev ./scripts/check-credentials.sh
+        run: ./scripts/check-credentials.sh
 
   # ── 1. Build and push dev-latest image to GHCR ──────────────────────────
   build-dev:
