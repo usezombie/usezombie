@@ -5,64 +5,77 @@
 
 ---
 
-## Cryptographic Inventory
+## How Long Does a Quantum Attack Take?
 
-| Asset | Algorithm | Lifespan | Quantum Risk | Notes |
-|-------|-----------|----------|-------------|-------|
-| Envelope KEK | AES-256-GCM | Long-lived (vault) | **Safe** — Grover's gives 128-bit security, infeasible | Versioned rotation supported (KEK_VERSION 1→2) |
-| Per-secret DEK | AES-256-GCM | Per-secret | **Safe** | Random per encrypt, wrapped by KEK |
-| Clerk JWTs | ES256 (ECDSA P-256) | 60 seconds | **None** — expires before attack completes | OIDC abstraction decouples from Clerk's signing algorithm |
-| TLS key exchange | X25519Kyber768 | Per-session | **Protected** — Cloudflare ships PQC hybrid | Only applies to Cloudflare Tunnel path |
-| TLS certificates | ECDSA P-256 | 90 days (Let's Encrypt) | **Low** — rotates frequently | Certificate forgery requires breaking key within 90d window |
-| SSH worker keys | Ed25519 | Indefinite | **Real risk** — harvest now, decrypt later | Long-lived, no rotation policy, classically signed |
-| Tailscale WireGuard | Curve25519 | Per-session | **Low** — ephemeral keys, rotated per handshake | sntrup761 PQC hybrid available in newer versions |
-| GitHub App PEM | RSA 2048 | Long-lived | **Medium** — long-lived RSA key, breakable by Shor's | Rotate annually; GitHub doesn't offer PQC keys yet |
+Current best estimates for breaking P-256 / Ed25519 with a cryptographically relevant quantum computer (CRQC):
+
+| Source | Estimate | Qubits needed |
+|--------|----------|---------------|
+| IBM / Google roadmap | 2035–2040 earliest | ~4,000+ logical qubits |
+| Gidney & Ekera (2021) | ~8 hours once hardware exists | 2,330 logical qubits (~20M physical) |
+| NIST PQC report | Not before 2030, likely later | — |
+| BSI (German fed) | Plan for post-2030 | — |
+
+Today's largest quantum computers: ~1,200 physical qubits (IBM Condor). You need ~20 million physical qubits to break P-256. We're 4+ orders of magnitude away.
+
+Once the hardware exists, the actual attack (Shor's algorithm on the P-256 curve) would take **hours, not seconds**.
 
 ---
 
-## Post-Quantum Risk: SSH Worker Keys
+## Why JWTs Are Not at Risk
 
-**Severity:** Medium (future risk, not exploitable today)
-**Timeline:** Cryptographically relevant quantum computers (CRQC) estimated 2035–2040
+Clerk JWTs expire in 60 seconds. An attacker would need to:
 
-### Threat Model
+1. Intercept the JWT
+2. Extract the public key from JWKS
+3. Run Shor's to derive the private key (~8 hours)
+4. Forge a new JWT
+
+By step 3, the original token is long expired, and the forged token would need a valid `exp` claim that Clerk's JWKS rotation would have already invalidated.
+
+The real risk is not JWT forgery — it's **long-lived asymmetric keys** (TLS certificates, SSH keys, code signing). Those sit unchanged for months or years. JWTs are ephemeral by design.
+
+---
+
+## TLS 1.3 and SSH Can Be Broken in < 8 Hours — Real Vulnerability
+
+**TLS 1.3** — partially protected already. Cloudflare and Chrome ship **X25519Kyber768** hybrid key exchange today. `api-dev.usezombie.com` traffic through Cloudflare Tunnel already negotiates PQC key exchange. The handshake is safe. But the **server certificate** (ECDSA P-256) is still classically signed — a CRQC could forge a certificate. The fix is PQC certificate signatures, which is in draft (NIST SP 800-227).
+
+**SSH** — this is the real exposure. Worker nodes use **Ed25519** keys:
+
+- `zombie-prod-worker-ant/ssh-private-key`
+- `zombie-prod-worker-bird/ssh-private-key`
+- `zombie-dev-worker-ant/ssh-private-key`
+
+Ed25519 is Curve25519 — same class as P-256, breakable by Shor's in the same ~8 hour window. These keys are **long-lived** (they sit in vault indefinitely, don't expire, don't rotate). That's the exact "harvest now, decrypt later" threat:
 
 1. Attacker records Tailscale SSH traffic today
-2. Stores encrypted sessions
-3. In 2035+, runs Shor's algorithm on captured Ed25519 public key (~8 hours on ~20M physical qubits)
+2. Stores it
+3. In 2035, runs Shor's on the captured Ed25519 public key (~8 hrs)
 4. Derives private key, decrypts all stored sessions
-
-### Affected Assets
-
-- `op://ZMB_CD_PROD/zombie-prod-worker-ant/ssh-private-key` (Ed25519)
-- `op://ZMB_CD_PROD/zombie-prod-worker-bird/ssh-private-key` (Ed25519)
-- `op://ZMB_CD_DEV/zombie-dev-worker-ant/ssh-private-key` (Ed25519)
-
-### Current Mitigations
-
-- Tailscale encrypts traffic via WireGuard (Curve25519 per-session keys — ephemeral, limits harvest window)
-- No public SSH port — Tailscale only (reduces attack surface for traffic capture)
-- Worker nodes are bare-metal, not multi-tenant (limits lateral movement value)
-
-### Planned Mitigations
-
-1. **SSH key rotation** — rotate worker SSH keys quarterly. Limits the window of harvested traffic per key.
-2. **PQC SSH key exchange** — OpenSSH 9.0+ supports `sntrup761x25519-sha512` hybrid KEX (PQC + classical). Enable on worker nodes when Debian ships OpenSSH 9.x+.
-3. **PQC SSH host keys** — OpenSSH 9.9+ supports ML-DSA host key signatures. Adopt when available in stable Debian.
 
 ---
 
-## Post-Quantum Risk: GitHub App PEM
+## What's Actually at Risk in This Stack
 
-**Severity:** Low-medium (long-lived RSA 2048 key)
+| Asset | Algorithm | Lifespan | PQC risk |
+|-------|-----------|----------|----------|
+| Clerk JWTs | ES256 (P-256) | 60 seconds | **None** — expires before attack completes |
+| TLS key exchange | X25519Kyber768 | Per-session | **Protected** — Cloudflare already ships PQC |
+| TLS certificates | ECDSA P-256 | 90 days (Let's Encrypt) | **Low** — rotates frequently |
+| SSH worker keys | Ed25519 | Indefinite | **Real risk** — harvest now, decrypt later |
+| Tailscale WireGuard | Curve25519 | Per-session, rotated | **Low** — ephemeral keys, rotated frequently |
+| Encryption KEK | AES-256 | Long-lived | **Safe** — Grover's gives 128-bit security, still infeasible |
+| Per-secret DEK | AES-256-GCM | Per-secret | **Safe** — random per encrypt, wrapped by KEK |
+| GitHub App PEM | RSA 2048 | Long-lived | **Medium** — breakable by Shor's in ~4 hrs, rotate annually |
 
-GitHub App private keys (RSA 2048) are used to sign JWTs for installation token requests. These are long-lived and stored in vault. RSA 2048 is breakable by Shor's algorithm in ~4 hours on a CRQC.
+---
 
-### Mitigations
+## Practical Mitigations (No Code Changes)
 
-- Rotate annually (GitHub allows regenerating App private keys)
-- GitHub does not yet offer PQC key types — no action available beyond rotation
-- Installation tokens are short-lived (1 hour) — limits blast radius of a compromised App key
+1. **SSH key rotation** — rotate worker SSH keys quarterly. Limits the window of harvested traffic per key.
+2. **OpenSSH 9.0+ supports PQC** — `ssh-keygen -t ml-kem-768` (hybrid ML-KEM + X25519 key exchange). Workers run Debian — OpenSSH 9.x is available. This protects the key exchange but not the host key signature.
+3. **OpenSSH 9.9+ supports ML-DSA** — `sntrup761x25519-sha512` is already the default KEX. Full PQC host keys (`-t ml-dsa-87`) are coming.
 
 ---
 
@@ -71,7 +84,7 @@ GitHub App private keys (RSA 2048) are used to sign JWTs for installation token 
 The envelope encryption system (AES-256-GCM) is quantum-resistant:
 
 - Grover's algorithm reduces AES-256 to ~128-bit equivalent security — still computationally infeasible
-- KEK versioning supports rotation without re-encrypting existing secrets
+- KEK versioning supports rotation without re-encrypting existing secrets (KEK_VERSION 1 → 2)
 - DEKs are random per secret — compromising one DEK reveals one secret, not all
 
 No changes needed for v1 or v2.
@@ -88,6 +101,16 @@ Traffic flowing through Cloudflare Tunnel benefits from Cloudflare's hybrid PQC 
 - Certificate Transparency logs would detect forged certificates
 
 No action needed — this is a CA/browser ecosystem upgrade, not application-level.
+
+---
+
+## GitHub App PEM: Rotate Annually
+
+GitHub App private keys (RSA 2048) are used to sign JWTs for installation token requests. These are long-lived and stored in vault. RSA 2048 is breakable by Shor's algorithm in ~4 hours on a CRQC.
+
+- Rotate annually (GitHub allows regenerating App private keys)
+- GitHub does not yet offer PQC key types — no action available beyond rotation
+- Installation tokens are short-lived (1 hour) — limits blast radius of a compromised App key
 
 ---
 
