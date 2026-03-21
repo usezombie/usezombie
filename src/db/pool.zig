@@ -50,7 +50,9 @@ pub const MigrationState = struct {
 const MigrationAdvisoryLockKey: i64 = 0x7A6F6D6269650001;
 
 /// Parse a Postgres connection URL into pg.Pool.Opts.
-/// URL format: postgres://user:pass@host:port/dbname
+/// URL format: postgres://user:pass@host:port/dbname[?query]
+/// TLS is always required — all role-separated connections go to hosted Postgres
+/// providers (PlanetScale, Neon, Supabase) that mandate TLS.
 pub fn parseUrl(alloc: std.mem.Allocator, url: []const u8) !pg.Pool.Opts {
     // strip scheme
     const rest = if (std.mem.startsWith(u8, url, "postgres://"))
@@ -60,7 +62,7 @@ pub fn parseUrl(alloc: std.mem.Allocator, url: []const u8) !pg.Pool.Opts {
     else
         return error.InvalidDatabaseUrl;
 
-    // user:pass@host:port/dbname
+    // user:pass@host:port/dbname[?query]
     const at_pos = std.mem.lastIndexOfScalar(u8, rest, '@') orelse return error.InvalidDatabaseUrl;
     const userpass = rest[0..at_pos];
     const hostpath = rest[at_pos + 1 ..];
@@ -75,10 +77,16 @@ pub fn parseUrl(alloc: std.mem.Allocator, url: []const u8) !pg.Pool.Opts {
         username = userpass;
     }
 
-    // host:port/dbname
+    // host:port/dbname[?query]
     const slash_pos = std.mem.indexOfScalar(u8, hostpath, '/') orelse return error.InvalidDatabaseUrl;
     const hostport = hostpath[0..slash_pos];
-    const dbname = hostpath[slash_pos + 1 ..];
+    const dbpath = hostpath[slash_pos + 1 ..];
+
+    // Strip query string from dbname (e.g. "mydb?sslmode=require" → "mydb")
+    const dbname = if (std.mem.indexOfScalar(u8, dbpath, '?')) |q|
+        dbpath[0..q]
+    else
+        dbpath;
 
     var host: []const u8 = hostport;
     var port: u16 = 5432;
@@ -92,6 +100,7 @@ pub fn parseUrl(alloc: std.mem.Allocator, url: []const u8) !pg.Pool.Opts {
         .connect = .{
             .host = try alloc.dupe(u8, host),
             .port = port,
+            .tls = .require,
         },
         .auth = .{
             .username = try alloc.dupe(u8, username),

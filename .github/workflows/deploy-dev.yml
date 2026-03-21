@@ -48,6 +48,9 @@ jobs:
         with:
           version: 0.15.2
 
+      - name: Install OpenSSL dev headers (required for pg.zig TLS)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev
+
       - name: Build linux/amd64 binary
         run: |
           zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux
@@ -92,6 +95,7 @@ jobs:
       - name: Sync Fly secrets from vault
         run: |
           flyctl secrets set \
+            LOG_LEVEL="debug" \
             DATABASE_URL_API="$DATABASE_URL_API" \
             DATABASE_URL_WORKER="$DATABASE_URL_WORKER" \
             REDIS_URL_API="$REDIS_URL_API" \

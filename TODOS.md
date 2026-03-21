@@ -168,3 +168,42 @@ picking it up in 3 months understands the motivation and where to start.
 **Effort:** S
 **Priority:** P1
 **Depends on:** None
+
+---
+
+## Observability: OTLP Log Exporter for Grafana Cloud
+
+**What:** New `src/observability/otel_logs.zig` — async ring buffer + batch POST to Grafana Cloud `/v1/logs`. Dual-write in `zombiedLog` (stderr + OTLP buffer).
+**Why:** Fly stderr logs aren't searchable or alertable. Grafana Cloud gives dashboards, alerts, and log↔metric correlation. Structured logs (phase=, scope=, err=) are already emitted — they just need a transport.
+**Pros:** Unified observability in Grafana Cloud. Follows existing `otel_export.zig` + `langfuse.zig` fire-and-forget patterns. Same OTLP gateway endpoint as metrics.
+**Cons:** New file (~150 lines), async flush thread, needs `GRAFANA_OTLP_*` auth config. Must not block startup or request path.
+**Context:** User has Grafana Cloud signed up. Metrics already ship via `otel_export.zig`. OTLP gateway accepts logs/metrics/traces at one endpoint with Basic auth (`instance_id:api_key`). Auth config pattern should be shared with metrics exporter.
+**Effort:** M
+**Priority:** P1
+**Depends on:** fix/tls-startup-logging PR (structured phase logs must exist before shipping them)
+
+---
+
+## Observability: OTLP Trace Exporter + Trace Propagation for Grafana Cloud
+
+**What:** Propagate `TraceContext` through HTTP handlers (assign trace/span IDs per request), export spans to Grafana Cloud `/v1/traces`.
+**Why:** Correlate logs → traces → metrics in Grafana. See DB/Redis/agent call breakdown per request. Currently `TraceContext` is implemented in `trace.zig` but never called in production code.
+**Pros:** Full distributed tracing story. Debug slow requests end-to-end. Same OTLP gateway as logs/metrics.
+**Cons:** Touches every HTTP handler to thread TraceContext through context. New exporter file. Meaningful scope (~200 lines across 10+ files).
+**Context:** `trace.zig` has `generate()`, `child()`, `toW3CHeader()`, `fromW3CHeader()` — all implemented and tested, just not wired into request flow. Export follows the same OTLP/HTTP JSON pattern as metrics and logs.
+**Effort:** L
+**Priority:** P2
+**Depends on:** OTLP log exporter (establishes shared auth config pattern), fix/tls-startup-logging PR
+
+---
+
+## Build: Static OpenSSL + musl Target for Fully Static Binary
+
+**What:** Cross-compile OpenSSL for `x86_64-linux-musl`, switch zombied build target to musl, produce a fully static binary.
+**Why:** Static binary runs on Alpine/scratch containers — smaller image, no runtime lib dependencies. Aligns with nullclaw's musl build approach.
+**Pros:** ~8MB binary, zero runtime deps, alpine-compatible, simpler Dockerfile (FROM scratch).
+**Cons:** Significant build complexity — need to vendor or cross-compile OpenSSL static libs for musl target. CI build time increases.
+**Context:** Current target is `x86_64-linux` (glibc) with dynamic OpenSSL linking. Option A (dynamic) unblocks DEV deploy. Musl migration is a build-system project that can be done independently. Zig's cross-compile makes this feasible but OpenSSL's C build system is the hard part.
+**Effort:** L
+**Priority:** P3
+**Depends on:** fix/tls-startup-logging PR (OpenSSL linking pattern established)

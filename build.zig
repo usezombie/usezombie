@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -25,9 +26,23 @@ pub fn build(b: *std.Build) void {
     const zap_mod = zap_dep.module("zap");
 
     // ── pg.zig (pure-Zig Postgres driver) ────────────────────────────────────
+    // OpenSSL is required for TLS connections to PlanetScale / hosted Postgres.
+    // Paths resolved from host OS (where the compiler runs):
+    //   macOS:  Homebrew OpenSSL at /opt/homebrew/opt/openssl@3
+    //   Linux:  System libssl-dev at /usr/include + arch-specific lib path
+    const ssl_include: std.Build.LazyPath = .{ .cwd_relative = if (builtin.os.tag == .linux)
+        "/usr/include"
+    else
+        "/opt/homebrew/opt/openssl@3/include" };
+    const ssl_lib: std.Build.LazyPath = .{ .cwd_relative = if (builtin.os.tag == .linux)
+        b.fmt("/usr/lib/{s}", .{@tagName(builtin.cpu.arch) ++ "-linux-gnu"})
+    else
+        "/opt/homebrew/opt/openssl@3/lib" };
     const pg_dep = b.dependency("pg", .{
         .target = target,
         .optimize = optimize,
+        .openssl_include_path = ssl_include,
+        .openssl_lib_path = ssl_lib,
     });
     const pg_mod = pg_dep.module("pg");
 
@@ -60,7 +75,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    if (optimize != .Debug) {
+    // Only strip in ReleaseSmall (musl/minimal builds). ReleaseSafe keeps debug
+    // info so panics produce usable stack traces in production.
+    if (optimize == .ReleaseSmall) {
         exe.root_module.strip = true;
     }
 
