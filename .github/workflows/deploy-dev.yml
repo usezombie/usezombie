@@ -70,15 +70,40 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Load Fly API token from 1Password
+      - name: Load secrets from 1Password
         uses: 1password/load-secrets-action@v3
         with:
           export-env: true
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           FLY_API_TOKEN: op://${{ vars.VAULT_DEV }}/fly-api-token/credential
+          DATABASE_URL_API: op://${{ vars.VAULT_DEV }}/planetscale-dev/api-connection-string
+          DATABASE_URL_WORKER: op://${{ vars.VAULT_DEV }}/planetscale-dev/worker-connection-string
+          REDIS_URL_API: op://${{ vars.VAULT_DEV }}/upstash-dev/api-url
+          REDIS_URL_WORKER: op://${{ vars.VAULT_DEV }}/upstash-dev/worker-url
+          ENCRYPTION_MASTER_KEY: op://${{ vars.VAULT_DEV }}/encryption-master-key/credential
+          GITHUB_APP_ID: op://${{ vars.VAULT_DEV }}/github-app/app-id
+          GITHUB_APP_PRIVATE_KEY: op://${{ vars.VAULT_DEV }}/github-app/private-key
+          CLERK_PUBLISHABLE_KEY: op://${{ vars.VAULT_DEV }}/clerk-dev/publishable-key
+          CLERK_SECRET_KEY: op://${{ vars.VAULT_DEV }}/clerk-dev/secret-key
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Sync Fly secrets from vault
+        run: |
+          flyctl secrets set \
+            DATABASE_URL_API="$DATABASE_URL_API" \
+            DATABASE_URL_WORKER="$DATABASE_URL_WORKER" \
+            REDIS_URL_API="$REDIS_URL_API" \
+            REDIS_URL_WORKER="$REDIS_URL_WORKER" \
+            ENCRYPTION_MASTER_KEY="$ENCRYPTION_MASTER_KEY" \
+            GITHUB_APP_ID="$GITHUB_APP_ID" \
+            GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" \
+            CLERK_PUBLISHABLE_KEY="$CLERK_PUBLISHABLE_KEY" \
+            CLERK_SECRET_KEY="$CLERK_SECRET_KEY" \
+            --app ${{ vars.FLY_APP_DEV }} --stage
+        env:
+          FLY_API_TOKEN: ${{ env.FLY_API_TOKEN }}
 
       - name: Deploy zombied-dev
         run: flyctl deploy --app ${{ vars.FLY_APP_DEV }} --image ghcr.io/usezombie/zombied:dev-latest --config deploy/fly/zombied-dev/fly.toml --wait-timeout 120
