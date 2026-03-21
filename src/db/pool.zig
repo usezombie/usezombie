@@ -82,11 +82,14 @@ pub fn parseUrl(alloc: std.mem.Allocator, url: []const u8) !pg.Pool.Opts {
     const hostport = hostpath[0..slash_pos];
     const dbpath = hostpath[slash_pos + 1 ..];
 
-    // Strip query string from dbname (e.g. "mydb?sslmode=require" → "mydb")
-    const dbname = if (std.mem.indexOfScalar(u8, dbpath, '?')) |q|
-        dbpath[0..q]
-    else
-        dbpath;
+    // Split dbname from query string (e.g. "mydb?sslmode=require" → "mydb", "sslmode=require")
+    const query_start = std.mem.indexOfScalar(u8, dbpath, '?');
+    const dbname = if (query_start) |q| dbpath[0..q] else dbpath;
+    const query_string = if (query_start) |q| dbpath[q + 1 ..] else "";
+
+    // TLS defaults to require (hosted Postgres providers mandate it).
+    // Respect ?sslmode=disable for local dev/test with docker Postgres.
+    const tls: pg.Conn.Opts.TLS = if (hasSslModeDisable(query_string)) .off else .require;
 
     var host: []const u8 = hostport;
     var port: u16 = 5432;
@@ -100,7 +103,7 @@ pub fn parseUrl(alloc: std.mem.Allocator, url: []const u8) !pg.Pool.Opts {
         .connect = .{
             .host = try alloc.dupe(u8, host),
             .port = port,
-            .tls = .require,
+            .tls = tls,
         },
         .auth = .{
             .username = try alloc.dupe(u8, username),
@@ -109,6 +112,17 @@ pub fn parseUrl(alloc: std.mem.Allocator, url: []const u8) !pg.Pool.Opts {
             .timeout = 10_000,
         },
     };
+}
+
+fn hasSslModeDisable(query: []const u8) bool {
+    var it = std.mem.splitScalar(u8, query, '&');
+    while (it.next()) |param| {
+        if (std.mem.startsWith(u8, param, "sslmode=")) {
+            const val = param["sslmode=".len..];
+            if (std.mem.eql(u8, val, "disable")) return true;
+        }
+    }
+    return false;
 }
 
 fn resolveDatabaseUrl(alloc: std.mem.Allocator, role: DbRole) ![]const u8 {
@@ -378,6 +392,16 @@ pub fn runMigrations(pool: *Pool, migrations: []const Migration) !void {
         clearMigrationFailure(conn, migration.version);
         log.info("migration applied version={d} statements={d}", .{ migration.version, statements });
     }
+}
+
+test "hasSslModeDisable detects disable in query string" {
+    try std.testing.expect(hasSslModeDisable("sslmode=disable"));
+    try std.testing.expect(hasSslModeDisable("application_name=test&sslmode=disable"));
+    try std.testing.expect(hasSslModeDisable("sslmode=disable&timeout=10"));
+    try std.testing.expect(!hasSslModeDisable("sslmode=require"));
+    try std.testing.expect(!hasSslModeDisable("sslmode=verify-full"));
+    try std.testing.expect(!hasSslModeDisable(""));
+    try std.testing.expect(!hasSslModeDisable("application_name=test"));
 }
 
 test {

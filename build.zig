@@ -27,22 +27,37 @@ pub fn build(b: *std.Build) void {
 
     // ── pg.zig (pure-Zig Postgres driver) ────────────────────────────────────
     // OpenSSL is required for TLS connections to PlanetScale / hosted Postgres.
-    // Paths resolved from host OS (where the compiler runs):
-    //   macOS:  Homebrew OpenSSL at /opt/homebrew/opt/openssl@3
-    //   Linux:  System libssl-dev at /usr/include + arch-specific lib path
-    const ssl_include: std.Build.LazyPath = .{ .cwd_relative = if (builtin.os.tag == .linux)
-        "/usr/include"
-    else
-        "/opt/homebrew/opt/openssl@3/include" };
-    const ssl_lib: std.Build.LazyPath = .{ .cwd_relative = if (builtin.os.tag == .linux)
-        b.fmt("/usr/lib/{s}", .{@tagName(builtin.cpu.arch) ++ "-linux-gnu"})
-    else
-        "/opt/homebrew/opt/openssl@3/lib" };
-    const pg_dep = b.dependency("pg", .{
+    // Only enabled when the target is Linux (our deployment platform) and the
+    // host can provide headers. macOS cross-compile from Linux skips OpenSSL
+    // (no macOS OpenSSL headers on Linux runners). macOS native dev uses Homebrew.
+    const target_os = target.result.os.tag;
+    const host_is_linux = builtin.os.tag == .linux;
+    const host_is_darwin = builtin.os.tag == .macos;
+    // Enable OpenSSL when headers are available for the target:
+    //   Linux host + Linux target: CI deploy build (system libssl-dev)
+    //   macOS host: local dev (Homebrew OpenSSL, native target only)
+    // Skip for cross-compile where host can't provide target's headers
+    // (e.g. Linux host → macOS target has no macOS OpenSSL).
+    const enable_openssl = (host_is_linux and target_os == .linux) or (host_is_darwin and target_os == .macos);
+
+    const pg_dep = if (enable_openssl) blk: {
+        const ssl_include: std.Build.LazyPath = .{ .cwd_relative = if (host_is_linux)
+            "/usr/include"
+        else
+            "/opt/homebrew/opt/openssl@3/include" };
+        const ssl_lib: std.Build.LazyPath = .{ .cwd_relative = if (host_is_linux)
+            b.fmt("/usr/lib/{s}", .{@tagName(builtin.cpu.arch) ++ "-linux-gnu"})
+        else
+            "/opt/homebrew/opt/openssl@3/lib" };
+        break :blk b.dependency("pg", .{
+            .target = target,
+            .optimize = optimize,
+            .openssl_include_path = ssl_include,
+            .openssl_lib_path = ssl_lib,
+        });
+    } else b.dependency("pg", .{
         .target = target,
         .optimize = optimize,
-        .openssl_include_path = ssl_include,
-        .openssl_lib_path = ssl_lib,
     });
     const pg_mod = pg_dep.module("pg");
 

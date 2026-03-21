@@ -61,6 +61,18 @@ test "parseUrl strips multiple query params from dbname" {
     try std.testing.expect(opts.connect.tls == .require);
 }
 
+test "parseUrl respects sslmode=disable for local dev" {
+    const alloc = std.testing.allocator;
+    const opts = try parseUrl(alloc, "postgres://u:p@localhost:5432/testdb?sslmode=disable");
+    defer alloc.free(opts.connect.host.?);
+    defer alloc.free(opts.auth.username);
+    defer alloc.free(opts.auth.password.?);
+    defer alloc.free(opts.auth.database.?);
+
+    try std.testing.expectEqualStrings("testdb", opts.auth.database.?);
+    try std.testing.expect(opts.connect.tls == .off);
+}
+
 test "roleEnvVarName maps db roles deterministically" {
     try std.testing.expectEqualStrings("DATABASE_URL", roleEnvVarName(.default));
     try std.testing.expectEqualStrings("DATABASE_URL_API", roleEnvVarName(.api));
