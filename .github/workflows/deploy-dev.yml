@@ -85,6 +85,27 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ env.FLY_API_TOKEN }}
 
+      - name: Verify Fly machine state (started)
+        run: |
+          APP="${{ vars.FLY_APP_DEV }}"
+          echo "Checking Fly machine state for ${APP}..."
+          for i in $(seq 1 12); do
+            OUT="$(flyctl machine list --app "${APP}" || true)"
+            echo "${OUT}"
+            if echo "${OUT}" | grep -qiE '\bstarted\b'; then
+              echo "✓ at least one machine is started for ${APP}"
+              exit 0
+            fi
+            echo "attempt ${i}/12: no started machine yet; retrying in 5s..."
+            sleep 5
+          done
+          echo "✗ no started machine found for ${APP} after 60s"
+          echo "Fly app status for diagnostics:"
+          flyctl status --app "${APP}" || true
+          exit 1
+        env:
+          FLY_API_TOKEN: ${{ env.FLY_API_TOKEN }}
+
   # ── 3. Deploy DEV worker to bare-metal via Tailscale SSH ─────────────────
   # Skips until zombie-dev-worker-ant bootstrap is complete (M4_001).
   # Enable by setting DEV_WORKER_READY=true in GitHub → Settings → Variables.
@@ -120,7 +141,7 @@ jobs:
   # ── 4. Wait for Fly DEV to go green (via Cloudflare Tunnel) ─────────────
   verify-dev:
     runs-on: ubuntu-latest
-    needs: [deploy-fly-dev, deploy-dev-worker]
+    needs: deploy-fly-dev
     steps:
       - name: Wait for zombied-dev to go green
         # Poll /healthz via Cloudflare Tunnel until green or timeout (3 min).

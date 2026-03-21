@@ -1,128 +1,130 @@
-# M4_008: Sandbox Resource Governance
+# M4_008: Sandbox Resource Governance (v1 — bubblewrap + Landlock)
 
 **Prototype:** v1.0.0
 **Milestone:** M4
 **Workstream:** 008
-**Date:** Mar 12, 2026
+**Date:** Mar 21, 2026
 **Status:** PENDING
 **Priority:** P0 — required before multi-tenant production
 **Batch:** B4 — needs M4_005
 **Depends on:** M4_005 (Events, Observability, Config), M4_007 (Runtime Env Contract)
+**Supersedes:** Firecracker microVM approach (moved to `docs/spec/v2/M3_001_FIRECRACKER_SANDBOX_RESOURCE_GOVERNANCE.md`)
 
 ---
 
 ## Problem
 
-NullClaw agent executions run directly on the worker host with no resource boundaries. A single runaway agent can exhaust memory (OOM kills the worker), fill disk (blocks all runs), or pin CPU (starves concurrent runs). Landlock provides filesystem path restriction but zero resource capping.
+NullClaw agent executions need per-run resource boundaries. A single runaway agent can exhaust memory (OOM kills the worker), fill disk (blocks all runs), or pin CPU (starves concurrent runs). Landlock alone provides filesystem path restriction but zero resource capping.
 
-This is not a hardening concern — it is a production blocker. Without per-execution resource governance, a single tenant's agent run can take down the entire worker fleet.
+## Decision: bubblewrap + Landlock + cgroups v2
 
-## Decision: Firecracker microVMs
+NullClaw's standard sandbox path is bubblewrap as primary with Landlock layered on top. Composable primitives, no profiles, no daemons.
 
-The architecture doc defers Firecracker to "v2." That deferral is rejected. cgroups v2 alone solves resource capping but not execution isolation (network, filesystem view, kernel attack surface). For a multi-tenant agent platform where arbitrary LLM-generated code runs, the isolation boundary must be a VM, not a namespace.
+**Why bwrap + Landlock:**
+- NullClaw already has `.sandbox = .{ .mode = .bubblewrap }` — zero new dependencies
+- bwrap provides PID/mount/network namespace isolation — explicit, deterministic, minimal surface
+- Landlock layers filesystem access control on top — unprivileged, kernel-enforced path restriction
+- cgroups v2 (systemd-managed) provides hard memory ceiling, CPU quota, and I/O limits per execution
+- Sub-millisecond startup — no VM boot latency
 
-**Why not cgroups v2 alone:**
-- No network namespace isolation without additional CNI setup
-- Shared kernel — agent code can exploit kernel vulnerabilities
-- No filesystem snapshot/restore — dirty workspace state leaks between runs
-- cgroups require root or delegated controllers — operational complexity equivalent to VMs
+**Why not firejail:**
+- Large attack surface, historically brittle
+- Profile-driven — convenience over correctness
+- Not the design center for NullClaw; exists only as a last-resort fallback
 
-**Why Firecracker:**
-- Sub-200ms boot from pre-warmed snapshots (measured by AWS, Fly.io, Hetzner users)
-- Hard memory ceiling (balloon driver), vCPU pinning, virtio-blk disk limits — kernel-enforced
-- Network isolation via tap device + iptables egress allowlist — no CNI
-- Immutable rootfs + overlay workspace — clean slate per execution
-- Already proven for multi-tenant code execution (Lambda, Fly Machines, Koyeb)
+**Why not Docker:**
+- Daemon-dependent, heavyweight
+- Not a sandbox primitive — it's a container system
+- Overkill for per-execution isolation
+
+**What this does NOT solve (deferred to v2 Firecracker):**
+- Shared kernel — agent code shares the host kernel (acceptable for v1 with trusted agent configs)
+- No filesystem snapshot/restore — workspace cleanup is rm-based, not immutable rootfs overlay
+- Network isolation is namespace-based, not tap-device-based — simpler but less granular
 
 **What changes in the worker:**
-- Worker becomes an orchestrator — it no longer runs NullClaw in-process
-- Worker prepares a VM payload (spec, worktree snapshot, agent config, BYOK credentials)
-- Worker boots a Firecracker VM, monitors it, collects output
-- NullClaw runs inside the VM as a thin runner binary
+- Worker configures a cgroup v2 scope per execution (memory.max, cpu.max, io.max)
+- Worker invokes NullClaw with bwrap sandbox mode + Landlock filesystem policy
+- Worker monitors cgroup events (memory.events for OOM, cpu.stat for throttling)
+- On OOM or timeout, worker kills the cgroup and transitions run to BLOCKED
 
 ---
 
-## 1.0 VM Lifecycle Manager
+## 1.0 cgroup v2 Scope Manager
 
 **Status:** PENDING
 
-Implement the Firecracker VM boot/monitor/teardown lifecycle in the worker.
+Implement per-execution cgroup v2 lifecycle in the worker.
 
 **Dimensions:**
-- 1.1 PENDING Define VM payload format (spec, worktree tarball, agent config, credentials envelope)
-- 1.2 PENDING Implement VM boot from pre-warmed snapshot with resource caps (memory_mb, vcpu_count, disk_mb from config)
-- 1.3 PENDING Implement VM output collection (stdout/stderr capture, artifact extraction from overlay)
-- 1.4 PENDING Implement VM teardown with hard timeout kill (run_timeout_ms enforced at VM level)
+- 1.1 PENDING Create transient systemd scope per execution: `zombied-run-{run_id}.scope`
+- 1.2 PENDING Set `memory.max` from config (default 512M), `memory.swap.max=0`
+- 1.3 PENDING Set `cpu.max` from config (default 100000 100000 = 1 vCPU equivalent)
+- 1.4 PENDING Set `io.max` for workspace block device (default 50M write)
+- 1.5 PENDING Teardown scope on execution complete or timeout (hard kill via `systemctl kill`)
 
 ---
 
-## 2.0 Resource Cap Configuration
+## 2.0 NullClaw Sandbox Integration
 
 **Status:** PENDING
 
-Expose per-execution resource limits as configuration, with sane defaults and per-workspace overrides.
+Wire the worker to invoke NullClaw with bubblewrap + Landlock inside the cgroup scope.
 
 **Dimensions:**
-- 2.1 PENDING Add resource cap fields to ServeConfig: SANDBOX_MEMORY_MB (default 512), SANDBOX_VCPU_COUNT (default 1), SANDBOX_DISK_MB (default 1024)
-- 2.2 PENDING Add per-workspace resource override in workspace settings (optional, falls back to global)
-- 2.3 PENDING Add admission control: worker checks available host resources before claiming work (memory watermark, disk free threshold)
-- 2.4 PENDING Expose resource cap metrics: sandbox_memory_mb_allocated, sandbox_vcpu_allocated, sandbox_boots_total, sandbox_oom_kills_total
+- 2.1 PENDING Pass `.sandbox = .{ .mode = .bubblewrap, .allow_paths, .allow_net }` to NullClaw agent.run
+- 2.2 PENDING Landlock ruleset: workspace read-write, `/usr`, `/lib`, `/etc/resolv.conf` read-only, everything else denied
+- 2.3 PENDING Bind-mount workspace read-write via bwrap, everything else read-only or hidden
+- 2.4 PENDING Network namespace: allow only control-plane callback + LLM provider endpoints (allowlist from config)
+- 2.5 PENDING Worker startup preflight: verify bwrap binary exists, Landlock supported (kernel ≥5.13), cgroups v2 available; fail hard if any missing
 
 ---
 
-## 3.0 Network Egress Policy
+## 3.0 Resource Cap Configuration
 
 **Status:** PENDING
 
-Agent VMs must only reach approved endpoints. No open internet access.
+Expose per-execution resource limits as configuration.
 
 **Dimensions:**
-- 3.1 PENDING Define egress allowlist format (LLM provider endpoints, GitHub API, control plane callback)
-- 3.2 PENDING Implement iptables/nftables rules on tap device per VM
-- 3.3 PENDING Log blocked egress attempts as security events
+- 3.1 PENDING Add resource cap fields to ServeConfig: `SANDBOX_MEMORY_MB` (default 512), `SANDBOX_CPU_QUOTA` (default 100000), `SANDBOX_DISK_WRITE_MB` (default 1024)
+- 3.2 PENDING Add per-workspace resource override in workspace settings (optional, falls back to global)
+- 3.3 PENDING Admission control: worker checks host memory watermark and disk free before claiming work
+- 3.4 PENDING Expose metrics: `sandbox_memory_mb_allocated`, `sandbox_oom_kills_total`, `sandbox_cpu_throttled_seconds_total`
 
 ---
 
-## 4.0 Runner Binary
-
-**Status:** PENDING
-
-Thin binary that runs inside the Firecracker VM. Receives payload, executes NullClaw, writes output.
-
-**Dimensions:**
-- 4.1 PENDING Implement runner binary: reads payload from virtio-blk, runs NullClaw agent stages, writes artifacts to output block device
-- 4.2 PENDING Runner communicates completion/failure via vsock to host worker
-- 4.3 PENDING Runner enforces internal wall-clock timeout as a secondary kill switch
-
----
-
-## 5.0 Verification Units
+## 4.0 Verification Units
 
 **Status:** PENDING
 
 **Dimensions:**
-- 5.1 PENDING Integration test: VM boots, executes echo agent, returns output within resource caps
-- 5.2 PENDING Integration test: VM exceeding memory cap is OOM-killed and worker reports failure gracefully
-- 5.3 PENDING Integration test: VM exceeding disk cap gets I/O error, worker reports failure
-- 5.4 PENDING Integration test: VM exceeding timeout is force-killed, worker transitions run to BLOCKED
+- 4.1 PENDING Integration test: bwrap + Landlock sandbox runs echo agent, returns output within resource caps
+- 4.2 PENDING Integration test: execution exceeding memory cap triggers OOM, worker reports failure gracefully
+- 4.3 PENDING Integration test: execution exceeding timeout is killed via cgroup, run transitions to BLOCKED
+- 4.4 PENDING Integration test: Landlock denies access outside workspace (write to /tmp fails)
+- 4.5 PENDING Preflight check: worker startup verifies bwrap binary, Landlock support, cgroups v2
 
 ---
 
-## 6.0 Acceptance Criteria
+## 5.0 Acceptance Criteria
 
 **Status:** PENDING
 
-- [ ] 6.1 Agent execution runs inside Firecracker VM, not on worker host
-- [ ] 6.2 Memory, CPU, disk, and timeout caps are enforced at VM level
-- [ ] 6.3 Network egress restricted to allowlisted endpoints
-- [ ] 6.4 Worker gracefully handles VM crashes, OOM kills, and timeouts
-- [ ] 6.5 Demo evidence: run completes inside VM with resource metrics visible in /metrics
+- [ ] 5.1 Agent execution runs inside bwrap namespace with Landlock filesystem policy and cgroup v2 resource caps
+- [ ] 5.2 Memory, CPU, and disk write caps enforced at cgroup level
+- [ ] 5.3 Landlock denies filesystem access outside workspace and explicitly allowed paths
+- [ ] 5.4 Network restricted to allowlisted endpoints via network namespace
+- [ ] 5.5 Worker gracefully handles OOM kills and timeouts
+- [ ] 5.6 Resource metrics visible in /metrics endpoint
 
 ---
 
-## 7.0 Out of Scope
+## 6.0 Out of Scope (deferred to v2)
 
-- VM snapshot pool warming and lifecycle management (separate ops workstream)
-- GPU passthrough for model inference inside VMs
-- Live migration of running VMs between hosts
-- Custom rootfs images per workspace (single rootfs for v1)
+- Firecracker microVMs (see `docs/spec/v2/M3_001_FIRECRACKER_SANDBOX_RESOURCE_GOVERNANCE.md`)
+- Immutable rootfs with overlay filesystem
+- GPU passthrough
+- Per-execution network tap devices with iptables egress rules
+- VM snapshot pool warming
+- firejail support (not the design center; bwrap + Landlock is strictly better)

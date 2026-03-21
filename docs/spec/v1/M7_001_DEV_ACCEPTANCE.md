@@ -9,7 +9,7 @@
 **Depends on:** M7_001_DEPLOY (deploy pipeline wired), M6_006 (CLI hardened, DB gate passing)
 **Successor:** M7_003_PROD_ACCEPTANCE.md
 
-> **Status (Mar 20, 2026):** GHCR package set to public ✅. Cloudflare CNAME created ✅. Migrating from Railway to Fly.io + Cloudflare Tunnel for true origin shielding (see M2_002 §2.0). `deploy-dev.yml` needs updating to use `fly deploy` instead of Railway GraphQL trigger.
+> **Status (Mar 21, 2026):** GHCR package set to public ✅. Cloudflare Tunnel wired ✅. Fly.io DEV deployed ✅. `deploy-dev.yml` updated to use `fly deploy` + Cloudflare Tunnel verification. Railway fully removed.
 
 ---
 
@@ -24,7 +24,7 @@ Fly.io DEV app must be running, reachable at `api-dev.usezombie.com` via Cloudfl
 - 1.1b **DONE** Cloudflare CNAME `api-dev.usezombie.com` created ✅ — will be updated to tunnel CNAME once Fly.io is wired
 - 1.1c **PENDING [agent]** Create Fly.io apps (`zombied-dev`, `zombied-dev-worker`, `cloudflared-dev`), set secrets from 1Password, deploy from GHCR. See M2_002 §2.1–2.3. No public Fly port — all traffic via Cloudflare Tunnel only.
 - 1.1d **PENDING [agent]** Create Cloudflare Tunnel `zombied-dev`, route `api-dev.usezombie.com` → tunnel. See M2_002 §2.4. Replaces CNAME + Transform Rule hack.
-- 1.1e **PENDING [agent]** Update `deploy-dev.yml`: replace `trigger-railway-dev` job with `fly deploy --app zombied-dev --image ghcr.io/usezombie/zombied:dev-latest`. Store `fly-api-token` in vault + `FLY_API_TOKEN` GitHub secret.
+- 1.1e **DONE** `deploy-dev.yml` updated: `deploy-fly-dev` job runs `fly deploy --app zombied-dev --image ghcr.io/usezombie/zombied:dev-latest`. `fly-api-token` stored in vault, loaded via `OP_SERVICE_ACCOUNT_TOKEN` in CI.
 - 1.2 PENDING Verify `deploy-dev.yml` `build-dev` step completes: Zig cross-compile → `make push-dev` → GHCR push succeeds
 - 1.3 PENDING Verify `deploy-fly-dev` step passes: `fly deploy` returns exit 0, machine healthy
 - 1.4 PENDING Verify `verify-dev` step passes: `https://api-dev.usezombie.com/healthz` returns 200 within 180s. Prints HTTP status + body per attempt for diagnostics.
