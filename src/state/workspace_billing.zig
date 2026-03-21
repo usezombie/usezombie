@@ -92,7 +92,7 @@ pub fn enforceFreeWorkspaceCreationAllowed(
     const count = try row.get(i64, 0);
     try q.drain();
     if (count > 0) {
-        log.err("free_workspace_limit_exceeded tenant_id={s} existing_count={d}", .{ tenant_id, count });
+        log.warn("free_workspace_limit_exceeded tenant_id={s} existing_count={d}", .{ tenant_id, count });
         return error.FreeWorkspaceLimitExceeded;
     }
 }
