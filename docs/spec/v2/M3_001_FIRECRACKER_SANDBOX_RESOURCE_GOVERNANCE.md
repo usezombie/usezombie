@@ -18,7 +18,7 @@ NullClaw agent executions run directly on the worker host with no resource bound
 
 This is not a hardening concern — it is a production blocker. Without per-execution resource governance, a single tenant's agent run can take down the entire worker fleet.
 
-v1 ships with bubblewrap + Landlock + cgroups v2 (see `docs/spec/v1/M4_008_SANDBOX_RESOURCE_GOVERNANCE.md`). v2 replaces that with Firecracker microVMs for full kernel isolation.
+v1 ships with bubblewrap + Landlock + cgroups v2 (see `docs/spec/v1/M4_008_BWRAP_LANDLOCK_SANDBOX.md`). v2 replaces that with Firecracker microVMs for full kernel isolation.
 
 ## Decision: Firecracker microVMs
 

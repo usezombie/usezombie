@@ -1,4 +1,4 @@
-# M4_008: Sandbox Resource Governance (v1 — bubblewrap + Landlock)
+# M4_008: Bubblewrap + Landlock Sandbox
 
 **Prototype:** v1.0.0
 **Milestone:** M4

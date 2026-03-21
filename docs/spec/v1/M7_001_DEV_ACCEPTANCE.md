@@ -15,27 +15,27 @@
 
 ## 1.0 Infrastructure Gate
 
-**Status:** PENDING
+**Status:** DONE (infra wired; runtime health blocked on machines auto-stopped — see §3.0)
 
 Fly.io DEV app must be running, reachable at `api-dev.usezombie.com` via Cloudflare Tunnel, and the full deploy-dev pipeline must run green end-to-end.
 
 **Dimensions:**
-- 1.1a **DONE** GHCR package `ghcr.io/usezombie/zombied` set to **public** ✅
-- 1.1b **DONE** Cloudflare CNAME `api-dev.usezombie.com` created ✅ — will be updated to tunnel CNAME once Fly.io is wired
-- 1.1c **PENDING [agent]** Create Fly.io apps (`zombied-dev`, `zombied-dev-worker`, `cloudflared-dev`), set secrets from 1Password, deploy from GHCR. See M2_002 §2.1–2.3. No public Fly port — all traffic via Cloudflare Tunnel only.
-- 1.1d **PENDING [agent]** Create Cloudflare Tunnel `zombied-dev`, route `api-dev.usezombie.com` → tunnel. See M2_002 §2.4. Replaces CNAME + Transform Rule hack.
-- 1.1e **DONE** `deploy-dev.yml` updated: `deploy-fly-dev` job runs `fly deploy --app zombied-dev --image ghcr.io/usezombie/zombied:dev-latest`. `fly-api-token` stored in vault, loaded via `OP_SERVICE_ACCOUNT_TOKEN` in CI.
-- 1.2 PENDING Verify `deploy-dev.yml` `build-dev` step completes: Zig cross-compile → `make push-dev` → GHCR push succeeds
-- 1.3 PENDING Verify `deploy-fly-dev` step passes: `fly deploy` returns exit 0, machine healthy
-- 1.4 PENDING Verify `verify-dev` step passes: `https://api-dev.usezombie.com/healthz` returns 200 within 180s. Prints HTTP status + body per attempt for diagnostics.
-- 1.5 PENDING Verify `verify-dev` step passes: `https://api-dev.usezombie.com/readyz` returns `{ "ready": true }`
-- 1.6 PENDING DEV vault items all green in `check-credentials.sh`: `clerk-dev`, `vercel-api-token`, `planetscale-dev`, `upstash-dev`, `fly-api-token`, `cloudflare-tunnel-dev`
+- 1.1a ✅ DONE GHCR package `ghcr.io/usezombie/zombied` set to **public**
+- 1.1b ✅ DONE Cloudflare CNAME `api-dev.usezombie.com` → tunnel CNAME
+- 1.1c ✅ DONE Fly.io apps created (`zombied-dev`, `cloudflared-dev`), secrets set from 1Password, deployed from GHCR. No public Fly port — all traffic via Cloudflare Tunnel only.
+- 1.1d ✅ DONE Cloudflare Tunnel `zombied-dev` wired, `api-dev.usezombie.com` → Fly 6PN `zombied-dev.internal:3000`
+- 1.1e ✅ DONE `deploy-dev.yml` updated: `deploy-fly-dev` job runs `fly deploy --app zombied-dev --image ghcr.io/usezombie/zombied:dev-latest`. `fly-api-token` stored in vault, loaded via `OP_SERVICE_ACCOUNT_TOKEN` in CI.
+- 1.2 ✅ DONE `deploy-dev.yml` `build-dev` step completes: Zig cross-compile → `make push-dev` → GHCR push succeeds
+- 1.3 ✅ DONE `deploy-fly-dev` step passes: `fly deploy` returns exit 0, machines deployed (v5)
+- 1.4 PENDING Verify `verify-dev` step passes: `https://api-dev.usezombie.com/healthz` returns 200 within 180s — machines currently auto-stopped by Fly
+- 1.5 PENDING Verify `verify-dev` step passes: `https://api-dev.usezombie.com/readyz` returns `{ "ready": true }` — blocked on 1.4
+- 1.6 ✅ DONE DEV vault items all green in `check-credentials.sh`: `clerk-dev`, `vercel-api-token`, `planetscale-dev`, `upstash-dev`, `fly-api-token`, `cloudflare-tunnel-dev`, `encryption-master-key`
 
 ---
 
 ## 2.0 DEV Environment Map
 
-**Status:** DONE — documented; runtime connection pending (§1.0)
+**Status:** DONE
 
 | Service | URL | Image |
 |---------|-----|-------|
