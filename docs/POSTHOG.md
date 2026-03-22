@@ -2,7 +2,7 @@
 
 SDK: [posthog-zig](https://github.com/usezombie/posthog-zig) v0.1.3 (pure Zig, async ring-buffer flush).
 
-> PostHog is one of two observability tools (with Grafana). Langfuse was removed in M12_001. See `docs/spec/v1/M12_001_OBSERVABILITY_CONSOLIDATION.md`.
+> PostHog is one of two observability tools (with Grafana). Langfuse was removed in M12_001. See `docs/done/v1/M12_001_OBSERVABILITY_CONSOLIDATION.md`.
 
 ## Configuration
 
@@ -107,6 +107,7 @@ Error codes from `src/errors/codes.zig` surface in PostHog events as follows:
 | `UZ-WORKSPACE-*` | `api_error` event for billing enforcement failures |
 | `UZ-INTERNAL-*` | Covered by structured logging (not PostHog — these are operational, not product) |
 | `UZ-RUN-*` | Domain validation — covered by structured logging |
+| `UZ-SANDBOX-*` | Covered by structured logging + Prometheus counters first; correlate with run lifecycle via `trace_id` and `run_id` |
 
 ## Adding New Events
 

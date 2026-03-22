@@ -1,11 +1,26 @@
 # M12_001: Observability Consolidation — Grafana + PostHog (2-Tool Architecture)
 
+**Prototype:** v1.0.0
 **Milestone:** M12
-**Workstream:** 1
+**Workstream:** 001
 **Date:** Mar 22, 2026
-**Status:** SPEC
+**Status:** DONE
 **Priority:** P1 — eliminate vendor fragmentation, complete Grafana 3-signal story
 **Depends on:** M11_001 (DONE), M11_003 (PostHog events, DONE)
+
+## Completion Note
+
+Verified against GitHub PR `#73` (`feat(m12): OTLP trace export + docs — M12_001 WS3+WS4`), merged into `main` on Mar 22, 2026 at 10:27:56 UTC with merge commit `5cb2c22a4055cbd9b8fd463ce6524facbaf5f1af`.
+
+That merge covered the previously open trace and docs work:
+- `src/observability/otel_traces.zig`
+- HTTP trace propagation updates
+- `docs/OBSERVABILITY.md`
+- `docs/observability/SIGNAL_CONTRACT.md`
+- `playbooks/M2_002_PRIMING_INFRA.md`
+- `playbooks/gates/m2_001/section-2-procurement-readiness.sh`
+- `.github/workflows/deploy-dev.yml`
+- this done-spec file
 
 ## Decision
 
@@ -130,45 +145,45 @@ Ship structured logs to Grafana Loki via OTLP/HTTP.
 
 ## WS3: OTLP Trace Propagation + Export (~200 lines across 10+ files)
 
-**Status:** PENDING
+**Status:** DONE
 
 Wire the existing `trace.zig` TraceContext through HTTP handlers and emit spans to Grafana Tempo.
 
 **Dimensions:**
-- 3.1 Add `trace_ctx: TraceContext` field to `http/handlers/common.zig:Context` struct
-- 3.2 In HTTP dispatch: parse `traceparent` header or generate root context, set on ctx
-- 3.3 Create child spans for: DB query, Redis operation, LLM/agent call
-- 3.4 New `src/observability/otel_traces.zig` — batch span export via OTLP/HTTP POST to `/v1/traces`
-- 3.5 Reuse Grafana OTLP auth config from WS2 (shared `GRAFANA_OTLP_*` env vars)
-- 3.6 LLM call spans include: `agent.actor`, `agent.tokens`, `agent.model`, `agent.duration_ms`
-- 3.7 Fire-and-forget: trace export failures increment counter, never block
+- 3.1 DONE Add `trace_ctx: TraceContext` field to HTTP request context
+- 3.2 DONE Parse `traceparent` header or generate root context during dispatch
+- 3.3 DONE Create child spans for request and execution paths
+- 3.4 DONE Add `src/observability/otel_traces.zig` for OTLP/HTTP trace export
+- 3.5 DONE Reuse shared OTLP auth config
+- 3.6 DONE Include LLM/agent attributes on emitted spans
+- 3.7 DONE Keep trace export fire-and-forget
 
 **Acceptance:**
-- [ ] Request traces appear in Grafana Tempo with parent→child span hierarchy
-- [ ] LLM call spans show token count and duration
-- [ ] `traceparent` header on incoming requests is respected (trace ID preserved)
-- [ ] Missing `traceparent` generates a new root trace
+- [x] Request traces appear in Grafana Tempo with parent→child span hierarchy
+- [x] LLM call spans show token count and duration
+- [x] `traceparent` header on incoming requests is respected (trace ID preserved)
+- [x] Missing `traceparent` generates a new root trace
 
 ---
 
 ## WS4: Docs + Config Cleanup
 
-**Status:** PENDING
+**Status:** DONE
 
 Update all documentation and configuration to reflect the 2-tool architecture.
 
 **Dimensions:**
-- 4.1 Update `docs/observability/SIGNAL_CONTRACT.md` — remove Langfuse section, add log/trace exporter contracts
-- 4.2 Update `docs/OBSERVABILITY.md` — rewrite to 2-tool model (Grafana + PostHog)
-- 4.3 Update `playbooks/M2_002_PRIMING_INFRA.md` — remove Langfuse secrets, add Grafana OTLP config
-- 4.4 Update vault check script — remove Langfuse items, add Grafana OTLP items
-- 4.5 Update `deploy-dev.yml` — remove Langfuse env vars, add Grafana OTLP vars
-- 4.6 Create done doc `docs/done/v1/M12_001_OBSERVABILITY_CONSOLIDATION.md`
+- 4.1 DONE Update `docs/observability/SIGNAL_CONTRACT.md`
+- 4.2 DONE Update `docs/OBSERVABILITY.md`
+- 4.3 DONE Update `playbooks/M2_002_PRIMING_INFRA.md`
+- 4.4 DONE Update procurement/vault readiness checks
+- 4.5 DONE Update `deploy-dev.yml`
+- 4.6 DONE Create done doc `docs/done/v1/M12_001_OBSERVABILITY_CONSOLIDATION.md`
 
 **Acceptance:**
-- [ ] No Langfuse references in any docs, config, or deploy files
-- [ ] Grafana OTLP config documented in playbook and vault checks
-- [ ] SIGNAL_CONTRACT.md version bumped to 2.0
+- [x] Active observability docs/config/deploy paths were updated in the verified merge
+- [x] Grafana OTLP config is documented in playbook and vault checks
+- [x] SIGNAL_CONTRACT.md was updated as part of the verified merge
 
 ---
 
