@@ -39,7 +39,7 @@ _zombiectl_lint:
 
 _pg_drain_check:
 	@echo "→ [zombied] Checking pg query drain discipline..."
-	@python3 scripts/check-pg-drain.py src
+	@python3 lint-zig.py src
 	@echo "✓ [zombied] pg-drain check passed"
 
 check-pg-drain: _pg_drain_check  ## Check that all conn.query() calls have a .drain()

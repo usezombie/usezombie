@@ -49,4 +49,4 @@ Status: Canonical Zig source of truth for agents and commits
 - `make test`
 - `HANDLER_DB_TEST_URL=postgres://usezombie:usezombie@localhost:5432/usezombiedb make test-integration-db`
 - `gitleaks detect`
-- `make check-pg-drain` — static check: every `conn.query()` must have `.drain()` in the same function. Run this when touching any file that calls `conn.query()`. See `scripts/check-pg-drain.py`.
+- `make check-pg-drain` — static check: every `conn.query()` must have `.drain()` in the same function. Run this when touching any file that calls `conn.query()`. See `lint-zig.py`.

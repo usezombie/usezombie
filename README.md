@@ -41,11 +41,11 @@ You can swap any layer — start with the playbooks below to understand the seam
 
 Step-by-step guides for bootstrapping, credentials, and deployment:
 
-- [M1 — Bootstrap](docs/M1_001_PLAYBOOK_BOOTSTRAP.md)
-- [M2 — Preflight](docs/M2_001_PLAYBOOK_PREFLIGHT.md)
-- [M2 — Priming Infra](docs/M2_002_PLAYBOOK_PRIMING_INFRA.md)
-- [M3 — Deploy Dev](docs/M3_001_PLAYBOOK_DEPLOY_DEV.md)
-- [M3 — Deploy Prod](docs/M3_002_PLAYBOOK_DEPLOY_PROD.md)
+- [M1 — Bootstrap](playbooks/M1_001_BOOTSTRAP.md)
+- [M2 — Preflight](playbooks/M2_001_PREFLIGHT.md)
+- [M2 — Priming Infra](playbooks/M2_002_PRIMING_INFRA.md)
+- [M3 — Deploy Dev](playbooks/M3_001_DEPLOY_DEV.md)
+- [M3 — Deploy Prod](playbooks/M3_002_DEPLOY_PROD.md)
 
 ## Local Development
 
