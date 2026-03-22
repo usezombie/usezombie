@@ -42,9 +42,9 @@ _pg_drain_check:
 	@python3 scripts/check-pg-drain.py src
 	@echo "✓ [zombied] pg-drain check passed"
 
-check-pg-drain: _pg_drain_check  ## Check that all conn.query() calls have a .drain() (standalone, not in lint-zig until violations cleared)
+check-pg-drain: _pg_drain_check  ## Check that all conn.query() calls have a .drain()
 
-lint-zig: _fmt_check _zlint_check  ## Lint zombied only (Zig fmt check + ZLint)
+lint-zig: _fmt_check _zlint_check _pg_drain_check  ## Lint zombied only (Zig fmt check + ZLint + pg-drain)
 	@echo "✓ [zombied] Lint passed"
 
 lint-website: _website_lint  ## Lint website only (ESLint + tsc)
