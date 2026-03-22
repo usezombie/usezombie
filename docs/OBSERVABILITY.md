@@ -1,16 +1,26 @@
 # Observability Strategy
 
-**Date:** Mar 22, 2026
+**Date:** Mar 23, 2026
 **Status:** Active
 
 ## Two Layers
 
 | Layer | Tool | Purpose |
 |---|---|---|
-| Infra / ops | Grafana stack | service health, executor health, sandbox signals, traces |
-| Product | PostHog | user-facing behavior, funnels, adoption, conversion |
+| Infra / ops | Grafana Cloud — Prometheus metrics, Loki logs, Tempo traces | service health, latency, sandbox signals, executor health, distributed traces |
+| Product | PostHog | user-facing behavior, funnels, adoption, conversion, error attribution |
 
 Sandbox and executor telemetry is infra-first. It must not be hidden inside product analytics.
+
+## Grafana 3-Signal Architecture
+
+| Signal | Exporter | Endpoint | Backend |
+|---|---|---|---|
+| Metrics | Prometheus `/metrics` scrape + OTLP push (`otel_export.zig`) | `/v1/metrics` | Grafana Prometheus |
+| Logs | OTLP push (`otel_logs.zig`) | `/v1/logs` | Grafana Loki |
+| Traces | OTLP push (`otel_traces.zig`) | `/v1/traces` | Grafana Tempo |
+
+All OTLP exporters use shared auth: `GRAFANA_OTLP_ENDPOINT`, `GRAFANA_OTLP_INSTANCE_ID`, `GRAFANA_OTLP_API_KEY`. Export must remain fire-and-forget: failures never block request or worker paths.
 
 ## Canonical Correlation Fields
 
@@ -75,6 +85,7 @@ sandbox-executor
 1. If worker is healthy but executor health degrades, treat that as execution-substrate failure, not application success.
 2. If executor dies mid-stage, the run should show a clear infrastructure-classified failure.
 3. Worker and executor upgrades should be visible as interrupted or drained runs, never silent disappearance.
+4. Inbound `traceparent` should be preserved when available; otherwise generate a new root trace.
 
 ## Product Analytics Boundary
 
@@ -84,4 +95,3 @@ PostHog should continue to track:
 - workspace and CLI product usage
 
 PostHog should not be the primary source of truth for sandbox enforcement or executor health.
-

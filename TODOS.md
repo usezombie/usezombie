@@ -205,5 +205,3 @@ picking it up in 3 months understands the motivation and where to start.
 **Effort:** S
 **Priority:** P1
 **Depends on:** None
-
----
