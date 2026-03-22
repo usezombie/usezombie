@@ -11,10 +11,10 @@ const http_handler = @import("../http/handler.zig");
 const auth_sessions = @import("../auth/sessions.zig");
 const queue_redis = @import("../queue/redis.zig");
 const worker = @import("../pipeline/worker.zig");
-const git_ops = @import("../git/ops.zig");
 const metrics = @import("../observability/metrics.zig");
 const obs_log = @import("../observability/logging.zig");
 const posthog_events = @import("../observability/posthog_events.zig");
+const preflight = @import("preflight.zig");
 const common = @import("common.zig");
 
 const log = std.log.scoped(.zombied);
@@ -57,16 +57,6 @@ fn parseServeArgOverrides() ServeArgError!?u16 {
 fn onSignal(sig: i32) callconv(.c) void {
     _ = sig;
     shutdown_requested.store(true, .release);
-}
-
-fn installSignalHandlers() void {
-    const action = std.posix.Sigaction{
-        .handler = .{ .handler = onSignal },
-        .mask = std.posix.sigemptyset(),
-        .flags = 0,
-    };
-    std.posix.sigaction(std.posix.SIG.INT, &action, null);
-    std.posix.sigaction(std.posix.SIG.TERM, &action, null);
 }
 
 fn signalWatcher(wstate: *worker.WorkerState) void {
@@ -143,21 +133,11 @@ pub fn run(alloc: std.mem.Allocator) !void {
     }
     log.info("startup.config_load status=ok", .{});
 
-    log.info("startup.db_connect role=api status=start", .{});
-    const api_pool = db.initFromEnvForRole(alloc, .api) catch |err| {
-        log.err("startup.db_connect role=api status=fail error_code=UZ-STARTUP-003 err={s}", .{@errorName(err)});
-        std.process.exit(1);
-    };
+    const api_pool = preflight.connectDbPool(alloc, .api) catch std.process.exit(1);
     defer api_pool.deinit();
-    log.info("startup.db_connect role=api status=ok", .{});
 
-    log.info("startup.db_connect role=worker status=start", .{});
-    const worker_pool = db.initFromEnvForRole(alloc, .worker) catch |err| {
-        log.err("startup.db_connect role=worker status=fail error_code=UZ-STARTUP-003 err={s}", .{@errorName(err)});
-        std.process.exit(1);
-    };
+    const worker_pool = preflight.connectDbPool(alloc, .worker) catch std.process.exit(1);
     defer worker_pool.deinit();
-    log.info("startup.db_connect role=worker status=ok", .{});
 
     log.info("startup.redis_connect role=api status=start", .{});
     var api_queue = queue_redis.Client.connectFromEnv(alloc, .api) catch |err| {
@@ -183,47 +163,10 @@ pub fn run(alloc: std.mem.Allocator) !void {
     };
     log.info("startup.redis_connect role=worker status=ok", .{});
 
-    log.info("startup.migration_check status=start", .{});
-    const migrate_on_start = common.migrateOnStartEnabledFromEnv(alloc) catch |err| {
-        log.err("startup.migration_check status=fail error_code=UZ-STARTUP-005 err=invalid_MIGRATE_ON_START err_detail={s}", .{@errorName(err)});
-        std.process.exit(1);
-    };
+    const migrate_on_start = preflight.parseMigrateOnStart(alloc) catch std.process.exit(1);
+    preflight.checkMigrations(api_pool, migrate_on_start) catch std.process.exit(1);
 
-    common.enforceServeMigrationSafety(api_pool, migrate_on_start) catch |err| {
-        switch (err) {
-            common.MigrationGuardError.MigrationPending => log.err(
-                "startup.migration_check status=fail error_code=UZ-STARTUP-005 err=pending_migrations hint=run zombied migrate or set MIGRATE_ON_START=1",
-                .{},
-            ),
-            common.MigrationGuardError.MigrationFailed => log.err(
-                "startup.migration_check status=fail error_code=UZ-STARTUP-005 err=migration_failure_state hint=inspect schema_migration_failures then rerun zombied migrate",
-                .{},
-            ),
-            common.MigrationGuardError.MigrationSchemaAhead => log.err(
-                "startup.migration_check status=fail error_code=UZ-STARTUP-005 err=schema_ahead hint=deploy matching binary",
-                .{},
-            ),
-            common.MigrationGuardError.MigrationLockUnavailable => log.err(
-                "startup.migration_check status=fail error_code=UZ-STARTUP-005 err=migration_lock_unavailable hint=another node is migrating",
-                .{},
-            ),
-            else => log.err("startup.migration_check status=fail error_code=UZ-STARTUP-005 err={s}", .{@errorName(err)}),
-        }
-        std.process.exit(1);
-    };
-    log.info("startup.migration_check status=ok", .{});
-
-    std.fs.makeDirAbsolute(serve_cfg.cache_root) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => obs_log.logWarnErr(.zombied, err, "startup.cache_root_create status=fail path={s}", .{serve_cfg.cache_root}),
-    };
-    {
-        const stats = git_ops.cleanupRuntimeArtifacts(alloc, serve_cfg.cache_root, "/tmp");
-        log.info(
-            "startup.cleanup removed_worktrees={d} failed_worktrees={d} pruned_bare={d} failed_prunes={d}",
-            .{ stats.removed_worktrees, stats.failed_worktree_removals, stats.pruned_bare_repos, stats.failed_bare_prunes },
-        );
-    }
+    _ = preflight.prepareCacheRoot(alloc, serve_cfg.cache_root, "startup");
 
     var wstate = worker.WorkerState.init();
     var sessions = auth_sessions.SessionStore.init(alloc);
@@ -246,22 +189,9 @@ pub fn run(alloc: std.mem.Allocator) !void {
     };
     metrics.setApiInFlightRequests(0);
 
-    const posthog_api_key = std.process.getEnvVarOwned(alloc, "POSTHOG_API_KEY") catch null;
-    defer if (posthog_api_key) |key| alloc.free(key);
-    const ph_client: ?*posthog.PostHogClient = if (posthog_api_key) |key| blk: {
-        break :blk posthog.init(alloc, .{
-            .api_key = key,
-            .host = "https://us.i.posthog.com",
-            .flush_interval_ms = 10_000,
-            .flush_at = 20,
-            .max_retries = 3,
-        }) catch |err| {
-            obs_log.logWarnErr(.zombied, err, "startup.posthog_init status=fail reason=analytics_disabled", .{});
-            break :blk null;
-        };
-    } else null;
-    defer if (ph_client) |client| client.deinit();
-    ctx.posthog = ph_client;
+    const ph = preflight.initPostHog(alloc);
+    defer ph.deinit(alloc);
+    ctx.posthog = ph.client;
 
     if (serve_cfg.oidc_enabled) {
         log.info("startup.oidc_init status=start provider={s}", .{@tagName(serve_cfg.oidc_provider)});
@@ -289,11 +219,11 @@ pub fn run(alloc: std.mem.Allocator) !void {
         .run_timeout_ms = serve_cfg.run_timeout_ms,
         .rate_limit_capacity = serve_cfg.rate_limit_capacity,
         .rate_limit_refill_per_sec = serve_cfg.rate_limit_refill_per_sec,
-        .posthog = ph_client,
+        .posthog = ph.client,
     };
 
     shutdown_requested.store(false, .release);
-    installSignalHandlers();
+    preflight.installSignalHandlers(onSignal);
 
     var event_bus = events_bus.Bus.init();
     events_bus.install(&event_bus);
@@ -331,7 +261,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
         serve_cfg.api_max_clients,
         serve_cfg.api_max_in_flight_requests,
     });
-    posthog_events.trackServerStarted(ph_client, serve_cfg.port, @intCast(serve_cfg.worker_concurrency));
+    posthog_events.trackServerStarted(ph.client, serve_cfg.port, @intCast(serve_cfg.worker_concurrency));
     http_server.serve(&ctx, .{
         .port = serve_cfg.port,
         .threads = serve_cfg.api_http_threads,
@@ -347,13 +277,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
     for (worker_threads) |*t| t.join();
     if (signal_thread) |*t| t.join();
     if (event_thread) |*t| t.join();
-    {
-        const stats = git_ops.cleanupRuntimeArtifacts(alloc, serve_cfg.cache_root, "/tmp");
-        log.info(
-            "shutdown.cleanup removed_worktrees={d} failed_worktrees={d} pruned_bare={d} failed_prunes={d}",
-            .{ stats.removed_worktrees, stats.failed_worktree_removals, stats.pruned_bare_repos, stats.failed_bare_prunes },
-        );
-    }
+    _ = preflight.prepareCacheRoot(alloc, serve_cfg.cache_root, "shutdown");
 }
 
 fn testStopServerHook() void {
@@ -383,12 +307,4 @@ test "integration: signalWatcher stops worker and invokes server stop hook" {
 
     try std.testing.expect(!ws.running.load(.acquire));
     try std.testing.expectEqual(@as(u32, 1), stop_calls.load(.acquire));
-}
-
-test "integration: migrate_on_start env parser accepts deterministic values" {
-    const alloc = std.testing.allocator;
-    try std.posix.setenv("MIGRATE_ON_START", "1", true);
-    try std.testing.expect(try common.migrateOnStartEnabledFromEnv(alloc));
-    try std.posix.setenv("MIGRATE_ON_START", "0", true);
-    try std.testing.expect(!try common.migrateOnStartEnabledFromEnv(alloc));
 }

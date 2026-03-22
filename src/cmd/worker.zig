@@ -1,17 +1,14 @@
 const std = @import("std");
-const posthog = @import("posthog");
 
-const db = @import("../db/pool.zig");
 const worker_config = @import("worker_config.zig");
 const env_vars = @import("../config/env_vars.zig");
 const events_bus = @import("../events/bus.zig");
 const worker = @import("../pipeline/worker.zig");
-const git_ops = @import("../git/ops.zig");
 const obs_log = @import("../observability/logging.zig");
 const posthog_events = @import("../observability/posthog_events.zig");
 const error_codes = @import("../errors/codes.zig");
 const langfuse = @import("../observability/langfuse.zig");
-const common = @import("common.zig");
+const preflight = @import("preflight.zig");
 
 const log = std.log.scoped(.worker);
 
@@ -20,16 +17,6 @@ var shutdown_requested = std.atomic.Value(bool).init(false);
 fn onSignal(sig: i32) callconv(.c) void {
     _ = sig;
     shutdown_requested.store(true, .release);
-}
-
-fn installSignalHandlers() void {
-    const action = std.posix.Sigaction{
-        .handler = .{ .handler = onSignal },
-        .mask = std.posix.sigemptyset(),
-        .flags = 0,
-    };
-    std.posix.sigaction(std.posix.SIG.INT, &action, null);
-    std.posix.sigaction(std.posix.SIG.TERM, &action, null);
 }
 
 fn signalWatcher(wstate: *worker.WorkerState) void {
@@ -88,70 +75,27 @@ pub fn run(alloc: std.mem.Allocator) !void {
         }
     }
 
-    const posthog_api_key = std.process.getEnvVarOwned(alloc, "POSTHOG_API_KEY") catch null;
-    defer if (posthog_api_key) |key| alloc.free(key);
-    const ph_client: ?*posthog.PostHogClient = if (posthog_api_key) |key| blk: {
-        break :blk posthog.init(alloc, .{
-            .api_key = key,
-            .host = "https://us.i.posthog.com",
-            .flush_interval_ms = 10_000,
-            .flush_at = 20,
-            .max_retries = 3,
-        }) catch |err| {
-            obs_log.logWarnErr(.worker, err, "startup.posthog_init status=fail reason=analytics_disabled", .{});
-            break :blk null;
-        };
-    } else null;
-    defer if (ph_client) |client| client.deinit();
+    const ph = preflight.initPostHog(alloc);
+    defer ph.deinit(alloc);
 
-    log.info("startup.db_connect role=worker status=start", .{});
-    const worker_pool = db.initFromEnvForRole(alloc, .worker) catch |err| {
-        log.err("startup.db_connect role=worker status=fail error_code=UZ-STARTUP-003 err={s}", .{@errorName(err)});
-        posthog_events.trackStartupFailed(ph_client, "worker", "db_connect", @errorName(err), error_codes.ERR_STARTUP_DB_CONNECT);
-        if (ph_client) |c| c.deinit();
+    const worker_pool = preflight.connectDbPool(alloc, .worker) catch |err| {
+        posthog_events.trackStartupFailed(ph.client, "worker", "db_connect", @errorName(err), error_codes.ERR_STARTUP_DB_CONNECT);
+        ph.deinit(alloc);
         std.process.exit(1);
     };
     defer worker_pool.deinit();
-    log.info("startup.db_connect role=worker status=ok", .{});
 
-    log.info("startup.migration_check status=start", .{});
-    common.enforceServeMigrationSafety(worker_pool, false) catch |err| {
-        switch (err) {
-            common.MigrationGuardError.MigrationPending => log.err(
-                "startup.migration_check status=fail error_code=UZ-STARTUP-005 err=pending_migrations hint=run zombied migrate before worker startup",
-                .{},
-            ),
-            common.MigrationGuardError.MigrationFailed => log.err(
-                "startup.migration_check status=fail error_code=UZ-STARTUP-005 err=migration_failure_state hint=inspect schema_migration_failures then rerun zombied migrate",
-                .{},
-            ),
-            common.MigrationGuardError.MigrationSchemaAhead => log.err(
-                "startup.migration_check status=fail error_code=UZ-STARTUP-005 err=schema_ahead hint=deploy matching binary",
-                .{},
-            ),
-            else => log.err("startup.migration_check status=fail error_code=UZ-STARTUP-005 err={s}", .{@errorName(err)}),
-        }
-        posthog_events.trackStartupFailed(ph_client, "worker", "migration_check", @errorName(err), error_codes.ERR_STARTUP_MIGRATION_CHECK);
-        if (ph_client) |c| c.deinit();
+    preflight.checkMigrations(worker_pool, false) catch |err| {
+        posthog_events.trackStartupFailed(ph.client, "worker", "migration_check", @errorName(err), error_codes.ERR_STARTUP_MIGRATION_CHECK);
+        ph.deinit(alloc);
         std.process.exit(1);
     };
-    log.info("startup.migration_check status=ok", .{});
 
-    std.fs.makeDirAbsolute(worker_cfg.cache_root) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => obs_log.logWarnErr(.worker, err, "startup.cache_root_create status=fail path={s}", .{worker_cfg.cache_root}),
-    };
-    {
-        const stats = git_ops.cleanupRuntimeArtifacts(alloc, worker_cfg.cache_root, "/tmp");
-        log.info(
-            "startup.cleanup removed_worktrees={d} failed_worktrees={d} pruned_bare={d} failed_prunes={d}",
-            .{ stats.removed_worktrees, stats.failed_worktree_removals, stats.pruned_bare_repos, stats.failed_bare_prunes },
-        );
-    }
+    _ = preflight.prepareCacheRoot(alloc, worker_cfg.cache_root, "startup");
 
     var wstate = worker.WorkerState.init();
     shutdown_requested.store(false, .release);
-    installSignalHandlers();
+    preflight.installSignalHandlers(onSignal);
 
     var event_bus = events_bus.Bus.init();
     events_bus.install(&event_bus);
@@ -187,7 +131,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
         .run_timeout_ms = worker_cfg.run_timeout_ms,
         .rate_limit_capacity = worker_cfg.rate_limit_capacity,
         .rate_limit_refill_per_sec = worker_cfg.rate_limit_refill_per_sec,
-        .posthog = ph_client,
+        .posthog = ph.client,
     };
 
     for (worker_threads) |*t| {
@@ -198,7 +142,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
     event_thread = try std.Thread.spawn(.{}, events_bus.runThread, .{&event_bus});
 
     log.info("worker.threads_started concurrency={d}", .{thread_count});
-    posthog_events.trackWorkerStarted(ph_client, @intCast(thread_count));
+    posthog_events.trackWorkerStarted(ph.client, @intCast(thread_count));
 
     for (worker_threads) |*t| t.join();
     shutdown_requested.store(true, .release);
@@ -206,11 +150,5 @@ pub fn run(alloc: std.mem.Allocator) !void {
     if (signal_thread) |*t| t.join();
     if (event_thread) |*t| t.join();
 
-    {
-        const stats = git_ops.cleanupRuntimeArtifacts(alloc, worker_cfg.cache_root, "/tmp");
-        log.info(
-            "shutdown.cleanup removed_worktrees={d} failed_worktrees={d} pruned_bare={d} failed_prunes={d}",
-            .{ stats.removed_worktrees, stats.failed_worktree_removals, stats.pruned_bare_repos, stats.failed_bare_prunes },
-        );
-    }
+    _ = preflight.prepareCacheRoot(alloc, worker_cfg.cache_root, "shutdown");
 }
