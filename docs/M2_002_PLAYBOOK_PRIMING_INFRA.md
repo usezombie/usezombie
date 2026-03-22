@@ -113,6 +113,7 @@ for APP in zombied-dev zombied-dev-worker; do
     ENCRYPTION_MASTER_KEY="$(op read 'op://$VAULT_DEV/encryption-master-key/credential')" \
     GITHUB_APP_ID="$(op read 'op://$VAULT_DEV/github-app/app-id')" \
     GITHUB_APP_PRIVATE_KEY="$(op read 'op://$VAULT_DEV/github-app/private-key')" \
+    POSTHOG_API_KEY="$(op read 'op://$VAULT_DEV/posthog-dev/credential')" \
     OIDC_PROVIDER=clerk \
     OIDC_JWKS_URL="$(op read 'op://$VAULT_DEV/clerk-dev/publishable-key' | python3 -c 'import sys,base64; k=sys.stdin.read().strip().split("_")[2]; print(f\"https://{base64.b64decode(k+\"=\"*4).decode().rstrip(chr(36))}/.well-known/jwks.json\")')" \
     OIDC_ISSUER="$(op read 'op://$VAULT_DEV/clerk-dev/hostname' 2>/dev/null || echo 'https://winning-wombat-65.clerk.accounts.dev')" \
