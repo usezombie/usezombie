@@ -2,6 +2,8 @@
 
 SDK: [posthog-zig](https://github.com/usezombie/posthog-zig) v0.1.3 (pure Zig, async ring-buffer flush).
 
+> PostHog is one of two observability tools (with Grafana). Langfuse was removed in M12_001. See `docs/spec/v1/M12_001_OBSERVABILITY_CONSOLIDATION.md`.
+
 ## Configuration
 
 | Variable | Required | Default |
