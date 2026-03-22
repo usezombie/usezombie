@@ -209,19 +209,16 @@ describe("app components", () => {
     const { default: Shell } = await import("../components/layout/Shell");
 
     AnalyticsPageEvent({ event: "workspace_list_viewed", properties: { surface: "workspace_list" } });
-    const trackedAnchor = React.createElement(
-      TrackedAnchor,
-      {
-        event: "workspace_action_clicked",
-        properties: { target: "pause" },
-        onClick: vi.fn(),
-        href: "/workspaces/ws_1/pause",
-      },
-      "Pause",
-    );
+    const trackedAnchor = TrackedAnchor({
+      event: "workspace_action_clicked",
+      properties: { target: "pause" },
+      onClick: vi.fn(),
+      href: "/workspaces/ws_1/pause",
+      children: "Pause",
+    });
     trackedAnchor.props.onClick?.({ type: "click" } as unknown as React.MouseEvent<HTMLAnchorElement>);
 
-    const shellTree = React.createElement(Shell, null, React.createElement("div", null, "content"));
+    const shellTree = Shell({ children: React.createElement("div", null, "content") });
     const clickable = findElements(shellTree, (el) => typeof el.props?.onClick === "function");
     clickable.forEach((el) => el.props.onClick?.());
 

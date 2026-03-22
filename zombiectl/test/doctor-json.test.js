@@ -50,9 +50,9 @@ test("doctor --json emits machine-parseable payload", async () => {
     fetchImpl,
   });
 
-  assert.equal(code, 1);
+  assert.equal(code, 0);
   const parsed = JSON.parse(out.read());
-  assert.equal(typeof parsed.ok, "boolean");
+  assert.equal(parsed.ok, true);
   assert.equal(Array.isArray(parsed.checks), true);
   assert.equal(parsed.checks.length >= 3, true);
 });

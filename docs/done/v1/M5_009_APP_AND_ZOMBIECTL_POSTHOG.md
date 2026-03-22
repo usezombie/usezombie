@@ -34,6 +34,7 @@ Implement one working telemetry function: the dashboard app and `zombiectl` emit
 - 2.2 DONE App analytics coverage gate passes at or above the configured 95% threshold
 - 2.3 DONE `zombiectl` mixed Node/Bun test suite passes with the new test runner
 - 2.4 DONE Website regression suite passes to confirm existing PostHog instrumentation stays green
+- 2.5 DONE Cross-package gates pass for `make lint`, `make test`, and `make qa`
 
 ---
 
@@ -46,6 +47,7 @@ Implement one working telemetry function: the dashboard app and `zombiectl` emit
 - [x] 3.3 `zombiectl` human-readable output is structured with minimal section and key/value formatting improvements
 - [x] 3.4 Durable event inventory and vault/env mapping are documented in `docs/POSTHOG.md`
 - [x] 3.5 Surface-level verification passed for website, app, and `zombiectl`
+- [x] 3.6 Repo verification gates passed after CI regression fixes for app, website, and `zombiectl`
 
 ---
 
