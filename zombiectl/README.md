@@ -45,6 +45,18 @@ Analytics env vars (optional):
 - `ZOMBIE_POSTHOG_ENABLED` set `false`/`0` to disable telemetry even when key exists
 - `ZOMBIE_POSTHOG_HOST` override PostHog host (default `https://us.i.posthog.com`)
 
+Standard operator path:
+
+```bash
+# DEV
+export ZOMBIE_POSTHOG_KEY="$(op read 'op://ZMB_CD_DEV/posthog-dev/credential')"
+
+# PROD
+export ZOMBIE_POSTHOG_KEY="$(op read 'op://ZMB_CD_PROD/posthog-prod/credential')"
+```
+
+This follows the same milestone playbook and `scripts/check-credentials.sh` contract as the other deploy/runtime keys.
+
 ## Verify
 
 ```bash
