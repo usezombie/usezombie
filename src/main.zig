@@ -127,7 +127,6 @@ test {
     _ = @import("auth/jwks.zig");
     _ = @import("observability/trace.zig");
     _ = @import("observability/otel_export.zig");
-    _ = @import("observability/langfuse.zig");
     _ = @import("state/outbox_reconciler.zig");
     _ = @import("state/workspace_billing.zig");
 }

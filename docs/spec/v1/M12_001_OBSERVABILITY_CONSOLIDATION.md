@@ -85,7 +85,7 @@ LLM call data is **dual-emitted**:
 
 ## WS1: Remove Langfuse (~300 lines removed)
 
-**Status:** PENDING
+**Status:** DONE
 
 Remove the Langfuse async exporter, circuit breaker, and all configuration.
 
@@ -100,10 +100,10 @@ Remove the Langfuse async exporter, circuit breaker, and all configuration.
 - 1.8 Update `docs/OBSERVABILITY.md` — remove Langfuse references, update to 2-tool model
 
 **Acceptance:**
-- [x] `zig build` compiles without langfuse references
-- [x] `make test` passes
-- [x] No `LANGFUSE` env vars in deploy or vault checks
-- [x] SIGNAL_CONTRACT.md reflects 2-tool model
+- [x] DONE — `zig build` compiles without langfuse references
+- [x] DONE — `make test` passes
+- [x] DONE — No `LANGFUSE` env vars in deploy or vault checks
+- [x] DONE — SIGNAL_CONTRACT.md reflects 2-tool model
 
 ---
 
