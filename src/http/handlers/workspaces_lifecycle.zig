@@ -67,7 +67,7 @@ pub fn handleCreateWorkspace(ctx: *common.Context, r: zap.Request) void {
     };
 
     const conn = ctx.pool.acquire() catch {
-        log.err("db pool acquire failed op=create_workspace", .{});
+        log.err("workspace.db_acquire_fail error_code=UZ-INTERNAL-001 op=create_workspace", .{});
         common.internalDbUnavailable(r, req_id);
         return;
     };
@@ -80,19 +80,19 @@ pub fn handleCreateWorkspace(ctx: *common.Context, r: zap.Request) void {
         \\VALUES ($1, $2, 'managed', $3)
         \\ON CONFLICT (tenant_id) DO NOTHING
     , .{ tenant_id, "Workspace Tenant", now_ms }) catch {
-        log.err("tenant upsert failed tenant_id={s}", .{tenant_id});
+        log.err("workspace.tenant_upsert_fail error_code=UZ-INTERNAL-003 tenant_id={s}", .{tenant_id});
         common.internalOperationError(r, "Failed to upsert tenant", req_id);
         return;
     };
 
     workspace_billing.enforceFreeWorkspaceCreationAllowed(conn, tenant_id, null) catch |err| {
         if (workspace_billing.errorCode(err)) |code| {
-            log.err("billing enforcement failed tenant_id={s} code={s}", .{ tenant_id, code });
+            log.err("workspace.billing_enforcement_fail tenant_id={s} error_code={s}", .{ tenant_id, code });
             posthog_events.trackApiError(ctx.posthog, principal.user_id orelse "", code, workspace_billing.errorMessage(err) orelse "Workspace billing failure", req_id);
             common.errorResponse(r, .forbidden, code, workspace_billing.errorMessage(err) orelse "Workspace billing failure", req_id);
             return;
         }
-        log.err("billing validation failed tenant_id={s}", .{tenant_id});
+        log.err("workspace.billing_validation_fail error_code=UZ-INTERNAL-003 tenant_id={s}", .{tenant_id});
         common.internalOperationError(r, "Failed to validate free workspace limit", req_id);
         return;
     };
@@ -126,7 +126,7 @@ pub fn handleCreateWorkspace(ctx: *common.Context, r: zap.Request) void {
         return;
     };
 
-    log.info("workspace created workspace_id={s} tenant_id={s} repo_url={s}", .{ workspace_id, tenant_id, repo_url });
+    log.info("workspace.created workspace_id={s} tenant_id={s} repo_url={s}", .{ workspace_id, tenant_id, repo_url });
     posthog_events.trackWorkspaceCreated(ctx.posthog, principal.user_id orelse "", workspace_id, tenant_id, repo_url, req_id);
 
     common.writeJson(r, .created, .{

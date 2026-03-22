@@ -79,34 +79,34 @@ fn signalWatcher(wstate: *worker.WorkerState) void {
 }
 
 pub fn run(alloc: std.mem.Allocator) !void {
-    log.info("phase=serve status=start", .{});
+    log.info("startup.serve status=start", .{});
 
     const serve_port_override = parseServeArgOverrides() catch |err| {
         switch (err) {
-            ServeArgError.InvalidServeArgument => log.err("phase=args status=fail reason=invalid_argument", .{}),
-            ServeArgError.MissingPortValue => log.err("phase=args status=fail reason=missing_port_value", .{}),
-            ServeArgError.InvalidPortValue => log.err("phase=args status=fail reason=invalid_port_value", .{}),
+            ServeArgError.InvalidServeArgument => log.err("startup.args_parse status=fail reason=invalid_argument", .{}),
+            ServeArgError.MissingPortValue => log.err("startup.args_parse status=fail reason=missing_port_value", .{}),
+            ServeArgError.InvalidPortValue => log.err("startup.args_parse status=fail reason=invalid_port_value", .{}),
         }
         std.process.exit(2);
     };
 
-    log.info("phase=env_check status=start", .{});
+    log.info("startup.env_check status=start", .{});
     env_vars.enforceFromEnv(alloc) catch |err| {
         switch (err) {
-            env_vars.EnvVarsErrors.MissingDatabaseUrlApi => log.err("phase=env_check status=fail err=DATABASE_URL_API not set", .{}),
-            env_vars.EnvVarsErrors.MissingDatabaseUrlWorker => log.err("phase=env_check status=fail err=DATABASE_URL_WORKER not set", .{}),
-            env_vars.EnvVarsErrors.MissingRedisUrlApi => log.err("phase=env_check status=fail err=REDIS_URL_API not set", .{}),
-            env_vars.EnvVarsErrors.MissingRedisUrlWorker => log.err("phase=env_check status=fail err=REDIS_URL_WORKER not set", .{}),
-            env_vars.EnvVarsErrors.SameDatabaseUrlForApiAndWorker => log.err("phase=env_check status=fail err=DATABASE_URL_API and DATABASE_URL_WORKER must differ", .{}),
-            env_vars.EnvVarsErrors.SameRedisUrlForApiAndWorker => log.err("phase=env_check status=fail err=REDIS_URL_API and REDIS_URL_WORKER must differ", .{}),
-            env_vars.EnvVarsErrors.RedisApiTlsRequired => log.err("phase=env_check status=fail err=REDIS_URL_API must use rediss://", .{}),
-            env_vars.EnvVarsErrors.RedisWorkerTlsRequired => log.err("phase=env_check status=fail err=REDIS_URL_WORKER must use rediss://", .{}),
+            env_vars.EnvVarsErrors.MissingDatabaseUrlApi => log.err("startup.env_check status=fail error_code=UZ-STARTUP-001 err=DATABASE_URL_API not set", .{}),
+            env_vars.EnvVarsErrors.MissingDatabaseUrlWorker => log.err("startup.env_check status=fail error_code=UZ-STARTUP-001 err=DATABASE_URL_WORKER not set", .{}),
+            env_vars.EnvVarsErrors.MissingRedisUrlApi => log.err("startup.env_check status=fail error_code=UZ-STARTUP-001 err=REDIS_URL_API not set", .{}),
+            env_vars.EnvVarsErrors.MissingRedisUrlWorker => log.err("startup.env_check status=fail error_code=UZ-STARTUP-001 err=REDIS_URL_WORKER not set", .{}),
+            env_vars.EnvVarsErrors.SameDatabaseUrlForApiAndWorker => log.err("startup.env_check status=fail error_code=UZ-STARTUP-001 err=DATABASE_URL_API and DATABASE_URL_WORKER must differ", .{}),
+            env_vars.EnvVarsErrors.SameRedisUrlForApiAndWorker => log.err("startup.env_check status=fail error_code=UZ-STARTUP-001 err=REDIS_URL_API and REDIS_URL_WORKER must differ", .{}),
+            env_vars.EnvVarsErrors.RedisApiTlsRequired => log.err("startup.env_check status=fail error_code=UZ-STARTUP-001 err=REDIS_URL_API must use rediss://", .{}),
+            env_vars.EnvVarsErrors.RedisWorkerTlsRequired => log.err("startup.env_check status=fail error_code=UZ-STARTUP-001 err=REDIS_URL_WORKER must use rediss://", .{}),
         }
         std.process.exit(1);
     };
-    log.info("phase=env_check status=ok", .{});
+    log.info("startup.env_check status=ok", .{});
 
-    log.info("phase=config_load status=start", .{});
+    log.info("startup.config_load status=start", .{});
     var serve_cfg = runtime_config.ServeConfig.load(alloc) catch |err| {
         switch (err) {
             runtime_config.ValidationError.MissingApiKey,
@@ -131,9 +131,9 @@ pub fn run(alloc: std.mem.Allocator) !void {
             runtime_config.ValidationError.InvalidReadyMaxQueueAgeMs,
             => {
                 runtime_config.ServeConfig.printValidationError(@errorCast(err));
-                log.err("phase=config_load status=fail err={s}", .{@errorName(err)});
+                log.err("startup.config_load status=fail error_code=UZ-STARTUP-002 err={s}", .{@errorName(err)});
             },
-            else => log.err("phase=config_load status=fail err={s}", .{@errorName(err)}),
+            else => log.err("startup.config_load status=fail error_code=UZ-STARTUP-002 err={s}", .{@errorName(err)}),
         }
         std.process.exit(1);
     };
@@ -141,86 +141,86 @@ pub fn run(alloc: std.mem.Allocator) !void {
     if (serve_port_override) |override| {
         serve_cfg.port = override;
     }
-    log.info("phase=config_load status=ok", .{});
+    log.info("startup.config_load status=ok", .{});
 
-    log.info("phase=db_connect role=api status=start", .{});
+    log.info("startup.db_connect role=api status=start", .{});
     const api_pool = db.initFromEnvForRole(alloc, .api) catch |err| {
-        log.err("phase=db_connect role=api status=fail err={s}", .{@errorName(err)});
+        log.err("startup.db_connect role=api status=fail error_code=UZ-STARTUP-003 err={s}", .{@errorName(err)});
         std.process.exit(1);
     };
     defer api_pool.deinit();
-    log.info("phase=db_connect role=api status=ok", .{});
+    log.info("startup.db_connect role=api status=ok", .{});
 
-    log.info("phase=db_connect role=worker status=start", .{});
+    log.info("startup.db_connect role=worker status=start", .{});
     const worker_pool = db.initFromEnvForRole(alloc, .worker) catch |err| {
-        log.err("phase=db_connect role=worker status=fail err={s}", .{@errorName(err)});
+        log.err("startup.db_connect role=worker status=fail error_code=UZ-STARTUP-003 err={s}", .{@errorName(err)});
         std.process.exit(1);
     };
     defer worker_pool.deinit();
-    log.info("phase=db_connect role=worker status=ok", .{});
+    log.info("startup.db_connect role=worker status=ok", .{});
 
-    log.info("phase=redis_connect role=api status=start", .{});
+    log.info("startup.redis_connect role=api status=start", .{});
     var api_queue = queue_redis.Client.connectFromEnv(alloc, .api) catch |err| {
-        log.err("phase=redis_connect role=api status=fail err={s}", .{@errorName(err)});
+        log.err("startup.redis_connect role=api status=fail error_code=UZ-STARTUP-004 err={s}", .{@errorName(err)});
         std.process.exit(1);
     };
     defer api_queue.deinit();
     api_queue.ensureConsumerGroup() catch |err| {
-        log.err("phase=redis_group role=api status=fail err={s}", .{@errorName(err)});
+        log.err("startup.redis_group role=api status=fail error_code=UZ-STARTUP-004 err={s}", .{@errorName(err)});
         std.process.exit(1);
     };
-    log.info("phase=redis_connect role=api status=ok", .{});
+    log.info("startup.redis_connect role=api status=ok", .{});
 
-    log.info("phase=redis_connect role=worker status=start", .{});
+    log.info("startup.redis_connect role=worker status=start", .{});
     var worker_queue_check = queue_redis.Client.connectFromEnv(alloc, .worker) catch |err| {
-        log.err("phase=redis_connect role=worker status=fail err={s}", .{@errorName(err)});
+        log.err("startup.redis_connect role=worker status=fail error_code=UZ-STARTUP-004 err={s}", .{@errorName(err)});
         std.process.exit(1);
     };
     defer worker_queue_check.deinit();
     worker_queue_check.ensureConsumerGroup() catch |err| {
-        log.err("phase=redis_group role=worker status=fail err={s}", .{@errorName(err)});
+        log.err("startup.redis_group role=worker status=fail error_code=UZ-STARTUP-004 err={s}", .{@errorName(err)});
         std.process.exit(1);
     };
-    log.info("phase=redis_connect role=worker status=ok", .{});
+    log.info("startup.redis_connect role=worker status=ok", .{});
 
-    log.info("phase=migration_check status=start", .{});
+    log.info("startup.migration_check status=start", .{});
     const migrate_on_start = common.migrateOnStartEnabledFromEnv(alloc) catch |err| {
-        log.err("phase=migration_check status=fail err=invalid_MIGRATE_ON_START err_detail={s}", .{@errorName(err)});
+        log.err("startup.migration_check status=fail error_code=UZ-STARTUP-005 err=invalid_MIGRATE_ON_START err_detail={s}", .{@errorName(err)});
         std.process.exit(1);
     };
 
     common.enforceServeMigrationSafety(api_pool, migrate_on_start) catch |err| {
         switch (err) {
             common.MigrationGuardError.MigrationPending => log.err(
-                "phase=migration_check status=fail err=pending_migrations hint=run zombied migrate or set MIGRATE_ON_START=1",
+                "startup.migration_check status=fail error_code=UZ-STARTUP-005 err=pending_migrations hint=run zombied migrate or set MIGRATE_ON_START=1",
                 .{},
             ),
             common.MigrationGuardError.MigrationFailed => log.err(
-                "phase=migration_check status=fail err=migration_failure_state hint=inspect schema_migration_failures then rerun zombied migrate",
+                "startup.migration_check status=fail error_code=UZ-STARTUP-005 err=migration_failure_state hint=inspect schema_migration_failures then rerun zombied migrate",
                 .{},
             ),
             common.MigrationGuardError.MigrationSchemaAhead => log.err(
-                "phase=migration_check status=fail err=schema_ahead hint=deploy matching binary",
+                "startup.migration_check status=fail error_code=UZ-STARTUP-005 err=schema_ahead hint=deploy matching binary",
                 .{},
             ),
             common.MigrationGuardError.MigrationLockUnavailable => log.err(
-                "phase=migration_check status=fail err=migration_lock_unavailable hint=another node is migrating",
+                "startup.migration_check status=fail error_code=UZ-STARTUP-005 err=migration_lock_unavailable hint=another node is migrating",
                 .{},
             ),
-            else => log.err("phase=migration_check status=fail err={s}", .{@errorName(err)}),
+            else => log.err("startup.migration_check status=fail error_code=UZ-STARTUP-005 err={s}", .{@errorName(err)}),
         }
         std.process.exit(1);
     };
-    log.info("phase=migration_check status=ok", .{});
+    log.info("startup.migration_check status=ok", .{});
 
     std.fs.makeDirAbsolute(serve_cfg.cache_root) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => obs_log.logWarnErr(.zombied, err, "could not create cache root {s}", .{serve_cfg.cache_root}),
+        else => obs_log.logWarnErr(.zombied, err, "startup.cache_root_create status=fail path={s}", .{serve_cfg.cache_root}),
     };
     {
         const stats = git_ops.cleanupRuntimeArtifacts(alloc, serve_cfg.cache_root, "/tmp");
         log.info(
-            "runtime cleanup startup removed_worktrees={d} failed_worktrees={d} pruned_bare={d} failed_prunes={d}",
+            "startup.cleanup removed_worktrees={d} failed_worktrees={d} pruned_bare={d} failed_prunes={d}",
             .{ stats.removed_worktrees, stats.failed_worktree_removals, stats.pruned_bare_repos, stats.failed_bare_prunes },
         );
     }
@@ -256,7 +256,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
             .flush_at = 20,
             .max_retries = 3,
         }) catch |err| {
-            obs_log.logWarnErr(.zombied, err, "posthog init failed; analytics disabled", .{});
+            obs_log.logWarnErr(.zombied, err, "startup.posthog_init status=fail reason=analytics_disabled", .{});
             break :blk null;
         };
     } else null;
@@ -264,7 +264,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
     ctx.posthog = ph_client;
 
     if (serve_cfg.oidc_enabled) {
-        log.info("phase=oidc_init status=start provider={s}", .{@tagName(serve_cfg.oidc_provider)});
+        log.info("startup.oidc_init status=start provider={s}", .{@tagName(serve_cfg.oidc_provider)});
     }
     var oidc = if (serve_cfg.oidc_enabled) oidc_auth.Verifier.init(alloc, .{
         .provider = serve_cfg.oidc_provider,
@@ -275,7 +275,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
     defer if (oidc) |*v| v.deinit();
     if (oidc) |*v| {
         ctx.oidc = v;
-        log.info("phase=oidc_init status=ok", .{});
+        log.info("startup.oidc_init status=ok", .{});
     }
 
     const wcfg = worker.WorkerConfig{
@@ -323,7 +323,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
     signal_thread = try std.Thread.spawn(.{}, signalWatcher, .{&wstate});
     event_thread = try std.Thread.spawn(.{}, events_bus.runThread, .{&event_bus});
 
-    log.info("HTTP server starting port={d} worker_concurrency={d} api_threads={d} api_workers={d} api_max_clients={d} api_max_in_flight={d}", .{
+    log.info("http.server_starting port={d} worker_concurrency={d} api_threads={d} api_workers={d} api_max_clients={d} api_max_in_flight={d}", .{
         serve_cfg.port,
         worker_count,
         serve_cfg.api_http_threads,
@@ -338,7 +338,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
         .workers = serve_cfg.api_http_workers,
         .max_clients = @intCast(serve_cfg.api_max_clients),
     }) catch |err| {
-        obs_log.logErr(.zombied, err, "http server exited with error", .{});
+        obs_log.logErr(.zombied, err, "http.server_exit status=fail", .{});
     };
 
     wstate.running.store(false, .release);
@@ -350,7 +350,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
     {
         const stats = git_ops.cleanupRuntimeArtifacts(alloc, serve_cfg.cache_root, "/tmp");
         log.info(
-            "runtime cleanup shutdown removed_worktrees={d} failed_worktrees={d} pruned_bare={d} failed_prunes={d}",
+            "shutdown.cleanup removed_worktrees={d} failed_worktrees={d} pruned_bare={d} failed_prunes={d}",
             .{ stats.removed_worktrees, stats.failed_worktree_removals, stats.pruned_bare_repos, stats.failed_bare_prunes },
         );
     }
