@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -64,7 +64,8 @@ test("harness source put uploads markdown file content as source_markdown", asyn
 
     assert.equal(code, 0);
     assert.equal(err.read(), "");
-    assert.match(out.read(), /config_version_id=pver_123/);
+    assert.match(out.read(), /Harness source stored/);
+    assert.match(out.read(), /config_version_id\s+:\s+pver_123/);
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }

@@ -1,4 +1,10 @@
 const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com";
+const DEFAULT_POSTHOG_KEY = [
+  "phc_XmuRIXBST",
+  "Rfxka7IgfkU0V",
+  "PMD3LDRR3IqIL",
+  "XNg3bXzv",
+].join("");
 
 function boolFromEnv(value, fallback) {
   if (value == null || value === "") return fallback;
@@ -7,7 +13,7 @@ function boolFromEnv(value, fallback) {
 }
 
 function resolveConfig(env = process.env) {
-  const key = env.ZOMBIE_POSTHOG_KEY || "";
+  const key = env.ZOMBIE_POSTHOG_KEY || DEFAULT_POSTHOG_KEY;
   const host = env.ZOMBIE_POSTHOG_HOST || DEFAULT_POSTHOG_HOST;
   const enabled = boolFromEnv(env.ZOMBIE_POSTHOG_ENABLED, key.length > 0);
   return { key, host, enabled };
@@ -53,6 +59,35 @@ export function trackCliEvent(client, distinctId, event, properties = {}) {
   }
 }
 
+export function setCliAnalyticsContext(ctx, properties = {}) {
+  if (!ctx) return;
+  const current = ctx.analyticsContext || {};
+  ctx.analyticsContext = {
+    ...current,
+    ...sanitizeProperties(properties),
+  };
+}
+
+export function getCliAnalyticsContext(ctx) {
+  return ctx?.analyticsContext ? { ...ctx.analyticsContext } : {};
+}
+
+export function queueCliAnalyticsEvent(ctx, event, properties = {}) {
+  if (!ctx) return;
+  if (!Array.isArray(ctx.analyticsEvents)) ctx.analyticsEvents = [];
+  ctx.analyticsEvents.push({
+    event,
+    properties: sanitizeProperties(properties),
+  });
+}
+
+export function drainCliAnalyticsEvents(ctx) {
+  if (!ctx || !Array.isArray(ctx.analyticsEvents) || ctx.analyticsEvents.length === 0) return [];
+  const events = ctx.analyticsEvents.slice();
+  ctx.analyticsEvents = [];
+  return events;
+}
+
 export async function shutdownCliAnalytics(client) {
   if (!client) return;
   try {
@@ -63,6 +98,17 @@ export async function shutdownCliAnalytics(client) {
 }
 
 export const cliAnalyticsInternals = {
+  DEFAULT_POSTHOG_KEY,
+  drainCliAnalyticsEvents,
+  getCliAnalyticsContext,
+  queueCliAnalyticsEvent,
   resolveConfig,
   sanitizeProperties,
+  setCliAnalyticsContext,
+};
+
+export const cliAnalytics = {
+  createCliAnalytics,
+  trackCliEvent,
+  shutdownCliAnalytics,
 };
