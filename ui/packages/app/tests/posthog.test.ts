@@ -95,8 +95,8 @@ describe("app analytics", () => {
       has_error: false,
       workspace_count: 3,
       error_message: null as never,
-      ignored: "value" as never,
-    });
+      ignored: "value",
+    } as unknown as Parameters<typeof mod.appAnalyticsInternals.sanitizeProps>[0]);
     expect(props).toEqual({
       source: "sidebar",
       surface: "app",

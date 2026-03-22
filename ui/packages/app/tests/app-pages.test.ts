@@ -101,15 +101,11 @@ describe("app layouts and pages", () => {
     const { default: DashboardLayout } = await import("../app/(dashboard)/layout");
     const { default: AuthLayout } = await import("../app/(auth)/layout");
 
-    const rootMarkup = renderToStaticMarkup(
-      React.createElement(RootLayout, { children: React.createElement("div", null, "root child") }),
-    );
+    const rootMarkup = renderToStaticMarkup(React.createElement(RootLayout, null, React.createElement("div", null, "root child")));
     const dashboardMarkup = renderToStaticMarkup(
-      React.createElement(DashboardLayout, { children: React.createElement("div", null, "dash child") }),
+      React.createElement(DashboardLayout, null, React.createElement("div", null, "dash child")),
     );
-    const authMarkup = renderToStaticMarkup(
-      React.createElement(AuthLayout, { children: React.createElement("div", null, "auth child") }),
-    );
+    const authMarkup = renderToStaticMarkup(React.createElement(AuthLayout, null, React.createElement("div", null, "auth child")));
 
     expect(rootMarkup).toContain("root child");
     expect(dashboardMarkup).toContain("dash child");

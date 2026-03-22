@@ -32,7 +32,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("next/link", () => ({
-  default: ({ children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) =>
+  default: ({ children, ...props }: React.PropsWithChildren<React.AnchorHTMLAttributes<HTMLAnchorElement>>) =>
     React.createElement("a", props, children),
 }));
 
@@ -48,12 +48,15 @@ vi.mock("lucide-react", () => ({
   ZapIcon: (props: Record<string, unknown>) => React.createElement("svg", { ...props, "data-icon": "ZapIcon" }),
 }));
 
-function findElements(node: React.ReactNode, matcher: (element: React.ReactElement) => boolean): React.ReactElement[] {
-  const results: React.ReactElement[] = [];
+type ClickableElement = React.ReactElement<{ children?: React.ReactNode; onClick?: (...args: unknown[]) => unknown }>;
+
+function findElements(node: React.ReactNode, matcher: (element: ClickableElement) => boolean): ClickableElement[] {
+  const results: ClickableElement[] = [];
   function walk(value: React.ReactNode) {
     if (!React.isValidElement(value)) return;
-    if (matcher(value)) results.push(value);
-    const children = value.props?.children;
+    const element = value as ClickableElement;
+    if (matcher(element)) results.push(element);
+    const children = element.props?.children;
     if (Array.isArray(children)) {
       children.forEach(walk);
       return;
@@ -147,10 +150,10 @@ describe("app components", () => {
       },
     });
 
-    findElements(workspaceTree, (el) => typeof el.props?.onClick === "function")[0]?.props.onClick();
+    findElements(workspaceTree, (el) => typeof el.props?.onClick === "function")[0]?.props.onClick?.();
     const runLinks = findElements(runTree, (el) => typeof el.props?.onClick === "function");
-    runLinks[0]?.props.onClick();
-    runLinks[1]?.props.onClick({ stopPropagation: vi.fn() });
+    runLinks[0]?.props.onClick?.();
+    runLinks[1]?.props.onClick?.({ stopPropagation: vi.fn() });
 
     expect(mocks.trackAppEvent).toHaveBeenCalledWith("workspace_opened", expect.objectContaining({
       workspace_id: "ws_1",
@@ -213,14 +216,14 @@ describe("app components", () => {
       href: "/workspaces/ws_1/pause",
       children: "Pause",
     });
-    trackedAnchor.props.onClick({ type: "click" });
+    trackedAnchor.props.onClick?.({ type: "click" });
 
     const shellTree = Shell({ children: React.createElement("div", null, "content") });
     const clickable = findElements(shellTree, (el) => typeof el.props?.onClick === "function");
-    clickable.forEach((el) => el.props.onClick());
+    clickable.forEach((el) => el.props.onClick?.());
 
     mocks.usePathname.mockReturnValue("/");
-    renderToStaticMarkup(React.createElement(Shell, { children: React.createElement("div", null, "root") }));
+    renderToStaticMarkup(React.createElement(Shell, null, React.createElement("div", null, "root")));
 
     expect(mocks.trackAppEvent).toHaveBeenCalledWith("workspace_list_viewed", { surface: "workspace_list" });
     expect(mocks.trackAppEvent).toHaveBeenCalledWith("workspace_action_clicked", { target: "pause" });
