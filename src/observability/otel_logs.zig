@@ -54,7 +54,7 @@ pub fn configFromEnv(alloc: std.mem.Allocator) ?GrafanaOtlpConfig {
 // Log entry ring buffer
 // ---------------------------------------------------------------------------
 
-const MAX_MSG_LEN: usize = 4096;
+const MAX_MSG_LEN: usize = 512;
 
 pub const LogEntry = struct {
     timestamp_ns: u64,
