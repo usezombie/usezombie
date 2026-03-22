@@ -279,7 +279,10 @@ test "configFromEnv returns null when GRAFANA_OTLP_ENDPOINT is unset" {
 }
 
 test "ring buffer push and pop round-trip" {
-    var ring: Ring = .{};
+    const alloc = std.testing.allocator;
+    const ring = try alloc.create(Ring);
+    defer alloc.destroy(ring);
+    ring.* = .{};
     var entry: LogEntry = undefined;
     entry.timestamp_ns = 42;
     entry.level_len = 4;
@@ -302,12 +305,20 @@ test "ring buffer push and pop round-trip" {
 }
 
 test "ring buffer pop returns null when empty" {
-    var ring: Ring = .{};
+    const alloc = std.testing.allocator;
+    const ring = try alloc.create(Ring);
+    defer alloc.destroy(ring);
+    ring.* = .{};
     try std.testing.expect(ring.pop() == null);
 }
 
 test "ring buffer drops when full" {
-    var ring: Ring = .{};
+    // Use heap allocation to avoid 8MB+ stack frame that valgrind flags.
+    const alloc = std.testing.allocator;
+    const ring = try alloc.create(Ring);
+    defer alloc.destroy(ring);
+    ring.* = .{};
+
     var entry: LogEntry = undefined;
     entry.timestamp_ns = 0;
     entry.level_len = 3;
