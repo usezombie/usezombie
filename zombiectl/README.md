@@ -2,6 +2,11 @@
 
 JavaScript CLI for UseZombie operator workflows.
 
+Local state lives in `~/.config/zombiectl/` by default:
+- `credentials.json` — auth/session state
+- `workspaces.json` — current workspace selection and local cache
+- `ZOMBIE_STATE_DIR` overrides the base directory for tests or custom automation
+
 ## Install
 
 ```bash
@@ -41,8 +46,8 @@ Global flags:
 - `--version`
 
 Analytics env vars (optional):
-- `ZOMBIE_POSTHOG_KEY` PostHog project API key (`phc_...`)
-- `ZOMBIE_POSTHOG_ENABLED` set `false`/`0` to disable telemetry even when key exists
+- `ZOMBIE_POSTHOG_KEY` override the bundled PostHog project API key (`phc_...`) for local/dev testing
+- `ZOMBIE_POSTHOG_ENABLED` set `false`/`0` to disable telemetry even when the bundled key exists
 - `ZOMBIE_POSTHOG_HOST` override PostHog host (default `https://us.i.posthog.com`)
 
 Standard operator path:
@@ -56,6 +61,12 @@ export ZOMBIE_POSTHOG_KEY="$(op read 'op://ZMB_CD_PROD/posthog-prod/credential')
 ```
 
 This follows the same milestone playbook and `scripts/check-credentials.sh` contract as the other deploy/runtime keys.
+
+Analytics key policy:
+- `zombiectl` ships with a bundled default PostHog project key so end users do not need analytics setup after `npm install -g`.
+- The bundled key is not an auth secret; it is a write-scoped ingestion key.
+- Do not persist analytics keys in CLI auth/session state such as `credentials.json`.
+- If exposed, the expected risk is analytics pollution or noisy metrics, not control-plane access.
 
 ## Verify
 

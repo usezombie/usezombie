@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -29,7 +29,7 @@ async function withStateDir(fn) {
       `${JSON.stringify({ current_workspace_id: "ws_test", items: [{ workspace_id: "ws_test" }] }, null, 2)}\n`,
       "utf8",
     );
-    return await fn(dir);
+    return await fn();
   } finally {
     if (previous === undefined) delete process.env.ZOMBIE_STATE_DIR;
     else process.env.ZOMBIE_STATE_DIR = previous;
