@@ -245,3 +245,106 @@ test "parseExecutionId round trips with executionIdHex" {
     try std.testing.expect(parsed != null);
     try std.testing.expectEqualSlices(u8, &id, &parsed.?);
 }
+
+test "parseExecutionId rejects wrong length" {
+    try std.testing.expect(parseExecutionId("short") == null);
+    try std.testing.expect(parseExecutionId("") == null);
+}
+
+test "parseExecutionId rejects non-hex characters" {
+    try std.testing.expect(parseExecutionId("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz") == null);
+}
+
+test "handler dispatch returns error for malformed JSON frame" {
+    const alloc = std.testing.allocator;
+    var store = session_mod.SessionStore.init(alloc);
+    defer store.deinit();
+    var handler = Handler.init(alloc, &store, 30_000, .{});
+
+    const resp_json = try handler.handleFrame(alloc, "{{bad json");
+    defer alloc.free(resp_json);
+
+    var resp = try protocol.parseResponse(alloc, resp_json);
+    defer resp.deinit();
+    try std.testing.expect(resp.rpc_error != null);
+    try std.testing.expectEqual(@as(i32, protocol.ErrorCode.parse_error), resp.rpc_error.?.code);
+}
+
+test "handler dispatch returns method_not_found for unknown method" {
+    const alloc = std.testing.allocator;
+    var store = session_mod.SessionStore.init(alloc);
+    defer store.deinit();
+    var handler = Handler.init(alloc, &store, 30_000, .{});
+
+    const req = try protocol.serializeRequest(alloc, 1, "NoSuchMethod", null);
+    defer alloc.free(req);
+    const resp_json = try handler.handleFrame(alloc, req);
+    defer alloc.free(resp_json);
+
+    var resp = try protocol.parseResponse(alloc, resp_json);
+    defer resp.deinit();
+    try std.testing.expect(resp.rpc_error != null);
+    try std.testing.expectEqual(@as(i32, protocol.ErrorCode.method_not_found), resp.rpc_error.?.code);
+}
+
+test "handler CreateExecution returns execution_id" {
+    const alloc = std.testing.allocator;
+    var store = session_mod.SessionStore.init(alloc);
+    defer store.deinit();
+    var handler = Handler.init(alloc, &store, 30_000, .{});
+
+    var params = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
+    defer params.object.deinit();
+    try params.object.put("workspace_path", .{ .string = "/tmp/test" });
+    try params.object.put("run_id", .{ .string = "r" });
+
+    const req = try protocol.serializeRequest(alloc, 1, protocol.Method.create_execution, params);
+    defer alloc.free(req);
+    const resp_json = try handler.handleFrame(alloc, req);
+    defer alloc.free(resp_json);
+
+    var resp = try protocol.parseResponse(alloc, resp_json);
+    defer resp.deinit();
+    try std.testing.expect(resp.rpc_error == null);
+    try std.testing.expect(resp.result != null);
+
+    // Verify session was stored.
+    try std.testing.expectEqual(@as(usize, 1), store.activeCount());
+
+    // Clean up session.
+    store.deinit();
+    store = session_mod.SessionStore.init(alloc);
+}
+
+test "handler CreateExecution without params returns invalid_params" {
+    const alloc = std.testing.allocator;
+    var store = session_mod.SessionStore.init(alloc);
+    defer store.deinit();
+    var handler = Handler.init(alloc, &store, 30_000, .{});
+
+    const req = try protocol.serializeRequest(alloc, 1, protocol.Method.create_execution, null);
+    defer alloc.free(req);
+    const resp_json = try handler.handleFrame(alloc, req);
+    defer alloc.free(resp_json);
+
+    var resp = try protocol.parseResponse(alloc, resp_json);
+    defer resp.deinit();
+    try std.testing.expect(resp.rpc_error != null);
+    try std.testing.expectEqual(@as(i32, protocol.ErrorCode.invalid_params), resp.rpc_error.?.code);
+}
+
+test "handler StreamEvents returns empty array" {
+    const alloc = std.testing.allocator;
+    var store = session_mod.SessionStore.init(alloc);
+    defer store.deinit();
+    var handler = Handler.init(alloc, &store, 30_000, .{});
+
+    const req = try protocol.serializeRequest(alloc, 1, protocol.Method.stream_events, null);
+    defer alloc.free(req);
+    const resp_json = try handler.handleFrame(alloc, req);
+    defer alloc.free(resp_json);
+
+    var resp = try protocol.parseResponse(alloc, resp_json);
+    defer resp.deinit();
+    try std.testing.expect(resp.rpc_error == null);
+}

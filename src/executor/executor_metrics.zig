@@ -101,6 +101,7 @@ test "executor metrics increment correctly" {
     incExecutorOomKills();
     incExecutorTimeoutKills();
     incExecutorLandlockDenials();
+    incExecutorResourceKills();
     incExecutorLeaseExpired();
     incExecutorCancellations();
     setExecutorSessionsActive(3);
@@ -111,6 +112,11 @@ test "executor metrics increment correctly" {
     try std.testing.expect(snap.sessions_created_total >= 1);
     try std.testing.expect(snap.failures_total >= 1);
     try std.testing.expect(snap.oom_kills_total >= 1);
+    try std.testing.expect(snap.timeout_kills_total >= 1);
+    try std.testing.expect(snap.landlock_denials_total >= 1);
+    try std.testing.expect(snap.resource_kills_total >= 1);
+    try std.testing.expect(snap.lease_expired_total >= 1);
+    try std.testing.expect(snap.cancellations_total >= 1);
     try std.testing.expect(snap.sessions_active == 3);
     try std.testing.expect(snap.memory_peak_bytes == 1024 * 1024);
     try std.testing.expect(snap.cpu_throttled_ms_total >= 500);

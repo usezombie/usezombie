@@ -250,3 +250,65 @@ fn getBoolField(obj: std.json.Value, key: []const u8) bool {
         else => false,
     };
 }
+
+// ── Tests ────────────────────────────────────────────────────────────────
+
+test "classifyError maps all known error codes" {
+    try std.testing.expectEqual(types.FailureClass.timeout_kill, classifyError(protocol.ErrorCode.timeout_killed));
+    try std.testing.expectEqual(types.FailureClass.oom_kill, classifyError(protocol.ErrorCode.oom_killed));
+    try std.testing.expectEqual(types.FailureClass.policy_deny, classifyError(protocol.ErrorCode.policy_denied));
+    try std.testing.expectEqual(types.FailureClass.lease_expired, classifyError(protocol.ErrorCode.lease_expired));
+    try std.testing.expectEqual(types.FailureClass.landlock_deny, classifyError(protocol.ErrorCode.landlock_denied));
+    try std.testing.expectEqual(types.FailureClass.resource_kill, classifyError(protocol.ErrorCode.resource_killed));
+}
+
+test "classifyError falls back to executor_crash for unknown codes" {
+    try std.testing.expectEqual(types.FailureClass.executor_crash, classifyError(0));
+    try std.testing.expectEqual(types.FailureClass.executor_crash, classifyError(-999));
+    try std.testing.expectEqual(types.FailureClass.executor_crash, classifyError(42));
+}
+
+test "getStringField returns null for missing key" {
+    const alloc = std.testing.allocator;
+    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
+    defer obj.object.deinit();
+    try std.testing.expect(getStringField(obj, "missing") == null);
+}
+
+test "getIntField returns 0 for missing key" {
+    const alloc = std.testing.allocator;
+    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
+    defer obj.object.deinit();
+    try std.testing.expectEqual(@as(u64, 0), getIntField(obj, "missing"));
+}
+
+test "getBoolField returns false for missing key" {
+    const alloc = std.testing.allocator;
+    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
+    defer obj.object.deinit();
+    try std.testing.expectEqual(false, getBoolField(obj, "missing"));
+}
+
+test "getStringField returns null for non-string value" {
+    const alloc = std.testing.allocator;
+    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
+    defer obj.object.deinit();
+    try obj.object.put("key", .{ .integer = 42 });
+    try std.testing.expect(getStringField(obj, "key") == null);
+}
+
+test "getIntField returns value for integer field" {
+    const alloc = std.testing.allocator;
+    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
+    defer obj.object.deinit();
+    try obj.object.put("count", .{ .integer = 7 });
+    try std.testing.expectEqual(@as(u64, 7), getIntField(obj, "count"));
+}
+
+test "getBoolField returns value for bool field" {
+    const alloc = std.testing.allocator;
+    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
+    defer obj.object.deinit();
+    try obj.object.put("ok", .{ .bool = true });
+    try std.testing.expectEqual(true, getBoolField(obj, "ok"));
+}

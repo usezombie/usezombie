@@ -221,3 +221,72 @@ test "SessionStore put/get/remove" {
     alloc.destroy(removed.?);
     try std.testing.expectEqual(@as(usize, 0), store.activeCount());
 }
+
+test "SessionStore get returns null for unknown id" {
+    const alloc = std.testing.allocator;
+    var store = SessionStore.init(alloc);
+    defer store.deinit();
+
+    const unknown_id = types.generateExecutionId();
+    try std.testing.expect(store.get(unknown_id) == null);
+}
+
+test "SessionStore remove returns null for unknown id" {
+    const alloc = std.testing.allocator;
+    var store = SessionStore.init(alloc);
+    defer store.deinit();
+
+    const unknown_id = types.generateExecutionId();
+    try std.testing.expect(store.remove(unknown_id) == null);
+}
+
+test "Session getUsage returns cumulative results" {
+    const alloc = std.testing.allocator;
+    var session = Session.create(alloc, "/tmp/ws", .{
+        .trace_id = "t", .run_id = "r", .workspace_id = "w",
+        .stage_id = "s", .role_id = "echo", .skill_id = "echo",
+    }, .{}, 30_000);
+    defer session.destroy();
+
+    session.recordStageResult(.{ .content = "", .token_count = 50, .wall_seconds = 2, .exit_ok = true });
+    session.recordStageResult(.{ .content = "", .token_count = 30, .wall_seconds = 3, .exit_ok = true });
+
+    const usage = session.getUsage();
+    try std.testing.expectEqual(@as(u64, 80), usage.token_count);
+    try std.testing.expectEqual(@as(u64, 5), usage.wall_seconds);
+    try std.testing.expectEqual(@as(u32, 2), session.stages_executed);
+}
+
+test "Session touchLease refreshes lease" {
+    const alloc = std.testing.allocator;
+    var session = Session.create(alloc, "/tmp/ws", .{
+        .trace_id = "t", .run_id = "r", .workspace_id = "w",
+        .stage_id = "s", .role_id = "echo", .skill_id = "echo",
+    }, .{}, 50); // 50ms lease
+    defer session.destroy();
+
+    // Touch before expiry.
+    session.touchLease();
+    try std.testing.expect(!session.isLeaseExpired());
+}
+
+test "SessionStore reapExpired returns 0 when no expired sessions" {
+    const alloc = std.testing.allocator;
+    var store = SessionStore.init(alloc);
+    defer store.deinit();
+
+    const session = try alloc.create(Session);
+    session.* = Session.create(alloc, "/tmp/ws", .{
+        .trace_id = "t", .run_id = "r", .workspace_id = "w",
+        .stage_id = "s", .role_id = "echo", .skill_id = "echo",
+    }, .{}, 300_000); // 5 minute lease — won't expire
+
+    try store.put(session);
+    try std.testing.expectEqual(@as(u32, 0), store.reapExpired());
+    try std.testing.expectEqual(@as(usize, 1), store.activeCount());
+
+    // Clean up.
+    const removed = store.remove(session.execution_id);
+    removed.?.destroy();
+    alloc.destroy(removed.?);
+}

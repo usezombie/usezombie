@@ -204,3 +204,63 @@ test "serializeRequest and parseRequest round trip" {
     try std.testing.expectEqual(@as(u64, 42), req.id);
     try std.testing.expectEqualStrings(Method.create_execution, req.method);
 }
+
+test "serializeRequest with params round trips" {
+    const alloc = std.testing.allocator;
+    var params = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
+    defer params.object.deinit();
+    try params.object.put("workspace_path", .{ .string = "/tmp/test" });
+
+    const serialized = try serializeRequest(alloc, 1, Method.create_execution, params);
+    defer alloc.free(serialized);
+
+    var req = try parseRequest(alloc, serialized);
+    defer req.deinit();
+    try std.testing.expectEqual(@as(u64, 1), req.id);
+    try std.testing.expect(req.params != null);
+}
+
+test "parseRequest rejects malformed JSON" {
+    const alloc = std.testing.allocator;
+    const result = parseRequest(alloc, "not json at all{{{");
+    try std.testing.expectError(error.SyntaxError, result);
+}
+
+test "parseRequest rejects missing id" {
+    const alloc = std.testing.allocator;
+    const result = parseRequest(alloc, "{\"method\":\"Heartbeat\"}");
+    try std.testing.expectError(error.InvalidRequest, result);
+}
+
+test "parseRequest rejects missing method" {
+    const alloc = std.testing.allocator;
+    const result = parseRequest(alloc, "{\"id\":1}");
+    try std.testing.expectError(error.InvalidRequest, result);
+}
+
+test "parseResponse parses success response" {
+    const alloc = std.testing.allocator;
+    const payload = "{\"id\":1,\"result\":true}";
+    var resp = try parseResponse(alloc, payload);
+    defer resp.deinit();
+    try std.testing.expectEqual(@as(u64, 1), resp.id);
+    try std.testing.expect(resp.result != null);
+    try std.testing.expect(resp.rpc_error == null);
+}
+
+test "parseResponse parses error response" {
+    const alloc = std.testing.allocator;
+    const payload = "{\"id\":2,\"error\":{\"code\":-32601,\"message\":\"Unknown method\"}}";
+    var resp = try parseResponse(alloc, payload);
+    defer resp.deinit();
+    try std.testing.expectEqual(@as(u64, 2), resp.id);
+    try std.testing.expect(resp.rpc_error != null);
+    try std.testing.expectEqual(@as(i32, ErrorCode.method_not_found), resp.rpc_error.?.code);
+    try std.testing.expectEqualStrings("Unknown method", resp.rpc_error.?.message);
+}
+
+test "parseResponse rejects missing id" {
+    const alloc = std.testing.allocator;
+    const result = parseResponse(alloc, "{\"result\":true}");
+    try std.testing.expectError(error.InvalidRequest, result);
+}

@@ -112,3 +112,21 @@ test "executionIdHex round trips" {
     const hex = executionIdHex(id);
     try std.testing.expectEqual(@as(usize, 32), hex.len);
 }
+
+test "FailureClass.label returns non-empty strings for all variants" {
+    const variants = [_]FailureClass{
+        .startup_posture, .policy_deny, .timeout_kill, .oom_kill,
+        .resource_kill, .executor_crash, .transport_loss, .landlock_deny,
+        .lease_expired,
+    };
+    for (variants) |fc| {
+        const label = fc.label();
+        try std.testing.expect(label.len > 0);
+    }
+}
+
+test "ResourceLimits has sensible defaults" {
+    const defaults = ResourceLimits{};
+    try std.testing.expectEqual(@as(u64, 512), defaults.memory_limit_mb);
+    try std.testing.expectEqual(@as(u64, 100), defaults.cpu_limit_percent);
+}

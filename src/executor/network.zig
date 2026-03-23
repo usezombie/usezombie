@@ -66,3 +66,16 @@ test "deny_all is default policy" {
     const config = NetworkConfig{};
     try std.testing.expectEqual(NetworkPolicy.deny_all, config.policy);
 }
+
+test "appendBwrapNetworkArgs with deny_all is no-op" {
+    const alloc = std.testing.allocator;
+    var argv = std.ArrayList([]const u8){};
+    defer argv.deinit(alloc);
+    try appendBwrapNetworkArgs(alloc, &argv, .{});
+    try std.testing.expectEqual(@as(usize, 0), argv.items.len);
+}
+
+test "isNetworkNamespaceAvailable returns false on non-linux" {
+    if (builtin.os.tag == .linux) return error.SkipZigTest;
+    try std.testing.expect(!isNetworkNamespaceAvailable());
+}
