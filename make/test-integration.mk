@@ -28,6 +28,7 @@ _test-integration-db:
 	@echo "→ [zombied] Migration done, running tests..."
 	@ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
 	 ZIG_LOCAL_CACHE_DIR="$(ZIG_LOCAL_CACHE_DIR)" \
+	 LIVE_DB=1 \
 	 HANDLER_DB_TEST_URL="$$HANDLER_DB_TEST_URL" \
 	 zig build test -- --test-filter "integration:"
 	@echo "✓ [zombied] DB-backed integration tests passed"

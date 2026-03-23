@@ -361,6 +361,7 @@ test "T6 integration: duplicate UUID PK is rejected" {
 }
 
 test "integration: audit schema exists and contains migration bookkeeping tables" {
+    if (!std.process.hasEnvVarConstant("LIVE_DB")) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     const db_ctx = (try openIntegrationTestConn(alloc)) orelse return error.SkipZigTest;
     defer db_ctx.pool.deinit();
@@ -416,6 +417,7 @@ test "integration: audit schema exists and contains migration bookkeeping tables
 }
 
 test "integration: db_migrator role exists after migration" {
+    if (!std.process.hasEnvVarConstant("LIVE_DB")) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     const db_ctx = (try openIntegrationTestConn(alloc)) orelse return error.SkipZigTest;
     defer db_ctx.pool.deinit();
@@ -432,6 +434,7 @@ test "integration: db_migrator role exists after migration" {
 }
 
 test "integration: zero-trust schema segmentation and role matrix are enforced" {
+    if (!std.process.hasEnvVarConstant("LIVE_DB")) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     const db_ctx = (try openIntegrationTestConn(alloc)) orelse return error.SkipZigTest;
     defer db_ctx.pool.deinit();
@@ -481,6 +484,7 @@ test "integration: zero-trust schema segmentation and role matrix are enforced" 
 }
 
 test "integration: readonly roles can only query ops_ro views, not vault" {
+    if (!std.process.hasEnvVarConstant("LIVE_DB")) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     const db_ctx = (try openIntegrationTestConn(alloc)) orelse return error.SkipZigTest;
     defer db_ctx.pool.deinit();
