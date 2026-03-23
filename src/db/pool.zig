@@ -253,6 +253,22 @@ fn maxAppliedMigrationVersion(conn: *Conn) !i32 {
     return version;
 }
 
+fn tableExists(conn: *Conn, table_name: []const u8) !bool {
+    var result = try conn.query(
+        \\SELECT EXISTS (
+        \\  SELECT 1
+        \\  FROM information_schema.tables
+        \\  WHERE table_schema = 'public'
+        \\    AND table_name = $1
+        \\)
+    , .{table_name});
+    defer result.deinit();
+    const row = try result.next() orelse return false;
+    const exists = try row.get(bool, 0);
+    try result.drain();
+    return exists;
+}
+
 fn applySqlStatements(conn: *Conn, sql: []const u8) !u32 {
     var start: usize = 0;
     var i: usize = 0;
@@ -325,22 +341,32 @@ pub fn inspectMigrationState(pool: *Pool, migrations: []const Migration) !Migrat
     const conn = try pool.acquire();
     defer pool.release(conn);
 
-    try ensureSchemaMigrationsTable(conn);
-    try ensureSchemaMigrationFailuresTable(conn);
+    const has_schema_migrations = try tableExists(conn, "schema_migrations");
+    const has_schema_migration_failures = try tableExists(conn, "schema_migration_failures");
 
     var applied_versions: u32 = 0;
     var latest_expected: i32 = 0;
-    for (migrations) |migration| {
-        latest_expected = @max(latest_expected, migration.version);
-        if (try isMigrationApplied(conn, migration.version)) {
-            applied_versions += 1;
+    if (has_schema_migrations) {
+        for (migrations) |migration| {
+            latest_expected = @max(latest_expected, migration.version);
+            if (try isMigrationApplied(conn, migration.version)) {
+                applied_versions += 1;
+            }
+        }
+    } else {
+        for (migrations) |migration| {
+            latest_expected = @max(latest_expected, migration.version);
         }
     }
 
-    const latest_applied = try maxAppliedMigrationVersion(conn);
-    const failed = try hasFailedMigrationRecords(conn);
-    const lock_available = try tryAcquireMigrationLock(conn);
-    if (lock_available) releaseMigrationLock(conn);
+    const latest_applied = if (has_schema_migrations) try maxAppliedMigrationVersion(conn) else 0;
+    const failed = if (has_schema_migration_failures) try hasFailedMigrationRecords(conn) else false;
+
+    var lock_available = true;
+    if (applied_versions < migrations.len) {
+        lock_available = tryAcquireMigrationLock(conn) catch false;
+        if (lock_available) releaseMigrationLock(conn);
+    }
 
     return .{
         .expected_versions = @intCast(migrations.len),
