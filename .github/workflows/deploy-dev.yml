@@ -100,7 +100,6 @@ jobs:
         run: |
           flyctl secrets set \
             LOG_LEVEL="debug" \
-            MIGRATE_ON_START="1" \
             DATABASE_URL_API="$DATABASE_URL_API" \
             DATABASE_URL_WORKER="$DATABASE_URL_WORKER" \
             REDIS_URL_API="$REDIS_URL_API" \
