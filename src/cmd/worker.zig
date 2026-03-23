@@ -152,9 +152,6 @@ pub fn run(alloc: std.mem.Allocator) !void {
         }
     }
 
-    const executor_ptr: ?*executor_client.ExecutorClient = if (exec_client) |*ec| ec else null;
-    _ = executor_ptr;
-
     const pipeline_cfg = worker.WorkerConfig{
         .pool = worker_pool,
         .config_dir = worker_cfg.config_dir,

@@ -52,7 +52,7 @@ pub const ExecutorClient = struct {
 
     pub fn connect(self: *ExecutorClient) ClientError!void {
         self.transport_client.connect() catch {
-            log.err("executor_client.connect_failed error_code=UZ-EXEC-006 socket={s}", .{self.transport_client.socket_path});
+            log.err("executor_client.connect_failed error_code=UZ-EXEC-009 socket={s}", .{self.transport_client.socket_path});
             executor_metrics.incExecutorFailures();
             return ClientError.ConnectionFailed;
         };

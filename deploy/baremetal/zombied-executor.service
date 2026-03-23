@@ -28,8 +28,8 @@ Environment=EXECUTOR_CPU_LIMIT_PERCENT=100
 RuntimeDirectory=zombie
 RuntimeDirectoryMode=0755
 
-# Security hardening (the executor itself enforces sandbox policy).
-NoNewPrivileges=no
+# Security hardening — executor uses bwrap user namespaces (no suid needed).
+NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/run/zombie /sys/fs/cgroup /tmp
 ProtectHome=yes
