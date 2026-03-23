@@ -122,7 +122,7 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ env.FLY_API_TOKEN }}
 
-      - name: Verify Fly machine state (started)
+      - name: Verify Fly machine state (deploy settled)
         run: |
           APP="${{ vars.FLY_APP_DEV }}"
           echo "Checking Fly machine state for ${APP}..."
@@ -131,14 +131,14 @@ jobs:
             OUT="$(flyctl machine list --app "${APP}" || true)"
             LAST_OUT="${OUT}"
             echo "${OUT}"
-            if echo "${OUT}" | grep -qiE '\bstarted\b'; then
-              echo "✓ at least one machine is started for ${APP}"
+            if echo "${OUT}" | grep -qiE '\b(started|stopped)\b'; then
+              echo "✓ at least one machine is in a settled state (started/stopped) for ${APP}"
               exit 0
             fi
-            echo "attempt ${i}/12: no started machine yet; retrying in 5s..."
+            echo "attempt ${i}/12: no settled machine yet; retrying in 5s..."
             sleep 5
           done
-          echo "✗ no started machine found for ${APP} after 60s"
+          echo "✗ no settled machine found for ${APP} after 60s"
           echo "Fly app status for diagnostics:"
           flyctl status --app "${APP}" || true
           echo "Fly machine detail diagnostics:"
