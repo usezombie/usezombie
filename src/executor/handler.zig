@@ -348,3 +348,165 @@ test "handler StreamEvents returns empty array" {
     defer resp.deinit();
     try std.testing.expect(resp.rpc_error == null);
 }
+
+// ── T2: Edge case — unicode in correlation fields ────────────────────
+test "handler CreateExecution with unicode correlation fields" {
+    const alloc = std.testing.allocator;
+    var store = session_mod.SessionStore.init(alloc);
+    defer store.deinit();
+    var handler = Handler.init(alloc, &store, 30_000, .{});
+
+    var params = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
+    defer params.object.deinit();
+    try params.object.put("workspace_path", .{ .string = "/tmp/日本語-workspace" });
+    try params.object.put("run_id", .{ .string = "run-café-☕" });
+    try params.object.put("trace_id", .{ .string = "trace-émoji-👨‍💻" });
+
+    const req = try protocol.serializeRequest(alloc, 1, protocol.Method.create_execution, params);
+    defer alloc.free(req);
+    const resp_json = try handler.handleFrame(alloc, req);
+    defer alloc.free(resp_json);
+
+    var resp = try protocol.parseResponse(alloc, resp_json);
+    defer resp.deinit();
+    try std.testing.expect(resp.rpc_error == null);
+    try std.testing.expectEqual(@as(usize, 1), store.activeCount());
+}
+
+// ── T3: Error path — StartStage with non-existent session ────────────
+test "handler StartStage with unknown execution_id returns execution_failed" {
+    const alloc = std.testing.allocator;
+    var store = session_mod.SessionStore.init(alloc);
+    defer store.deinit();
+    var handler = Handler.init(alloc, &store, 30_000, .{});
+
+    const fake_id = types.executionIdHex(types.generateExecutionId());
+    var params = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
+    defer params.object.deinit();
+    try params.object.put("execution_id", .{ .string = &fake_id });
+    try params.object.put("stage_id", .{ .string = "s" });
+
+    const req = try protocol.serializeRequest(alloc, 1, protocol.Method.start_stage, params);
+    defer alloc.free(req);
+    const resp_json = try handler.handleFrame(alloc, req);
+    defer alloc.free(resp_json);
+
+    var resp = try protocol.parseResponse(alloc, resp_json);
+    defer resp.deinit();
+    try std.testing.expect(resp.rpc_error != null);
+    try std.testing.expectEqual(@as(i32, protocol.ErrorCode.execution_failed), resp.rpc_error.?.code);
+}
+
+// ── T3: Error path — DestroyExecution unknown session ────────────────
+test "handler DestroyExecution with unknown execution_id returns error" {
+    const alloc = std.testing.allocator;
+    var store = session_mod.SessionStore.init(alloc);
+    defer store.deinit();
+    var handler = Handler.init(alloc, &store, 30_000, .{});
+
+    const fake_id = types.executionIdHex(types.generateExecutionId());
+    var params = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
+    defer params.object.deinit();
+    try params.object.put("execution_id", .{ .string = &fake_id });
+
+    const req = try protocol.serializeRequest(alloc, 1, protocol.Method.destroy_execution, params);
+    defer alloc.free(req);
+    const resp_json = try handler.handleFrame(alloc, req);
+    defer alloc.free(resp_json);
+
+    var resp = try protocol.parseResponse(alloc, resp_json);
+    defer resp.deinit();
+    try std.testing.expect(resp.rpc_error != null);
+    try std.testing.expectEqual(@as(i32, protocol.ErrorCode.execution_failed), resp.rpc_error.?.code);
+}
+
+// ── T4: Output — verify errorResponse JSON structure ─────────────────
+test "handler errorResponse output is valid parseable JSON-RPC" {
+    const alloc = std.testing.allocator;
+    var store = session_mod.SessionStore.init(alloc);
+    defer store.deinit();
+    var handler = Handler.init(alloc, &store, 30_000, .{});
+
+    // Trigger a known error path.
+    const resp_json = try handler.handleFrame(alloc, "{}");
+    defer alloc.free(resp_json);
+
+    // Must be valid JSON.
+    var parsed = try std.json.parseFromSlice(std.json.Value, alloc, resp_json, .{});
+    defer parsed.deinit();
+
+    // Must have "id" and "error" keys.
+    try std.testing.expect(parsed.value.object.get("id") != null);
+    try std.testing.expect(parsed.value.object.get("error") != null);
+
+    // Error must have "code" and "message".
+    const err_obj = parsed.value.object.get("error").?;
+    try std.testing.expect(err_obj.object.get("code") != null);
+    try std.testing.expect(err_obj.object.get("message") != null);
+}
+
+// ── T8: Security — workspace_path with path traversal ────────────────
+// Note: in v1, the handler stores workspace_path as-is and Landlock
+// enforces filesystem policy. This test documents that the handler does
+// NOT do path validation — Landlock is the security boundary. If we
+// later add validation, this test should be updated to expect rejection.
+test "handler CreateExecution accepts path traversal without crashing" {
+    const alloc = std.testing.allocator;
+    var store = session_mod.SessionStore.init(alloc);
+    defer store.deinit();
+    var handler = Handler.init(alloc, &store, 30_000, .{});
+
+    var params = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
+    defer params.object.deinit();
+    try params.object.put("workspace_path", .{ .string = "/tmp/../../../etc/passwd" });
+    try params.object.put("run_id", .{ .string = "r" });
+
+    const req = try protocol.serializeRequest(alloc, 1, protocol.Method.create_execution, params);
+    defer alloc.free(req);
+    const resp_json = try handler.handleFrame(alloc, req);
+    defer alloc.free(resp_json);
+
+    // Handler creates the session (Landlock enforces policy at execution time).
+    var resp = try protocol.parseResponse(alloc, resp_json);
+    defer resp.deinit();
+    try std.testing.expect(resp.rpc_error == null);
+}
+
+// ── T11: Perf/leak — repeated handler calls don't leak ───────────────
+test "handler 100 create+destroy cycles no leak" {
+    const alloc = std.testing.allocator;
+    var store = session_mod.SessionStore.init(alloc);
+    defer store.deinit();
+    var handler = Handler.init(alloc, &store, 30_000, .{});
+
+    for (0..100) |i| {
+        // Create.
+        var params = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
+        try params.object.put("workspace_path", .{ .string = "/tmp/test" });
+        try params.object.put("run_id", .{ .string = "r" });
+
+        const req = try protocol.serializeRequest(alloc, i + 1, protocol.Method.create_execution, params);
+        const resp_json = try handler.handleFrame(alloc, req);
+        params.object.deinit();
+        alloc.free(req);
+
+        // Extract execution_id from response.
+        var resp = try protocol.parseResponse(alloc, resp_json);
+        const exec_id = resp.result.?.object.get("execution_id").?.string;
+        const exec_id_copy = try alloc.dupe(u8, exec_id);
+        resp.deinit();
+        alloc.free(resp_json);
+
+        // Destroy.
+        var dparams = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
+        try dparams.object.put("execution_id", .{ .string = exec_id_copy });
+
+        const dreq = try protocol.serializeRequest(alloc, i + 1000, protocol.Method.destroy_execution, dparams);
+        const dresp_json = try handler.handleFrame(alloc, dreq);
+        dparams.object.deinit();
+        alloc.free(exec_id_copy);
+        alloc.free(dreq);
+        alloc.free(dresp_json);
+    }
+    try std.testing.expectEqual(@as(usize, 0), store.activeCount());
+}

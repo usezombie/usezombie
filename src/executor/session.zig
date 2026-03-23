@@ -290,3 +290,83 @@ test "SessionStore reapExpired returns 0 when no expired sessions" {
     removed.?.destroy();
     alloc.destroy(removed.?);
 }
+
+// ── T5: Concurrency — multiple threads hitting SessionStore ──────────
+test "SessionStore concurrent put/get from multiple threads" {
+    const page = std.heap.page_allocator;
+    var store = SessionStore.init(page);
+    defer store.deinit();
+
+    const Worker = struct {
+        fn run(s: *SessionStore, a: std.mem.Allocator) void {
+            for (0..10) |_| {
+                const sess = a.create(Session) catch return;
+                sess.* = Session.create(a, "/tmp/conc", .{
+                    .trace_id = "t", .run_id = "r", .workspace_id = "w",
+                    .stage_id = "s", .role_id = "echo", .skill_id = "echo",
+                }, .{}, 30_000);
+                s.put(sess) catch return;
+            }
+        }
+    };
+
+    var threads: [4]std.Thread = undefined;
+    for (&threads) |*t| {
+        t.* = try std.Thread.spawn(.{}, Worker.run, .{ &store, page });
+    }
+    for (&threads) |*t| t.join();
+
+    // All 40 sessions should be stored without data corruption.
+    try std.testing.expectEqual(@as(usize, 40), store.activeCount());
+}
+
+// ── T7: Regression — Session struct fields stable ────────────────────
+test "Session create initializes all fields correctly" {
+    const alloc = std.testing.allocator;
+    var session = Session.create(alloc, "/tmp/ws", .{
+        .trace_id = "trace-abc", .run_id = "run-123", .workspace_id = "ws-456",
+        .stage_id = "stg-1", .role_id = "echo", .skill_id = "echo",
+    }, .{ .memory_limit_mb = 256, .cpu_limit_percent = 50 }, 5_000);
+    defer session.destroy();
+
+    try std.testing.expectEqualStrings("/tmp/ws", session.workspace_path);
+    try std.testing.expectEqualStrings("trace-abc", session.correlation.trace_id);
+    try std.testing.expectEqualStrings("run-123", session.correlation.run_id);
+    try std.testing.expectEqual(@as(u64, 256), session.resource_limits.memory_limit_mb);
+    try std.testing.expectEqual(@as(u64, 50), session.resource_limits.cpu_limit_percent);
+    try std.testing.expectEqual(@as(u64, 5_000), session.lease.lease_timeout_ms);
+    try std.testing.expectEqual(false, session.isCancelled());
+    try std.testing.expect(session.last_result == null);
+    try std.testing.expectEqual(@as(u64, 0), session.total_tokens);
+    try std.testing.expectEqual(@as(u32, 0), session.stages_executed);
+}
+
+// ── T3: Error path — getUsage on session with no stages ──────────────
+test "Session getUsage with no stages returns zero values" {
+    const alloc = std.testing.allocator;
+    var session = Session.create(alloc, "/tmp/ws", .{
+        .trace_id = "t", .run_id = "r", .workspace_id = "w",
+        .stage_id = "s", .role_id = "echo", .skill_id = "echo",
+    }, .{}, 30_000);
+    defer session.destroy();
+
+    const usage = session.getUsage();
+    try std.testing.expectEqual(@as(u64, 0), usage.token_count);
+    try std.testing.expectEqual(@as(u64, 0), usage.wall_seconds);
+    try std.testing.expectEqual(false, usage.exit_ok);
+    try std.testing.expect(usage.failure == null);
+}
+
+// ── T2: Edge case — cancel is idempotent ─────────────────────────────
+test "Session cancel is idempotent" {
+    const alloc = std.testing.allocator;
+    var session = Session.create(alloc, "/tmp/ws", .{
+        .trace_id = "t", .run_id = "r", .workspace_id = "w",
+        .stage_id = "s", .role_id = "echo", .skill_id = "echo",
+    }, .{}, 30_000);
+    defer session.destroy();
+
+    session.cancel();
+    session.cancel(); // second cancel should not panic
+    try std.testing.expect(session.isCancelled());
+}

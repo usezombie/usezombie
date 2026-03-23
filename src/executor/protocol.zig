@@ -264,3 +264,51 @@ test "parseResponse rejects missing id" {
     const result = parseResponse(alloc, "{\"result\":true}");
     try std.testing.expectError(error.InvalidRequest, result);
 }
+
+// ── T7: Regression — error code values are pinned ────────────────────
+test "ErrorCode values match JSON-RPC spec" {
+    // Standard JSON-RPC 2.0 error codes.
+    try std.testing.expectEqual(@as(i32, -32700), ErrorCode.parse_error);
+    try std.testing.expectEqual(@as(i32, -32600), ErrorCode.invalid_request);
+    try std.testing.expectEqual(@as(i32, -32601), ErrorCode.method_not_found);
+    try std.testing.expectEqual(@as(i32, -32602), ErrorCode.invalid_params);
+    try std.testing.expectEqual(@as(i32, -32603), ErrorCode.internal_error);
+    // Application-specific codes.
+    try std.testing.expectEqual(@as(i32, -1), ErrorCode.execution_failed);
+    try std.testing.expectEqual(@as(i32, -2), ErrorCode.timeout_killed);
+    try std.testing.expectEqual(@as(i32, -3), ErrorCode.oom_killed);
+    try std.testing.expectEqual(@as(i32, -4), ErrorCode.policy_denied);
+    try std.testing.expectEqual(@as(i32, -5), ErrorCode.lease_expired);
+    try std.testing.expectEqual(@as(i32, -6), ErrorCode.landlock_denied);
+    try std.testing.expectEqual(@as(i32, -7), ErrorCode.resource_killed);
+}
+
+// ── T7: Regression — Method name constants are stable ────────────────
+test "Method constants match expected strings" {
+    try std.testing.expectEqualStrings("CreateExecution", Method.create_execution);
+    try std.testing.expectEqualStrings("StartStage", Method.start_stage);
+    try std.testing.expectEqualStrings("StreamEvents", Method.stream_events);
+    try std.testing.expectEqualStrings("CancelExecution", Method.cancel_execution);
+    try std.testing.expectEqualStrings("GetUsage", Method.get_usage);
+    try std.testing.expectEqualStrings("DestroyExecution", Method.destroy_execution);
+    try std.testing.expectEqualStrings("Heartbeat", Method.heartbeat);
+}
+
+// ── T8: Security — MAX_FRAME_SIZE is pinned ──────────────────────────
+test "MAX_FRAME_SIZE is 16 MiB" {
+    try std.testing.expectEqual(@as(u32, 16 * 1024 * 1024), MAX_FRAME_SIZE);
+}
+
+// ── T2: Edge case — parseRequest with empty string ───────────────────
+test "parseRequest rejects empty payload" {
+    const alloc = std.testing.allocator;
+    const result = parseRequest(alloc, "");
+    try std.testing.expectError(error.UnexpectedEndOfInput, result);
+}
+
+// ── T2: Edge case — parseResponse with only whitespace ───────────────
+test "parseResponse rejects whitespace-only payload" {
+    const alloc = std.testing.allocator;
+    const result = parseResponse(alloc, "   ");
+    try std.testing.expectError(error.UnexpectedEndOfInput, result);
+}
