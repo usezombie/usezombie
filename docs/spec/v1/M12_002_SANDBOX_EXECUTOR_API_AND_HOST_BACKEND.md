@@ -51,7 +51,7 @@ Ship the first executor implementation as a local Unix-socket sidecar.
 
 **Dimensions:**
 - 3.1 DONE `zombied-executor` process starts locally and serves the executor API over a Unix socket — `src/executor/main.zig` + `build.zig` second binary target
-- 3.2 DONE Sidecar embeds NullClaw and owns the dynamic stage execution path — NullClaw dependency wired in build.zig, handler dispatches stage execution
+- 3.2 PARTIAL Sidecar embeds NullClaw and owns the dynamic stage execution path — NullClaw dependency wired in build.zig, handler has dispatch point but returns placeholder. Real invocation tracked in M12_003
 - 3.3 DONE Worker no longer assumes dangerous agent execution lives in its own process boundary — `worker_stage_types.zig` ExecuteConfig gains `executor` field, worker can dispatch via client
 - 3.4 DONE Upgrade/restart semantics documented and surfaced honestly: stage-boundary retry, no mid-token continuity claim — lease expiry triggers cancel, worker retries at stage boundary
 

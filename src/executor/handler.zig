@@ -122,13 +122,10 @@ pub const Handler = struct {
             return self.errorResponse(alloc, id, protocol.ErrorCode.lease_expired, "Lease expired");
         }
 
-        // Stage execution is synchronous in v1. The worker blocks here while
-        // the executor runs NullClaw. The actual NullClaw invocation goes
-        // through the runner module — placeholder until NullClaw runtime is
-        // production-ready (tracked: M12_002 §3.2, v2 path: M3_001).
-        //
-        // When wired: runner.execute(session, stage_id) returns real content
-        // and the handler serializes it into the JSON-RPC response.
+        // Placeholder — returns empty result. Real NullClaw invocation is
+        // tracked in M12_003_EXECUTOR_NULLCLAW_INVOCATION. When wired:
+        // runner.execute(session, agent_config, tools, message) returns
+        // real content and the handler serializes it into the response.
         const stage_id = getStringParam(p, "stage_id") orelse "";
         const role_id = getStringParam(p, "role_id") orelse "";
         const hex = types.executionIdHex(exec_id);
