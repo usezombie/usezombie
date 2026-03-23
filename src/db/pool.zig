@@ -253,15 +253,33 @@ fn maxAppliedMigrationVersion(conn: *Conn) !i32 {
     return version;
 }
 
+fn logPgErrorContext(conn: *Conn, op: []const u8) void {
+    if (conn.err) |pg_err| {
+        log.err("db.pg_error op={s} code={s} message={s}", .{ op, pg_err.code, pg_err.message });
+        if (pg_err.detail) |detail| {
+            log.err("db.pg_error op={s} detail={s}", .{ op, detail });
+        }
+        if (pg_err.hint) |hint| {
+            log.err("db.pg_error op={s} hint={s}", .{ op, hint });
+        }
+        return;
+    }
+    log.err("db.pg_error op={s} message=unknown", .{op});
+}
+
 fn tableExists(conn: *Conn, table_name: []const u8) !bool {
+    var qualified_name_buf: [96]u8 = undefined;
+    const qualified_name = try std.fmt.bufPrint(&qualified_name_buf, "public.{s}", .{table_name});
     var result = try conn.query(
         \\SELECT EXISTS (
         \\  SELECT 1
-        \\  FROM information_schema.tables
-        \\  WHERE table_schema = 'public'
-        \\    AND table_name = $1
+        \\  FROM pg_catalog.pg_class c
+        \\  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        \\  WHERE n.nspname = 'public'
+        \\    AND c.relname = $1
+        \\    AND c.oid = to_regclass($2)
         \\)
-    , .{table_name});
+    , .{ table_name, qualified_name });
     defer result.deinit();
     const row = try result.next() orelse return false;
     const exists = try row.get(bool, 0);
@@ -341,15 +359,24 @@ pub fn inspectMigrationState(pool: *Pool, migrations: []const Migration) !Migrat
     const conn = try pool.acquire();
     defer pool.release(conn);
 
-    const has_schema_migrations = try tableExists(conn, "schema_migrations");
-    const has_schema_migration_failures = try tableExists(conn, "schema_migration_failures");
+    const has_schema_migrations = tableExists(conn, "schema_migrations") catch |err| {
+        if (err == error.PG) logPgErrorContext(conn, "inspect.table_exists schema_migrations");
+        return err;
+    };
+    const has_schema_migration_failures = tableExists(conn, "schema_migration_failures") catch |err| {
+        if (err == error.PG) logPgErrorContext(conn, "inspect.table_exists schema_migration_failures");
+        return err;
+    };
 
     var applied_versions: u32 = 0;
     var latest_expected: i32 = 0;
     if (has_schema_migrations) {
         for (migrations) |migration| {
             latest_expected = @max(latest_expected, migration.version);
-            if (try isMigrationApplied(conn, migration.version)) {
+            if (isMigrationApplied(conn, migration.version) catch |err| {
+                if (err == error.PG) logPgErrorContext(conn, "inspect.is_migration_applied");
+                return err;
+            }) {
                 applied_versions += 1;
             }
         }
@@ -359,8 +386,20 @@ pub fn inspectMigrationState(pool: *Pool, migrations: []const Migration) !Migrat
         }
     }
 
-    const latest_applied = if (has_schema_migrations) try maxAppliedMigrationVersion(conn) else 0;
-    const failed = if (has_schema_migration_failures) try hasFailedMigrationRecords(conn) else false;
+    const latest_applied = if (has_schema_migrations)
+        maxAppliedMigrationVersion(conn) catch |err| {
+            if (err == error.PG) logPgErrorContext(conn, "inspect.max_applied_version");
+            return err;
+        }
+    else
+        0;
+    const failed = if (has_schema_migration_failures)
+        hasFailedMigrationRecords(conn) catch |err| {
+            if (err == error.PG) logPgErrorContext(conn, "inspect.has_failed_migrations");
+            return err;
+        }
+    else
+        false;
 
     var lock_available = true;
     if (applied_versions < migrations.len) {
