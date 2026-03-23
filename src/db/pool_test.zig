@@ -78,6 +78,7 @@ test "roleEnvVarName maps db roles deterministically" {
     try std.testing.expectEqualStrings("DATABASE_URL_API", roleEnvVarName(.api));
     try std.testing.expectEqualStrings("DATABASE_URL_WORKER", roleEnvVarName(.worker));
     try std.testing.expectEqualStrings("DATABASE_URL_CALLBACK", roleEnvVarName(.callback));
+    try std.testing.expectEqualStrings("DATABASE_URL_MIGRATOR", roleEnvVarName(.migrator));
 }
 
 fn openIntegrationTestConn(alloc: std.mem.Allocator) !?struct { pool: *Pool, conn: *Conn } {
@@ -355,4 +356,167 @@ test "T6 integration: duplicate UUID PK is rejected" {
         "INSERT INTO t6_dup_reject (id) VALUES ($1::uuid)",
         .{dup_id},
     ));
+}
+
+test "integration: audit schema exists and contains migration bookkeeping tables" {
+    const alloc = std.testing.allocator;
+    const db_ctx = (try openIntegrationTestConn(alloc)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+
+    // Verify audit schema exists
+    {
+        var q = try db_ctx.conn.query(
+            "SELECT 1 FROM information_schema.schemata WHERE schema_name = 'audit'",
+            .{},
+        );
+        defer q.deinit();
+        const row = try q.next();
+        try std.testing.expect(row != null);
+        try q.drain();
+    }
+
+    // Verify audit.schema_migrations exists and is queryable
+    {
+        var q = try db_ctx.conn.query(
+            "SELECT COUNT(*) FROM audit.schema_migrations",
+            .{},
+        );
+        defer q.deinit();
+        const row = (try q.next()) orelse return error.SkipZigTest;
+        const count = try row.get(i64, 0);
+        try std.testing.expect(count > 0);
+        try q.drain();
+    }
+
+    // Verify audit.schema_migration_failures exists and is queryable
+    {
+        var q = try db_ctx.conn.query(
+            "SELECT COUNT(*) FROM audit.schema_migration_failures",
+            .{},
+        );
+        defer q.deinit();
+        _ = try q.next();
+        try q.drain();
+    }
+
+    // Verify schema_migrations is NOT in public schema
+    {
+        var q = try db_ctx.conn.query(
+            \\SELECT 1 FROM information_schema.tables
+            \\WHERE table_schema = 'public' AND table_name = 'schema_migrations'
+        , .{});
+        defer q.deinit();
+        const row = try q.next();
+        try std.testing.expect(row == null);
+        try q.drain();
+    }
+}
+
+test "integration: db_migrator role exists after migration" {
+    const alloc = std.testing.allocator;
+    const db_ctx = (try openIntegrationTestConn(alloc)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+
+    var q = try db_ctx.conn.query(
+        "SELECT 1 FROM pg_roles WHERE rolname = 'db_migrator'",
+        .{},
+    );
+    defer q.deinit();
+    const row = try q.next();
+    try std.testing.expect(row != null);
+    try q.drain();
+}
+
+test "integration: zero-trust schema segmentation and role matrix are enforced" {
+    const alloc = std.testing.allocator;
+    const db_ctx = (try openIntegrationTestConn(alloc)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+
+    const schema_checks = [_][]const u8{ "core", "agent", "billing", "vault", "audit", "ops_ro" };
+    inline for (schema_checks) |schema_name| {
+        var schema_q = try db_ctx.conn.query(
+            "SELECT 1 FROM information_schema.schemata WHERE schema_name = $1",
+            .{schema_name},
+        );
+        defer schema_q.deinit();
+        try std.testing.expect((try schema_q.next()) != null);
+        try schema_q.drain();
+    }
+
+    // public should not own authoritative app tables.
+    {
+        var q = try db_ctx.conn.query(
+            \\SELECT 1
+            \\FROM information_schema.tables
+            \\WHERE table_schema = 'public'
+            \\  AND table_name IN ('tenants', 'workspaces', 'runs', 'agent_profiles', 'workspace_entitlements')
+            \\LIMIT 1
+        , .{});
+        defer q.deinit();
+        try std.testing.expect((try q.next()) == null);
+        try q.drain();
+    }
+
+    const role_checks = [_][]const u8{
+        "db_migrator",
+        "api_runtime",
+        "worker_runtime",
+        "ops_readonly_human",
+        "ops_readonly_agent",
+    };
+    inline for (role_checks) |role_name| {
+        var role_q = try db_ctx.conn.query(
+            "SELECT 1 FROM pg_roles WHERE rolname = $1",
+            .{role_name},
+        );
+        defer role_q.deinit();
+        try std.testing.expect((try role_q.next()) != null);
+        try role_q.drain();
+    }
+}
+
+test "integration: readonly roles can only query ops_ro views, not vault" {
+    const alloc = std.testing.allocator;
+    const db_ctx = (try openIntegrationTestConn(alloc)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+
+    {
+        var q = try db_ctx.conn.query(
+            "SELECT has_table_privilege('ops_readonly_agent', 'vault.secrets', 'SELECT')",
+            .{},
+        );
+        defer q.deinit();
+        const row = (try q.next()) orelse return error.TestUnexpectedResult;
+        const can_read_vault = try row.get(bool, 0);
+        try std.testing.expect(!can_read_vault);
+        try q.drain();
+    }
+
+    {
+        var q = try db_ctx.conn.query(
+            "SELECT has_table_privilege('ops_readonly_agent', 'ops_ro.workspace_overview', 'SELECT')",
+            .{},
+        );
+        defer q.deinit();
+        const row = (try q.next()) orelse return error.TestUnexpectedResult;
+        const can_read_view = try row.get(bool, 0);
+        try std.testing.expect(can_read_view);
+        try q.drain();
+    }
+
+    {
+        var q = try db_ctx.conn.query(
+            "SELECT has_table_privilege('ops_readonly_human', 'ops_ro.billing_overview', 'SELECT')",
+            .{},
+        );
+        defer q.deinit();
+        const row = (try q.next()) orelse return error.TestUnexpectedResult;
+        const can_read_view = try row.get(bool, 0);
+        try std.testing.expect(can_read_view);
+        try q.drain();
+    }
 }

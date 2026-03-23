@@ -23,7 +23,7 @@ _test-integration-db:
 	@echo "→ [zombied] Auto-migrating test database..."
 	@ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
 	 ZIG_LOCAL_CACHE_DIR="$(ZIG_LOCAL_CACHE_DIR)" \
-	 DATABASE_URL_API="$$HANDLER_DB_TEST_URL" \
+	 DATABASE_URL_MIGRATOR="$$HANDLER_DB_TEST_URL" \
 	 zig build run -- migrate
 	@echo "→ [zombied] Migration done, running tests..."
 	@ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
