@@ -429,34 +429,61 @@ pub fn runMigrations(pool: *Pool, migrations: []const Migration) !void {
     var conn = try pool.acquire();
     defer pool.release(conn);
 
-    try ensureSchemaMigrationsTable(conn);
-    try ensureSchemaMigrationFailuresTable(conn);
+    ensureSchemaMigrationsTable(conn) catch |err| {
+        if (err == error.PG) logPgErrorContext(conn, "migrate.ensure_schema_migrations_table");
+        return err;
+    };
+    ensureSchemaMigrationFailuresTable(conn) catch |err| {
+        if (err == error.PG) logPgErrorContext(conn, "migrate.ensure_schema_migration_failures_table");
+        return err;
+    };
 
-    try acquireMigrationLock(conn);
+    acquireMigrationLock(conn) catch |err| {
+        if (err == error.PG) logPgErrorContext(conn, "migrate.acquire_lock");
+        return err;
+    };
     defer releaseMigrationLock(conn);
 
     for (migrations) |migration| {
-        if (try isMigrationApplied(conn, migration.version)) {
+        if (isMigrationApplied(conn, migration.version) catch |err| {
+            if (err == error.PG) logPgErrorContext(conn, "migrate.is_migration_applied");
+            return err;
+        }) {
             clearMigrationFailure(conn, migration.version);
             continue;
         }
 
-        try beginTx(conn);
+        beginTx(conn) catch |err| {
+            if (err == error.PG) logPgErrorContext(conn, "migrate.begin_tx");
+            return err;
+        };
         const statements = applySqlStatements(conn, migration.sql) catch |err| {
             rollbackTx(conn);
+            if (err == error.PG) logPgErrorContext(conn, "migrate.apply_sql_statements");
             markMigrationFailure(conn, migration.version, err);
             return err;
         };
 
-        var insert = try conn.query(
+        var insert = conn.query(
             "INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)",
             .{ migration.version, std.time.milliTimestamp() },
-        );
+        ) catch |err| {
+            rollbackTx(conn);
+            if (err == error.PG) logPgErrorContext(conn, "migrate.insert_schema_migrations");
+            markMigrationFailure(conn, migration.version, err);
+            return err;
+        };
         defer insert.deinit();
-        try insert.drain();
+        insert.drain() catch |err| {
+            rollbackTx(conn);
+            if (err == error.PG) logPgErrorContext(conn, "migrate.insert_schema_migrations_drain");
+            markMigrationFailure(conn, migration.version, err);
+            return err;
+        };
 
         commitTx(conn) catch |err| {
             rollbackTx(conn);
+            if (err == error.PG) logPgErrorContext(conn, "migrate.commit_tx");
             markMigrationFailure(conn, migration.version, err);
             return err;
         };
