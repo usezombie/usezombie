@@ -126,8 +126,10 @@ jobs:
         run: |
           APP="${{ vars.FLY_APP_DEV }}"
           echo "Checking Fly machine state for ${APP}..."
+          LAST_OUT=""
           for i in $(seq 1 12); do
             OUT="$(flyctl machine list --app "${APP}" || true)"
+            LAST_OUT="${OUT}"
             echo "${OUT}"
             if echo "${OUT}" | grep -qiE '\bstarted\b'; then
               echo "✓ at least one machine is started for ${APP}"
@@ -139,6 +141,18 @@ jobs:
           echo "✗ no started machine found for ${APP} after 60s"
           echo "Fly app status for diagnostics:"
           flyctl status --app "${APP}" || true
+          echo "Fly machine detail diagnostics:"
+          if command -v jq >/dev/null 2>&1; then
+            while IFS= read -r machine_id; do
+              [ -n "${machine_id}" ] || continue
+              echo "--- machine status: ${machine_id} ---"
+              flyctl machine status "${machine_id}" --app "${APP}" || true
+            done < <(flyctl machine list --app "${APP}" --json 2>/dev/null | jq -r '.[].id')
+          else
+            echo "jq unavailable; skipping per-machine status output"
+          fi
+          echo "Fly app logs (no-tail):"
+          flyctl logs --app "${APP}" --no-tail || true
           exit 1
         env:
           FLY_API_TOKEN: ${{ env.FLY_API_TOKEN }}
