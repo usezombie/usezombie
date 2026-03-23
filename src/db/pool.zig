@@ -267,24 +267,30 @@ fn logPgErrorContext(conn: *Conn, op: []const u8) void {
     log.err("db.pg_error op={s} message=unknown", .{op});
 }
 
-fn tableExists(conn: *Conn, table_name: []const u8) !bool {
-    var qualified_name_buf: [96]u8 = undefined;
-    const qualified_name = try std.fmt.bufPrint(&qualified_name_buf, "public.{s}", .{table_name});
-    var result = try conn.query(
-        \\SELECT EXISTS (
-        \\  SELECT 1
-        \\  FROM pg_catalog.pg_class c
-        \\  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-        \\  WHERE n.nspname = 'public'
-        \\    AND c.relname = $1
-        \\    AND c.oid = to_regclass($2)
-        \\)
-    , .{ table_name, qualified_name });
+fn isUndefinedTablePgError(conn: *Conn) bool {
+    if (conn.err) |pg_err| {
+        return std.mem.eql(u8, pg_err.code, "42P01");
+    }
+    return false;
+}
+
+fn tableExists(conn: *Conn, query_sql: []const u8) !bool {
+    var result = conn.query(query_sql, .{}) catch |err| {
+        if (err == error.PG and isUndefinedTablePgError(conn)) return false;
+        return err;
+    };
     defer result.deinit();
-    const row = try result.next() orelse return false;
-    const exists = try row.get(bool, 0);
-    try result.drain();
-    return exists;
+
+    _ = result.next() catch |err| {
+        if (err == error.PG and isUndefinedTablePgError(conn)) return false;
+        return err;
+    };
+
+    result.drain() catch |err| {
+        if (err == error.PG and isUndefinedTablePgError(conn)) return false;
+        return err;
+    };
+    return true;
 }
 
 fn applySqlStatements(conn: *Conn, sql: []const u8) !u32 {
@@ -359,11 +365,11 @@ pub fn inspectMigrationState(pool: *Pool, migrations: []const Migration) !Migrat
     const conn = try pool.acquire();
     defer pool.release(conn);
 
-    const has_schema_migrations = tableExists(conn, "schema_migrations") catch |err| {
+    const has_schema_migrations = tableExists(conn, "SELECT 1 FROM schema_migrations LIMIT 1") catch |err| {
         if (err == error.PG) logPgErrorContext(conn, "inspect.table_exists schema_migrations");
         return err;
     };
-    const has_schema_migration_failures = tableExists(conn, "schema_migration_failures") catch |err| {
+    const has_schema_migration_failures = tableExists(conn, "SELECT 1 FROM schema_migration_failures LIMIT 1") catch |err| {
         if (err == error.PG) logPgErrorContext(conn, "inspect.table_exists schema_migration_failures");
         return err;
     };
