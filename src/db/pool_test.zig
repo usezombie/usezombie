@@ -82,8 +82,10 @@ test "roleEnvVarName maps db roles deterministically" {
 }
 
 fn openIntegrationTestConn(alloc: std.mem.Allocator) !?struct { pool: *Pool, conn: *Conn } {
-    const url = std.process.getEnvVarOwned(alloc, "HANDLER_DB_TEST_URL") catch
-        std.process.getEnvVarOwned(alloc, "DATABASE_URL") catch return null;
+    // DB-backed integration tests must be opt-in via HANDLER_DB_TEST_URL.
+    // This avoids accidentally running against unrelated DATABASE_URL values
+    // in non-DB test lanes (e.g. CI's _test-integration-zombied target).
+    const url = std.process.getEnvVarOwned(alloc, "HANDLER_DB_TEST_URL") catch return null;
     defer alloc.free(url);
 
     var arena = std.heap.ArenaAllocator.init(alloc);
