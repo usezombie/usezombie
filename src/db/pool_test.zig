@@ -487,6 +487,47 @@ test "integration: zero-trust schema segmentation and role matrix are enforced" 
         try std.testing.expect((try role_q.next()) != null);
         try role_q.drain();
     }
+
+    const worker_privilege_checks = [_]struct { table_name: []const u8, privilege: []const u8 }{
+        .{ .table_name = "agent.agent_profiles", .privilege = "UPDATE" },
+        .{ .table_name = "agent.workspace_active_config", .privilege = "UPDATE" },
+        .{ .table_name = "agent.agent_config_versions", .privilege = "INSERT" },
+        .{ .table_name = "agent.harness_change_log", .privilege = "UPDATE" },
+    };
+    inline for (worker_privilege_checks) |check| {
+        var privilege_q = try db_ctx.conn.query(
+            "SELECT has_table_privilege('worker_runtime', $1, $2)",
+            .{ check.table_name, check.privilege },
+        );
+        defer privilege_q.deinit();
+        const row = (try privilege_q.next()) orelse return error.TestUnexpectedResult;
+        const has_privilege = try row.get(bool, 0);
+        try std.testing.expect(has_privilege);
+        try privilege_q.drain();
+    }
+
+    const rls_tables = [_]struct { schema_name: []const u8, table_name: []const u8 }{
+        .{ .schema_name = "agent", .table_name = "agent_profiles" },
+        .{ .schema_name = "agent", .table_name = "agent_config_versions" },
+        .{ .schema_name = "agent", .table_name = "workspace_active_config" },
+        .{ .schema_name = "agent", .table_name = "config_compile_jobs" },
+        .{ .schema_name = "agent", .table_name = "config_linkage_audit_artifacts" },
+        .{ .schema_name = "vault", .table_name = "workspace_skill_secrets" },
+    };
+    inline for (rls_tables) |table_ref| {
+        var rls_q = try db_ctx.conn.query(
+            \\SELECT c.relrowsecurity
+            \\FROM pg_class c
+            \\JOIN pg_namespace n ON n.oid = c.relnamespace
+            \\WHERE n.nspname = $1
+            \\  AND c.relname = $2
+        , .{ table_ref.schema_name, table_ref.table_name });
+        defer rls_q.deinit();
+        const row = (try rls_q.next()) orelse return error.TestUnexpectedResult;
+        const rls_enabled = try row.get(bool, 0);
+        try std.testing.expect(rls_enabled);
+        try rls_q.drain();
+    }
 }
 
 test "integration: readonly roles can only query ops_ro views, not vault" {

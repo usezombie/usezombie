@@ -36,6 +36,8 @@ CREATE TRIGGER trg_config_linkage_no_delete
     BEFORE DELETE ON agent.config_linkage_audit_artifacts
     FOR EACH ROW EXECUTE FUNCTION reject_config_linkage_mutation();
 
+ALTER TABLE agent.config_linkage_audit_artifacts ENABLE ROW LEVEL SECURITY;
+
 CREATE POLICY config_linkage_select_tenant ON agent.config_linkage_audit_artifacts
     FOR SELECT USING (tenant_id::text = current_setting('app.current_tenant_id', true));
 CREATE POLICY config_linkage_insert_tenant ON agent.config_linkage_audit_artifacts

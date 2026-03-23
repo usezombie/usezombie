@@ -52,7 +52,7 @@ BEGIN
     )
     VALUES (
         access_event_id,
-        current_user,
+        session_user,
         session_user,
         p_view_name,
         current_setting('application_name', true),

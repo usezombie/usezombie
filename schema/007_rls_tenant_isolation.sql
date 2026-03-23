@@ -32,6 +32,12 @@ CREATE TRIGGER trg_prompt_lifecycle_events_no_delete
     BEFORE DELETE ON core.prompt_lifecycle_events
     FOR EACH ROW EXECUTE FUNCTION reject_prompt_lifecycle_event_mutation();
 
+ALTER TABLE agent.agent_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent.agent_config_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent.workspace_active_config ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent.config_compile_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE vault.workspace_skill_secrets ENABLE ROW LEVEL SECURITY;
+
 CREATE POLICY agent_profiles_select_tenant ON agent.agent_profiles
     FOR SELECT USING (tenant_id::text = current_setting('app.current_tenant_id', true));
 CREATE POLICY agent_profiles_insert_tenant ON agent.agent_profiles

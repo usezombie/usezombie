@@ -133,15 +133,19 @@ GRANT SELECT, INSERT ON
     agent.harness_change_log
 TO api_runtime;
 
-GRANT SELECT ON
-    agent.agent_profiles, agent.agent_config_versions, agent.workspace_active_config
+GRANT SELECT, UPDATE ON
+    agent.agent_profiles, agent.workspace_active_config
+TO worker_runtime;
+
+GRANT SELECT, INSERT ON
+    agent.agent_config_versions
 TO worker_runtime;
 
 GRANT SELECT, INSERT, UPDATE ON
     agent.agent_improvement_proposals
 TO worker_runtime;
 
-GRANT SELECT, INSERT ON
+GRANT SELECT, INSERT, UPDATE ON
     agent.harness_change_log
 TO worker_runtime;
 
