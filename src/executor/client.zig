@@ -106,6 +106,12 @@ pub const ExecutorClient = struct {
         };
     }
 
+    /// Result from a StartStage RPC call.
+    ///
+    /// Ownership: `.content` is allocated via the ExecutorClient's allocator.
+    /// The caller must free it when done (currently always "" from the
+    /// placeholder handler — real content arrives when NullClaw runner
+    /// is wired in the sidecar binary).
     pub const StageResult = struct {
         content: []const u8,
         token_count: u64,

@@ -123,14 +123,12 @@ pub const Handler = struct {
         }
 
         // Stage execution is synchronous in v1. The worker blocks here while
-        // the executor runs NullClaw. The actual NullClaw invocation happens
-        // through the runner module — for now we return a placeholder that the
-        // worker-side integration will complete.
+        // the executor runs NullClaw. The actual NullClaw invocation goes
+        // through the runner module — placeholder until NullClaw runtime is
+        // production-ready (tracked: M12_002 §3.2, v2 path: M3_001).
         //
-        // In the sidecar binary, the runner.zig module provides the real
-        // NullClaw execution path. Within the zombied binary (where this
-        // handler is compiled but not used for serving), we return a typed
-        // result structure.
+        // When wired: runner.execute(session, stage_id) returns real content
+        // and the handler serializes it into the JSON-RPC response.
         const stage_id = getStringParam(p, "stage_id") orelse "";
         const role_id = getStringParam(p, "role_id") orelse "";
         const hex = types.executionIdHex(exec_id);

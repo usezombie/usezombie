@@ -10,6 +10,12 @@ const executor_metrics = @import("executor_metrics.zig");
 
 const log = std.log.scoped(.executor_lease);
 
+/// How often the lease manager scans for expired sessions.
+///
+/// 5s is intentionally coarse: isLeaseExpired() is pure arithmetic
+/// (milliTimestamp delta), so scanning <100 sessions costs ~1µs.
+/// With a 30s lease timeout, worst-case orphan lifetime is 35s.
+/// Switch to a deadline-heap when concurrent sessions exceed ~500.
 const REAP_INTERVAL_MS: u64 = 5_000;
 
 pub const LeaseManager = struct {

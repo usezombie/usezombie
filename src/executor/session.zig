@@ -135,10 +135,15 @@ pub const SessionStore = struct {
     }
 
     /// Cancel and remove all sessions with expired leases.
+    ///
+    /// Uses a fixed-size stack buffer for removal IDs to avoid allocation.
+    /// If >64 sessions expire simultaneously, the remainder are cancelled
+    /// (flag set) but stay in the map — they'll be removed on the next
+    /// reap cycle. This is safe: worker_concurrency per host is typically
+    /// 4–8, so 64+ simultaneous orphans implies catastrophic failure.
     pub fn reapExpired(self: *SessionStore) u32 {
         self.mu.lock();
         defer self.mu.unlock();
-        var reaped: u32 = 0;
         var it = self.sessions.iterator();
         var to_remove: [64]types.ExecutionId = undefined;
         var remove_count: usize = 0;
@@ -150,7 +155,6 @@ pub const SessionStore = struct {
                     to_remove[remove_count] = entry.key_ptr.*;
                     remove_count += 1;
                 }
-                reaped += 1;
             }
         }
         for (to_remove[0..remove_count]) |id| {
@@ -159,7 +163,7 @@ pub const SessionStore = struct {
                 self.alloc.destroy(e.value);
             }
         }
-        return reaped;
+        return @intCast(remove_count);
     }
 
     pub fn deinit(self: *SessionStore) void {
