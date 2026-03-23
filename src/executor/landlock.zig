@@ -14,10 +14,29 @@ const executor_metrics = @import("executor_metrics.zig");
 
 const log = std.log.scoped(.executor_landlock);
 
-// Landlock syscall numbers (x86_64).
-const SYS_landlock_create_ruleset: usize = if (builtin.cpu.arch == .x86_64) 444 else if (builtin.cpu.arch == .aarch64) 444 else 0;
-const SYS_landlock_add_rule: usize = if (builtin.cpu.arch == .x86_64) 445 else if (builtin.cpu.arch == .aarch64) 445 else 0;
-const SYS_landlock_restrict_self: usize = if (builtin.cpu.arch == .x86_64) 446 else if (builtin.cpu.arch == .aarch64) 446 else 0;
+// Landlock syscall numbers (same on x86_64 and aarch64).
+const SYS_landlock_create_ruleset: usize = 444;
+const SYS_landlock_add_rule: usize = 445;
+const SYS_landlock_restrict_self: usize = 446;
+
+// Raw Linux syscall interface. On non-Linux, stubs return error values;
+// all call sites guard with `if (builtin.os.tag != .linux)` before use.
+const raw = if (builtin.os.tag == .linux) struct {
+    const sys = std.os.linux;
+    fn syscall3(n: usize, a1: usize, a2: usize, a3: usize) usize {
+        return sys.syscall3(@enumFromInt(n), a1, a2, a3);
+    }
+    fn syscall4(n: usize, a1: usize, a2: usize, a3: usize, a4: usize) usize {
+        return sys.syscall4(@enumFromInt(n), a1, a2, a3, a4);
+    }
+} else struct {
+    fn syscall3(_: usize, _: usize, _: usize, _: usize) usize {
+        return std.math.maxInt(usize);
+    }
+    fn syscall4(_: usize, _: usize, _: usize, _: usize, _: usize) usize {
+        return std.math.maxInt(usize);
+    }
+};
 
 // Landlock access flags for filesystem (ABI v1).
 const LANDLOCK_ACCESS_FS_EXECUTE: u64 = 1 << 0;
@@ -106,7 +125,7 @@ pub fn applyPolicy(workspace_path: []const u8) LandlockError!void {
 
     // Create ruleset.
     var attr = LandlockRulesetAttr{ .handled_access_fs = ALL_FS_ACCESS };
-    const ruleset_fd_raw = std.posix.syscall3(
+    const ruleset_fd_raw = raw.syscall3(
         SYS_landlock_create_ruleset,
         @intFromPtr(&attr),
         @sizeOf(LandlockRulesetAttr),
@@ -131,7 +150,7 @@ pub fn applyPolicy(workspace_path: []const u8) LandlockError!void {
     }
 
     // Restrict self.
-    const restrict_result = std.posix.syscall3(
+    const restrict_result = raw.syscall3(
         SYS_landlock_restrict_self,
         @intCast(ruleset_fd),
         0,
@@ -153,7 +172,7 @@ fn addPathRule(ruleset_fd: i32, path: []const u8, access: u64) LandlockError!voi
         .parent_fd = fd,
     };
 
-    const result = std.posix.syscall4(
+    const result = raw.syscall4(
         SYS_landlock_add_rule,
         @intCast(ruleset_fd),
         LANDLOCK_RULE_PATH_BENEATH,
@@ -168,7 +187,7 @@ pub fn isAvailable() bool {
     if (builtin.os.tag != .linux) return false;
 
     var attr = LandlockRulesetAttr{ .handled_access_fs = ALL_FS_ACCESS };
-    const result = std.posix.syscall3(
+    const result = raw.syscall3(
         SYS_landlock_create_ruleset,
         @intFromPtr(&attr),
         @sizeOf(LandlockRulesetAttr),
