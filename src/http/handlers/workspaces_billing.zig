@@ -261,3 +261,31 @@ test "parseBillingLifecycleEvent accepts supported event types" {
     try std.testing.expectEqual(workspace_billing.BillingLifecycleEvent.downgrade_to_free, parseBillingLifecycleEvent("DOWNGRADE_TO_FREE").?);
     try std.testing.expect(parseBillingLifecycleEvent("ACTIVATE_SCALE") == null);
 }
+
+test "parseBillingLifecycleEvent is case-insensitive" {
+    try std.testing.expectEqual(workspace_billing.BillingLifecycleEvent.payment_failed, parseBillingLifecycleEvent("payment_failed").?);
+    try std.testing.expectEqual(workspace_billing.BillingLifecycleEvent.payment_failed, parseBillingLifecycleEvent("Payment_Failed").?);
+    try std.testing.expectEqual(workspace_billing.BillingLifecycleEvent.payment_failed, parseBillingLifecycleEvent("pAyMeNt_fAiLeD").?);
+    try std.testing.expectEqual(workspace_billing.BillingLifecycleEvent.downgrade_to_free, parseBillingLifecycleEvent("downgrade_to_free").?);
+    try std.testing.expectEqual(workspace_billing.BillingLifecycleEvent.downgrade_to_free, parseBillingLifecycleEvent("Downgrade_To_Free").?);
+}
+
+test "parseBillingLifecycleEvent rejects empty, whitespace, and unicode input" {
+    try std.testing.expect(parseBillingLifecycleEvent("") == null);
+    try std.testing.expect(parseBillingLifecycleEvent(" ") == null);
+    try std.testing.expect(parseBillingLifecycleEvent("  PAYMENT_FAILED  ") == null);
+    try std.testing.expect(parseBillingLifecycleEvent("\t") == null);
+    try std.testing.expect(parseBillingLifecycleEvent("\n") == null);
+    try std.testing.expect(parseBillingLifecycleEvent("\u{00e9}") == null);
+    try std.testing.expect(parseBillingLifecycleEvent("\u{0000}") == null);
+}
+
+test "parseBillingLifecycleEvent rejects partial matches" {
+    try std.testing.expect(parseBillingLifecycleEvent("PAYMENT") == null);
+    try std.testing.expect(parseBillingLifecycleEvent("DOWNGRADE") == null);
+    try std.testing.expect(parseBillingLifecycleEvent("PAYMENT_FAILED_EXTRA") == null);
+    try std.testing.expect(parseBillingLifecycleEvent("DOWNGRADE_TO_FREE_NOW") == null);
+    try std.testing.expect(parseBillingLifecycleEvent("_PAYMENT_FAILED") == null);
+    try std.testing.expect(parseBillingLifecycleEvent("FAILED") == null);
+    try std.testing.expect(parseBillingLifecycleEvent("TO_FREE") == null);
+}

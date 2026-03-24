@@ -62,4 +62,55 @@ describe("Pricing", () => {
     renderPricing();
     expect(screen.getByText("What does BYOK mean?")).toBeInTheDocument();
   });
+
+  it("renders all highlight bullet points for both tiers", () => {
+    renderPricing();
+    // Hobby highlights
+    expect(screen.getByText("$10 credit included with no expiry")).toBeInTheDocument();
+    expect(screen.getByText("1 workspace and automated pull request generation")).toBeInTheDocument();
+    expect(screen.getByText("Harness validation in the PR flow")).toBeInTheDocument();
+    expect(screen.getByText("BYOK/BYOM with no token markup")).toBeInTheDocument();
+    // Scale highlights
+    expect(screen.getByText("Everything in Hobby, plus team workspaces and shared run history")).toBeInTheDocument();
+    expect(screen.getByText("Longer execution windows and higher concurrency for active repos")).toBeInTheDocument();
+    expect(screen.getByText("Sandbox resource governance with memory, CPU, and disk caps")).toBeInTheDocument();
+    expect(screen.getByText("Agent run scoring with tier history and workspace baselines")).toBeInTheDocument();
+    expect(screen.getByText("Failure analysis with deterministic context injection")).toBeInTheDocument();
+    expect(screen.getByText("Upgrade from the app with a workspace subscription id")).toBeInTheDocument();
+  });
+
+  it("applies featured card class only to Scale tier", () => {
+    renderPricing();
+    const articles = screen.getAllByRole("article");
+    const hobbyCard = articles.find((el) => el.querySelector("h2")?.textContent === "Hobby")!;
+    const scaleCard = articles.find((el) => el.querySelector("h2")?.textContent === "Scale")!;
+    expect(hobbyCard.className).not.toMatch(/pricing-card--featured/);
+    expect(scaleCard.className).toMatch(/pricing-card--featured/);
+  });
+
+  it("CTA links both point to APP_BASE_URL", () => {
+    renderPricing();
+    const hobbyLink = screen.getByRole("link", { name: /start free/i });
+    const scaleLink = screen.getByRole("link", { name: /upgrade in app/i });
+    expect(hobbyLink).toHaveAttribute("href", "https://app.dev.usezombie.com");
+    expect(scaleLink).toHaveAttribute("href", "https://app.dev.usezombie.com");
+  });
+
+  it("renders price note only for Scale tier", () => {
+    renderPricing();
+    const articles = screen.getAllByRole("article");
+    const hobbyCard = articles.find((el) => el.querySelector("h2")?.textContent === "Hobby")!;
+    const scaleCard = articles.find((el) => el.querySelector("h2")?.textContent === "Scale")!;
+    expect(hobbyCard.querySelector(".pricing-card-note")).toBeNull();
+    expect(scaleCard.querySelector(".pricing-card-note")).not.toBeNull();
+    expect(scaleCard.querySelector(".pricing-card-note")!.textContent).toBe(
+      "Operator-visible upgrade path after free credit exhaustion",
+    );
+  });
+
+  it("renders both pricing cards as article elements", () => {
+    renderPricing();
+    const articles = screen.getAllByRole("article");
+    expect(articles).toHaveLength(2);
+  });
 });

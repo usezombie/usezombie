@@ -465,3 +465,87 @@ test "extractClerkClaims rejects non-JSON" {
 test "extractClerkClaims rejects non-object JSON" {
     try std.testing.expectError(jwks.VerifyError.TokenMalformed, extractClerkClaims(std.testing.allocator, "[1,2,3]"));
 }
+
+test "extractClerkClaims rejects empty string" {
+    try std.testing.expectError(jwks.VerifyError.TokenMalformed, extractClerkClaims(std.testing.allocator, ""));
+}
+
+test "extractClerkClaims rejects scalar JSON values" {
+    try std.testing.expectError(jwks.VerifyError.TokenMalformed, extractClerkClaims(std.testing.allocator, "42"));
+    try std.testing.expectError(jwks.VerifyError.TokenMalformed, extractClerkClaims(std.testing.allocator, "true"));
+    try std.testing.expectError(jwks.VerifyError.TokenMalformed, extractClerkClaims(std.testing.allocator, "null"));
+    try std.testing.expectError(jwks.VerifyError.TokenMalformed, extractClerkClaims(std.testing.allocator, "\"just a string\""));
+}
+
+test "extractCustomClaims rejects malformed and non-object JSON" {
+    try std.testing.expectError(jwks.VerifyError.TokenMalformed, extractCustomClaims(std.testing.allocator, ""));
+    try std.testing.expectError(jwks.VerifyError.TokenMalformed, extractCustomClaims(std.testing.allocator, "not json"));
+    try std.testing.expectError(jwks.VerifyError.TokenMalformed, extractCustomClaims(std.testing.allocator, "[1,2,3]"));
+    try std.testing.expectError(jwks.VerifyError.TokenMalformed, extractCustomClaims(std.testing.allocator, "null"));
+}
+
+test "extractClerkClaims ignores unsupported role with no fallback" {
+    const json =
+        \\{"sub":"user_10","iss":"https://clerk.example.com","exp":9999999999,"role":"member"}
+    ;
+    const result = try extractClerkClaims(std.testing.allocator, json);
+    defer {
+        if (result.tenant_id) |v| std.testing.allocator.free(v);
+        if (result.org_id) |v| std.testing.allocator.free(v);
+        if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
+        if (result.audience) |v| std.testing.allocator.free(v);
+        if (result.scopes) |v| std.testing.allocator.free(v);
+    }
+    try std.testing.expect(result.role == null);
+}
+
+test "extractClerkClaims handles metadata that is not an object" {
+    const json =
+        \\{"sub":"user_11","iss":"https://clerk.example.com","exp":9999999999,"metadata":"not_an_object"}
+    ;
+    const result = try extractClerkClaims(std.testing.allocator, json);
+    defer {
+        if (result.tenant_id) |v| std.testing.allocator.free(v);
+        if (result.org_id) |v| std.testing.allocator.free(v);
+        if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
+        if (result.audience) |v| std.testing.allocator.free(v);
+        if (result.scopes) |v| std.testing.allocator.free(v);
+    }
+    try std.testing.expect(result.tenant_id == null);
+    try std.testing.expect(result.workspace_id == null);
+    try std.testing.expect(result.role == null);
+}
+
+test "extractCustomClaims returns null scopes for empty scp array" {
+    const json =
+        \\{"sub":"user_12","iss":"https://idp.example.com","scp":[]}
+    ;
+    const result = try extractCustomClaims(std.testing.allocator, json);
+    defer {
+        if (result.tenant_id) |v| std.testing.allocator.free(v);
+        if (result.org_id) |v| std.testing.allocator.free(v);
+        if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
+        if (result.audience) |v| std.testing.allocator.free(v);
+        if (result.scopes) |v| std.testing.allocator.free(v);
+    }
+    try std.testing.expect(result.scopes == null);
+}
+
+test "extractCustomClaims returns null scopes for non-string array elements" {
+    const json =
+        \\{"sub":"user_13","iss":"https://idp.example.com","scp":[1,2,false]}
+    ;
+    const result = try extractCustomClaims(std.testing.allocator, json);
+    defer {
+        if (result.tenant_id) |v| std.testing.allocator.free(v);
+        if (result.org_id) |v| std.testing.allocator.free(v);
+        if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
+        if (result.audience) |v| std.testing.allocator.free(v);
+        if (result.scopes) |v| std.testing.allocator.free(v);
+    }
+    try std.testing.expect(result.scopes == null);
+}
