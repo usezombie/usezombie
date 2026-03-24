@@ -15,7 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY dist/zombied-linux-${TARGETARCH} /usr/local/bin/zombied
-RUN chmod +x /usr/local/bin/zombied
+RUN chmod +x /usr/local/bin/zombied \
+ && printf '%s\n' '#!/bin/sh' 'exec /usr/local/bin/zombied migrate "$@"' > /usr/local/bin/zombied-migrate \
+ && chmod +x /usr/local/bin/zombied-migrate
 COPY config ./config
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s CMD wget -qO- http://localhost:3000/healthz || exit 1
