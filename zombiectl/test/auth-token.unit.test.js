@@ -60,6 +60,13 @@ test("extractRoleFromToken returns null for empty or whitespace-only role", () =
   assert.equal(extractRoleFromToken(makeToken({ role: "   " })), null);
 });
 
+test("extractRoleFromToken rejects whitespace-padded roles (matches backend parseAuthRole)", () => {
+  // Backend rbac.parseAuthRole rejects " operator " — CLI must match.
+  assert.equal(extractRoleFromToken(makeToken({ role: " operator " })), null);
+  assert.equal(extractRoleFromToken(makeToken({ role: " admin" })), null);
+  assert.equal(extractRoleFromToken(makeToken({ role: "user " })), null);
+});
+
 test("extractRoleFromToken returns null for null/undefined token", () => {
   assert.equal(extractRoleFromToken(null), null);
   assert.equal(extractRoleFromToken(undefined), null);

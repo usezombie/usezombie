@@ -190,6 +190,10 @@ pub fn authenticate(alloc: std.mem.Allocator, r: zap.Request, ctx: *Context) Aut
         if (principal.workspace_id) |workspace_id| {
             if (!id_format.isSupportedWorkspaceId(workspace_id)) return AuthError.Unauthorized;
         }
+        // SAFETY: claims.zig normalizes all role strings through rbac.parseAuthRole
+        // before storing them in IdentityClaims.role, so raw is always a valid role
+        // label or null. The UnsupportedRole branch guards against future claim
+        // extraction paths that might skip normalization.
         const role = if (principal.role) |raw| rbac.parseAuthRole(raw) orelse {
             return AuthError.UnsupportedRole;
         } else AuthRole.user;

@@ -141,16 +141,11 @@ fn getClerkWorkspaceId(obj: std.json.ObjectMap) ?[]const u8 {
 }
 
 fn getClerkRole(obj: std.json.ObjectMap) ?[]const u8 {
-    if (jwks.getString(obj, CLAIM_ROLE)) |v| {
-        if (normalizeSupportedRole(v)) |role| return role;
-    }
-
-    const metadata = obj.get("metadata") orelse return null;
-    if (metadata != .object) return null;
-    if (jwks.getString(metadata.object, CLAIM_ROLE)) |v| {
-        if (normalizeSupportedRole(v)) |role| return role;
-    }
-    return null;
+    return getFirstSupportedRole(obj, &.{
+        CLAIM_ROLE,
+        NAMESPACE_DEV ++ CLAIM_ROLE,
+        NAMESPACE_PROD ++ CLAIM_ROLE,
+    }, &.{"metadata"});
 }
 
 fn getCustomTenantId(obj: std.json.ObjectMap) ?[]const u8 {
@@ -428,6 +423,55 @@ test "extractCustomClaims joins only string scopes from mixed arrays" {
     }
     try std.testing.expectEqualStrings("operator", result.role.?);
     try std.testing.expectEqualStrings("runs:read workspace:pause", result.scopes.?);
+}
+
+test "extractClerkClaims reads namespaced role claim (dev namespace)" {
+    const json =
+        \\{"sub":"user_ns1","iss":"https://clerk.example.com","exp":9999999999,"https://usezombie.dev/role":"operator","metadata":{"tenant_id":"tenant_ns"}}
+    ;
+    const result = try extractClerkClaims(std.testing.allocator, json);
+    defer {
+        if (result.tenant_id) |v| std.testing.allocator.free(v);
+        if (result.org_id) |v| std.testing.allocator.free(v);
+        if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
+        if (result.audience) |v| std.testing.allocator.free(v);
+        if (result.scopes) |v| std.testing.allocator.free(v);
+    }
+    try std.testing.expectEqualStrings("operator", result.role.?);
+    try std.testing.expectEqualStrings("tenant_ns", result.tenant_id.?);
+}
+
+test "extractClerkClaims reads namespaced role claim (prod namespace)" {
+    const json =
+        \\{"sub":"user_ns2","iss":"https://clerk.example.com","exp":9999999999,"https://usezombie.com/role":"admin"}
+    ;
+    const result = try extractClerkClaims(std.testing.allocator, json);
+    defer {
+        if (result.tenant_id) |v| std.testing.allocator.free(v);
+        if (result.org_id) |v| std.testing.allocator.free(v);
+        if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
+        if (result.audience) |v| std.testing.allocator.free(v);
+        if (result.scopes) |v| std.testing.allocator.free(v);
+    }
+    try std.testing.expectEqualStrings("admin", result.role.?);
+}
+
+test "extractClerkClaims reads namespaced role from metadata object" {
+    const json =
+        \\{"sub":"user_ns3","iss":"https://clerk.example.com","exp":9999999999,"metadata":{"https://usezombie.dev/role":"admin"}}
+    ;
+    const result = try extractClerkClaims(std.testing.allocator, json);
+    defer {
+        if (result.tenant_id) |v| std.testing.allocator.free(v);
+        if (result.org_id) |v| std.testing.allocator.free(v);
+        if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
+        if (result.audience) |v| std.testing.allocator.free(v);
+        if (result.scopes) |v| std.testing.allocator.free(v);
+    }
+    try std.testing.expectEqualStrings("admin", result.role.?);
 }
 
 test "extractClerkClaims skips unsupported top-level role when metadata has supported fallback" {

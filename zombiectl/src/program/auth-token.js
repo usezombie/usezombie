@@ -35,7 +35,7 @@ function extractRoleFromToken(token) {
   ];
   for (const raw of candidates) {
     if (typeof raw !== "string") continue;
-    const value = raw.trim().toLowerCase();
+    const value = raw.toLowerCase();
     if (value === "user" || value === "operator" || value === "admin") return value;
   }
   return null;

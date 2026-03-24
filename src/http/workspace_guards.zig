@@ -87,8 +87,11 @@ pub fn enforce(
     actor: []const u8,
     requirement: Requirement,
 ) ?Access {
-    if (!authorizeWorkspace(r, req_id, conn, principal, workspace_id)) return null;
+    // Role check is stateless — run it before workspace auth to avoid DB
+    // side-effects (SET LOCAL tenant context) on connections returned to the
+    // pool when the role check fails.
     if (!common.requireRole(r, req_id, principal, requirement.minimum_role)) return null;
+    if (!authorizeWorkspace(r, req_id, conn, principal, workspace_id)) return null;
 
     return switch (requirement.credit_policy) {
         .none => .{},
