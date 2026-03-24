@@ -1,4 +1,5 @@
 import { createCoreOpsHandlers } from "./core-ops.js";
+import { commandWorkspaceUpgradeScale } from "./workspace_billing.js";
 import { queueCliAnalyticsEvent, setCliAnalyticsContext } from "../lib/analytics.js";
 import { validateRequiredId } from "../program/validate.js";
 
@@ -241,6 +242,24 @@ function createCoreHandlers(ctx, workspaces, deps) {
       return 0;
     }
 
+    if (action === "upgrade-scale") {
+      const parsed = parseFlags(tail);
+      const workspaceId = await ensureWorkspaceId(parsed.options["workspace-id"] || parsed.positionals[0]);
+      if (!workspaceId) {
+        writeLine(ctx.stderr, ui.err("workspace upgrade-scale requires --workspace-id"));
+        return 2;
+      }
+      const check = validateRequiredId(workspaceId, "workspace_id");
+      if (!check.ok) {
+        writeLine(ctx.stderr, ui.err(check.message));
+        return 2;
+      }
+      setCliAnalyticsContext(ctx, { workspace_id: workspaceId });
+      return commandWorkspaceUpgradeScale(ctx, parsed, workspaceId, {
+        request, apiHeaders, ui, printJson, writeLine,
+      });
+    }
+
     if (action === "remove") {
       const parsed = parseFlags(tail);
       const workspaceId = parsed.positionals[0] || parsed.options["workspace-id"];
@@ -280,11 +299,19 @@ function createCoreHandlers(ctx, workspaces, deps) {
       return 2;
     }
 
-    const res = await request(ctx, `/v1/workspaces/${encodeURIComponent(workspaceId)}:sync`, {
-      method: "POST",
-      headers: apiHeaders(ctx),
-      body: "{}",
-    });
+    let res;
+    try {
+      res = await request(ctx, `/v1/workspaces/${encodeURIComponent(workspaceId)}:sync`, {
+        method: "POST",
+        headers: apiHeaders(ctx),
+        body: "{}",
+      });
+    } catch (err) {
+      if (!ctx.jsonMode && err instanceof Error && err.code === "UZ-BILLING-005") {
+        writeLine(ctx.stderr, ui.info(`Upgrade path: zombiectl workspace upgrade-scale --workspace-id ${workspaceId} --subscription-id <SUBSCRIPTION_ID>`));
+      }
+      throw err;
+    }
 
     setCliAnalyticsContext(ctx, {
       workspace_id: workspaceId,
@@ -302,7 +329,14 @@ function createCoreHandlers(ctx, workspaces, deps) {
         workspace_id: workspaceId,
         synced_count: res.synced_count ?? 0,
         total_pending: res.total_pending ?? 0,
+        plan_tier: res.plan_tier ?? "unknown",
+        credit_remaining_cents: res.credit_remaining_cents ?? "unknown",
+        credit_currency: res.credit_currency ?? "USD",
       });
+      if (res.credit_remaining_cents === 0) {
+        writeLine(ctx.stdout);
+        writeLine(ctx.stdout, ui.info(`Upgrade path: zombiectl workspace upgrade-scale --workspace-id ${workspaceId} --subscription-id <SUBSCRIPTION_ID>`));
+      }
     }
     return 0;
   }
@@ -410,6 +444,9 @@ function createCoreHandlers(ctx, workspaces, deps) {
         run_id: res.run_id,
         state: res.state,
         mode: payload.mode,
+        plan_tier: res.plan_tier ?? "unknown",
+        credit_remaining_cents: res.credit_remaining_cents ?? "unknown",
+        credit_currency: res.credit_currency ?? "USD",
       });
     }
     return 0;

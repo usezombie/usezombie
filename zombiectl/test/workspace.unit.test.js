@@ -110,4 +110,45 @@ describe("commandWorkspace", () => {
     expect(code).toBe(2);
     expect(err.read()).toContain("workspace remove requires");
   });
+
+  test("upgrade-scale requires workspace id", async () => {
+    const err = makeBufferStream();
+    const deps = makeDeps();
+    const ctx = { stdout: makeNoop(), stderr: err.stream, jsonMode: false, env: {} };
+    const workspaces = { current_workspace_id: null, items: [] };
+    const core = createCoreHandlers(ctx, workspaces, deps);
+    const code = await core.commandWorkspace(["upgrade-scale"]);
+    expect(code).toBe(2);
+    expect(err.read()).toContain("workspace upgrade-scale requires --workspace-id");
+  });
+
+  test("upgrade-scale requires subscription id", async () => {
+    const err = makeBufferStream();
+    const deps = makeDeps();
+    const ctx = { stdout: makeNoop(), stderr: err.stream, jsonMode: false, env: {} };
+    const workspaces = { current_workspace_id: WS_ID, items: [] };
+    const core = createCoreHandlers(ctx, workspaces, deps);
+    const code = await core.commandWorkspace(["upgrade-scale", "--workspace-id", WS_ID]);
+    expect(code).toBe(2);
+    expect(err.read()).toContain("workspace upgrade-scale requires --subscription-id");
+  });
+
+  test("upgrade-scale calls billing endpoint", async () => {
+    const out = makeBufferStream();
+    let called = null;
+    const deps = makeDeps({
+      request: async (_ctx, reqPath, options) => {
+        called = { reqPath, options };
+        return { plan_tier: "scale", billing_status: "active", subscription_id: "sub_scale_123" };
+      },
+    });
+    const ctx = { stdout: out.stream, stderr: makeNoop(), jsonMode: false, env: {} };
+    const workspaces = { current_workspace_id: WS_ID, items: [] };
+    const core = createCoreHandlers(ctx, workspaces, deps);
+    const code = await core.commandWorkspace(["upgrade-scale", "--workspace-id", WS_ID, "--subscription-id", "sub_scale_123"]);
+    expect(code).toBe(0);
+    expect(called.reqPath).toContain(`/v1/workspaces/${WS_ID}/billing/scale`);
+    expect(JSON.parse(called.options.body).subscription_id).toBe("sub_scale_123");
+    expect(out.read()).toContain("workspace upgraded to scale");
+  });
 });

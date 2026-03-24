@@ -47,7 +47,7 @@ describe("commandRun", () => {
         if (reqPath.includes("/v1/specs")) {
           return { specs: [{ spec_id: "spec_1" }] };
         }
-        return { run_id: RUN_ID_1, state: "SPEC_QUEUED", attempt: 1 };
+        return { run_id: RUN_ID_1, state: "SPEC_QUEUED", attempt: 1, plan_tier: "free", credit_remaining_cents: 958, credit_currency: "USD" };
       },
     });
     const ctx = { stdout: out.stream, stderr: makeNoop(), jsonMode: false, env: {} };
@@ -57,6 +57,7 @@ describe("commandRun", () => {
     expect(code).toBe(0);
     expect(out.read()).toContain("Run queued");
     expect(out.read()).toContain(RUN_ID_1);
+    expect(out.read()).toContain("credit_remaining_cents: 958");
   });
 
   test("auto-picks first spec when no --spec-id", async () => {

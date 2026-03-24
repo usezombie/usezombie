@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { extractDistinctIdFromToken } from "../src/program/auth-token.js";
+import { extractDistinctIdFromToken, extractRoleFromToken } from "../src/program/auth-token.js";
 
 function makeToken(payload) {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
@@ -30,4 +30,16 @@ test("extractDistinctIdFromToken returns null when sub is missing or blank", () 
   const blankSub = makeToken({ sub: "   " });
   assert.equal(extractDistinctIdFromToken(missingSub), null);
   assert.equal(extractDistinctIdFromToken(blankSub), null);
+});
+
+test("extractRoleFromToken reads supported role claims", () => {
+  assert.equal(extractRoleFromToken(makeToken({ role: "admin" })), "admin");
+  assert.equal(extractRoleFromToken(makeToken({ metadata: { role: "operator" } })), "operator");
+  assert.equal(extractRoleFromToken(makeToken({ custom_claims: { role: "user" } })), "user");
+});
+
+test("extractRoleFromToken normalizes namespaced and invalid claims", () => {
+  assert.equal(extractRoleFromToken(makeToken({ "https://usezombie.dev/role": "ADMIN" })), "admin");
+  assert.equal(extractRoleFromToken(makeToken({ role: "owner" })), null);
+  assert.equal(extractRoleFromToken("bad-token"), null);
 });
