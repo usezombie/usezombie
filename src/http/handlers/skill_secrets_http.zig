@@ -6,6 +6,7 @@ const skill_secret_handlers = @import("skill_secrets.zig");
 const common = @import("common.zig");
 
 const log = std.log.scoped(.http);
+const API_ACTOR = "api";
 
 pub const Context = common.Context;
 
@@ -42,7 +43,7 @@ pub fn handlePutWorkspaceSkillSecret(
         return;
     };
     defer ctx.pool.release(conn);
-    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, principal.user_id orelse "api", .{
+    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, principal.user_id orelse API_ACTOR, .{
         .minimum_role = .operator,
     }) orelse return;
     defer access.deinit(alloc);
@@ -90,7 +91,7 @@ pub fn handleDeleteWorkspaceSkillSecret(
         return;
     };
     defer ctx.pool.release(conn);
-    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, principal.user_id orelse "api", .{
+    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, principal.user_id orelse API_ACTOR, .{
         .minimum_role = .operator,
     }) orelse return;
     defer access.deinit(alloc);

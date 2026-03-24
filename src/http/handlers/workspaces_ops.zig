@@ -1,6 +1,5 @@
 const std = @import("std");
 const zap = @import("zap");
-const workspace_billing = @import("../../state/workspace_billing.zig");
 const policy = @import("../../state/policy.zig");
 const obs_log = @import("../../observability/logging.zig");
 const error_codes = @import("../../errors/codes.zig");
@@ -112,16 +111,7 @@ pub fn handleSyncSpecs(ctx: *common.Context, r: zap.Request, workspace_id: []con
     }) orelse return;
     defer access.deinit(alloc);
 
-    const billing_state = workspace_billing.reconcileWorkspaceBilling(conn, alloc, workspace_id, std.time.milliTimestamp(), actor) catch |err| {
-        if (workspace_billing.errorCode(err)) |code| {
-            common.errorResponse(r, .internal_server_error, code, workspace_billing.errorMessage(err) orelse "Workspace billing failure", req_id);
-            return;
-        }
-        common.internalOperationError(r, "Failed to reconcile workspace billing state", req_id);
-        return;
-    };
-    defer alloc.free(billing_state.plan_sku);
-    defer if (billing_state.subscription_id) |v| alloc.free(v);
+    const billing_state = access.billing_state.?;
 
     var ws = conn.query(
         "SELECT repo_url, default_branch FROM workspaces WHERE workspace_id = $1",

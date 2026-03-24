@@ -38,6 +38,7 @@ pub fn handleUpgradeWorkspaceToScale(ctx: *common.Context, r: zap.Request, works
         common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, ERR_REQUEST_BODY_REQUIRED, req_id);
         return;
     };
+    if (!common.checkBodySize(r, body, req_id)) return;
     const parsed = std.json.parseFromSlice(Req, alloc, body, .{}) catch {
         common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, ERR_MALFORMED_JSON, req_id);
         return;
@@ -188,6 +189,7 @@ pub fn handleApplyWorkspaceBillingEvent(ctx: *common.Context, r: zap.Request, wo
         common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, ERR_REQUEST_BODY_REQUIRED, req_id);
         return;
     };
+    if (!common.checkBodySize(r, body, req_id)) return;
     const parsed = std.json.parseFromSlice(Req, alloc, body, .{}) catch {
         common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, ERR_MALFORMED_JSON, req_id);
         return;

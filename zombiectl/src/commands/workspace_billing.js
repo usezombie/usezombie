@@ -1,6 +1,6 @@
 export async function commandWorkspaceUpgradeScale(ctx, parsed, workspaceId, deps) {
   const { request, apiHeaders, ui, printJson, writeLine } = deps;
-  const subscriptionId = parsed.options["subscription-id"] || parsed.positionals[1];
+  const subscriptionId = parsed.options["subscription-id"] || parsed.positionals[1] || parsed.positionals[0];
 
   if (!subscriptionId) {
     writeLine(ctx.stderr, ui.err("workspace upgrade-scale requires --subscription-id"));
@@ -20,7 +20,7 @@ export async function commandWorkspaceUpgradeScale(ctx, parsed, workspaceId, dep
     writeLine(ctx.stdout, `workspace_id: ${workspaceId}`);
     writeLine(ctx.stdout, `plan_tier: ${res.plan_tier}`);
     writeLine(ctx.stdout, `billing_status: ${res.billing_status}`);
-    writeLine(ctx.stdout, `subscription_id: ${res.subscription_id}`);
+    if (res.subscription_id != null) writeLine(ctx.stdout, `subscription_id: ${res.subscription_id}`);
   }
   return 0;
 }

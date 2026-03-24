@@ -1,7 +1,7 @@
 import FAQ from "../components/FAQ";
 import { Button } from "@usezombie/design-system";
 import { APP_BASE_URL } from "../config";
-import { trackSignupCompleted } from "../analytics/posthog";
+import { trackSignupCompleted, trackLeadCaptureClicked } from "../analytics/posthog";
 import { MODE_HUMANS } from "../constants/mode";
 
 type Tier = {
@@ -94,7 +94,11 @@ export default function Pricing() {
               to={APP_BASE_URL}
               variant={tier.featured ? "primary" : "double-border"}
               className="pricing-card-cta"
-              onClick={() => trackSignupCompleted({ source: tier.ctaSource, surface: "pricing", mode: MODE_HUMANS })}
+              onClick={() =>
+                tier.featured
+                  ? trackLeadCaptureClicked({ page: "pricing", surface: "pricing_card", cta_id: tier.ctaSource, plan_interest: "Scale" })
+                  : trackSignupCompleted({ source: tier.ctaSource, surface: "pricing", mode: MODE_HUMANS })
+              }
             >
               {tier.ctaLabel}
             </Button>

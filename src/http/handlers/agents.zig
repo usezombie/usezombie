@@ -9,6 +9,7 @@ const proposals = @import("../../pipeline/scoring_mod/proposals.zig");
 const error_codes = @import("../../errors/codes.zig");
 
 const log = std.log.scoped(.http);
+const API_ACTOR = "api";
 
 pub const handleGetAgent = get.handleGetAgent;
 pub const handleGetAgentScores = scores.handleGetAgentScores;
@@ -168,7 +169,7 @@ pub fn handleRevertAgentHarnessChange(ctx: *common.Context, r: zap.Request, agen
     }
     if (!common.requireRole(r, req_id, principal, .operator)) return;
 
-    const operator_identity = principal.user_id orelse "api";
+    const operator_identity = principal.user_id orelse API_ACTOR;
     log.debug("agent.revert_harness_change agent_id={s} change_id={s}", .{ agent_id, change_id });
 
     var outcome = proposals.revertHarnessChange(
@@ -245,7 +246,7 @@ fn handleManualProposalDecision(
 
     switch (action) {
         .approve => {
-            const operator_identity = principal.user_id orelse "api";
+            const operator_identity = principal.user_id orelse API_ACTOR;
             const outcome = proposals.approveManualProposal(conn, alloc, agent_id, proposal_id, operator_identity, std.time.milliTimestamp()) catch {
                 log.err("agent.approve_proposal_fail error_code=UZ-INTERNAL-003 agent_id={s} proposal_id={s}", .{ agent_id, proposal_id });
                 common.internalOperationError(r, "Failed to approve proposal", req_id);
