@@ -97,37 +97,41 @@ describe("help output", () => {
   });
 
   test("--help with operator token contains operator commands without env override", async () => {
-    const out = bufferStream();
-    const err = bufferStream();
-    const token = [
-      Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url"),
-      Buffer.from(JSON.stringify({ sub: "user_123", role: "operator" })).toString("base64url"),
-      "sig",
-    ].join(".");
-    const code = await runCli(["--help"], {
-      stdout: out.stream,
-      stderr: err.stream,
-      env: { ...process.env, ZOMBIE_TOKEN: token, NO_COLOR: "1" },
+    await withIsolatedStateDir(async () => {
+      const out = bufferStream();
+      const err = bufferStream();
+      const token = [
+        Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url"),
+        Buffer.from(JSON.stringify({ sub: "user_123", role: "operator" })).toString("base64url"),
+        "sig",
+      ].join(".");
+      const code = await runCli(["--help"], {
+        stdout: out.stream,
+        stderr: err.stream,
+        env: { ZOMBIE_TOKEN: token, NO_COLOR: "1" },
+      });
+      expect(code).toBe(0);
+      const output = out.read();
+      expect(output).toContain("OPERATOR COMMANDS");
+      expect(output).toContain("workspace upgrade-scale");
+      expect(output).toContain("admin config set scoring_context_max_tokens");
     });
-    expect(code).toBe(0);
-    const output = out.read();
-    expect(output).toContain("OPERATOR COMMANDS");
-    expect(output).toContain("workspace upgrade-scale");
-    expect(output).toContain("admin config set scoring_context_max_tokens");
   });
 
   test("--help with API_KEY contains operator commands without ZOMBIE_API_KEY", async () => {
-    const out = bufferStream();
-    const err = bufferStream();
-    const code = await runCli(["--help"], {
-      stdout: out.stream,
-      stderr: err.stream,
-      env: { ...process.env, API_KEY: "dev-key", NO_COLOR: "1" },
+    await withIsolatedStateDir(async () => {
+      const out = bufferStream();
+      const err = bufferStream();
+      const code = await runCli(["--help"], {
+        stdout: out.stream,
+        stderr: err.stream,
+        env: { API_KEY: "dev-key", NO_COLOR: "1" },
+      });
+      expect(code).toBe(0);
+      const output = out.read();
+      expect(output).toContain("OPERATOR COMMANDS");
+      expect(output).toContain("workspace upgrade-scale");
     });
-    expect(code).toBe(0);
-    const output = out.read();
-    expect(output).toContain("OPERATOR COMMANDS");
-    expect(output).toContain("workspace upgrade-scale");
   });
 
   test("--help uses saved login credentials to show operator commands", async () => {

@@ -111,7 +111,10 @@ pub fn handleSyncSpecs(ctx: *common.Context, r: zap.Request, workspace_id: []con
     }) orelse return;
     defer access.deinit(alloc);
 
-    const billing_state = access.billing_state.?;
+    const billing_state = access.billing_state orelse {
+        common.internalOperationError(r, "billing_state missing after execution guard", req_id);
+        return;
+    };
 
     var ws = conn.query(
         "SELECT repo_url, default_branch FROM workspaces WHERE workspace_id = $1",
@@ -146,6 +149,11 @@ pub fn handleSyncSpecs(ctx: *common.Context, r: zap.Request, workspace_id: []con
         break :blk v;
     };
 
+    const credit = access.credit orelse {
+        common.internalOperationError(r, "credit missing after execution guard", req_id);
+        return;
+    };
+
     log.info("workspace.sync workspace_id={s} total_pending={d}", .{ workspace_id, total_pending });
 
     common.writeJson(r, .ok, .{
@@ -156,8 +164,8 @@ pub fn handleSyncSpecs(ctx: *common.Context, r: zap.Request, workspace_id: []con
         .billing_status = billing_state.billing_status.label(),
         .plan_sku = billing_state.plan_sku,
         .grace_expires_at = billing_state.grace_expires_at,
-        .credit_remaining_cents = access.credit.?.remaining_credit_cents,
-        .credit_currency = access.credit.?.currency,
+        .credit_remaining_cents = credit.remaining_credit_cents,
+        .credit_currency = credit.currency,
         .request_id = req_id,
     });
 }

@@ -39,6 +39,9 @@ pub fn handlePutHarnessSource(ctx: *Context, r: zap.Request, workspace_id: []con
         return;
     };
     defer ctx.pool.release(conn);
+    // putSource is the ingestion step that costs credits — it writes new harness
+    // data into the workspace.  compile and activate operate on already-ingested
+    // data, so they use the default credit_policy (.none).
     const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, principal.user_id orelse "api", .{
         .minimum_role = .operator,
         .credit_policy = .execution_required,

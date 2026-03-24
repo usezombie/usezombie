@@ -2,6 +2,7 @@ import { createCoreOpsHandlers } from "./core-ops.js";
 import { commandWorkspaceUpgradeScale } from "./workspace_billing.js";
 import { queueCliAnalyticsEvent, setCliAnalyticsContext } from "../lib/analytics.js";
 import { validateRequiredId } from "../program/validate.js";
+import { ERR_BILLING_CREDIT_EXHAUSTED } from "../constants/error-codes.js";
 
 function createCoreHandlers(ctx, workspaces, deps) {
   const {
@@ -307,7 +308,7 @@ function createCoreHandlers(ctx, workspaces, deps) {
         body: "{}",
       });
     } catch (err) {
-      if (!ctx.jsonMode && err instanceof Error && err.code === "UZ-BILLING-005") {
+      if (!ctx.jsonMode && err instanceof Error && err.code === ERR_BILLING_CREDIT_EXHAUSTED) {
         writeLine(ctx.stderr, ui.info(`Upgrade path: zombiectl workspace upgrade-scale --workspace-id ${workspaceId} --subscription-id <SUBSCRIPTION_ID>`));
       }
       throw err;
@@ -333,7 +334,7 @@ function createCoreHandlers(ctx, workspaces, deps) {
         credit_remaining_cents: res.credit_remaining_cents ?? "unknown",
         credit_currency: res.credit_currency ?? "USD",
       });
-      if (res.credit_remaining_cents === 0) {
+      if (typeof res.credit_remaining_cents === "number" && res.credit_remaining_cents <= 0) {
         writeLine(ctx.stdout);
         writeLine(ctx.stdout, ui.info(`Upgrade path: zombiectl workspace upgrade-scale --workspace-id ${workspaceId} --subscription-id <SUBSCRIPTION_ID>`));
       }

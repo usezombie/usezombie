@@ -1,6 +1,6 @@
 export async function commandWorkspaceUpgradeScale(ctx, parsed, workspaceId, deps) {
   const { request, apiHeaders, ui, printJson, writeLine } = deps;
-  const subscriptionId = parsed.options["subscription-id"] || parsed.positionals[1] || parsed.positionals[0];
+  const subscriptionId = parsed.options["subscription-id"] || parsed.positionals[1];
 
   if (!subscriptionId) {
     writeLine(ctx.stderr, ui.err("workspace upgrade-scale requires --subscription-id"));

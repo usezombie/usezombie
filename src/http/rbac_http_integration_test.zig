@@ -146,7 +146,7 @@ fn serverThread(ctx: *handler.Context, port: u16) void {
     };
 }
 
-fn startServer(alloc: std.mem.Allocator) !RunningServer {
+fn startServer(alloc: std.mem.Allocator) !*RunningServer {
     const db_ctx = (try common.openHandlerTestConn(alloc)) orelse return error.SkipZigTest;
     try setupSeedData(db_ctx.conn);
     db_ctx.pool.release(db_ctx.conn);
@@ -162,7 +162,8 @@ fn startServer(alloc: std.mem.Allocator) !RunningServer {
     var worker_state = worker.WorkerState.init();
     const port = allocTestPort();
 
-    var running = RunningServer{
+    const running = try alloc.create(RunningServer);
+    running.* = RunningServer{
         .pool = db_ctx.pool,
         .session_store = session_store,
         .verifier = verifier,
@@ -190,6 +191,10 @@ fn startServer(alloc: std.mem.Allocator) !RunningServer {
     running.ctx.auth_sessions = &running.session_store;
     running.ctx.worker_state = &running.worker_state;
     running.thread = try std.Thread.spawn(.{}, serverThread, .{ &running.ctx, port });
+    errdefer {
+        http_server.stop();
+        running.thread.join();
+    }
     try waitForServer(alloc, port);
     return running;
 }
@@ -253,8 +258,11 @@ fn sendRequest(
 }
 
 test "integration: RBAC endpoints enforce operator and admin roles over live HTTP" {
-    var server = try startServer(std.testing.allocator);
-    defer server.deinit();
+    const server = try startServer(std.testing.allocator);
+    defer {
+        server.deinit();
+        std.testing.allocator.destroy(server);
+    }
 
     const harness_url = try std.fmt.allocPrint(std.testing.allocator, "http://127.0.0.1:{d}/v1/workspaces/{s}/harness/active", .{
         server.port,
@@ -314,6 +322,20 @@ test "integration: RBAC endpoints enforce operator and admin roles over live HTT
         try std.testing.expect(std.mem.indexOf(u8, response.body, error_codes.ERR_INSUFFICIENT_ROLE) != null);
     }
     {
+        // Operator token must be rejected for admin-only billing-events endpoint.
+        const response = try sendRequest(
+            std.testing.allocator,
+            billing_event_url,
+            .POST,
+            TEST_OPERATOR_TOKEN,
+            "{\"event_type\":\"PAYMENT_FAILED\",\"reason\":\"rbac-test\"}",
+            "application/json",
+        );
+        defer response.deinit(std.testing.allocator);
+        try std.testing.expectEqual(@as(u16, 403), response.status);
+        try std.testing.expect(std.mem.indexOf(u8, response.body, error_codes.ERR_INSUFFICIENT_ROLE) != null);
+    }
+    {
         const response = try sendRequest(std.testing.allocator, harness_url, .GET, TEST_OPERATOR_TOKEN, null, null);
         defer response.deinit(std.testing.allocator);
         try std.testing.expectEqual(@as(u16, 200), response.status);
@@ -345,8 +367,11 @@ test "integration: RBAC endpoints enforce operator and admin roles over live HTT
 }
 
 test "integration: RBAC user-role rejection stays deterministic under concurrency" {
-    var server = try startServer(std.testing.allocator);
-    defer server.deinit();
+    const server = try startServer(std.testing.allocator);
+    defer {
+        server.deinit();
+        std.testing.allocator.destroy(server);
+    }
 
     const harness_url = try std.fmt.allocPrint(std.testing.allocator, "http://127.0.0.1:{d}/v1/workspaces/{s}/harness/active", .{
         server.port,

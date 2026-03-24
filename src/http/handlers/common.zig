@@ -189,7 +189,10 @@ pub fn authenticate(alloc: std.mem.Allocator, r: zap.Request, ctx: *Context) Aut
         if (principal.workspace_id) |workspace_id| {
             if (!id_format.isSupportedWorkspaceId(workspace_id)) return AuthError.Unauthorized;
         }
-        const role = if (principal.role) |raw| rbac.parseAuthRole(raw) orelse return AuthError.Unauthorized else AuthRole.user;
+        const role = if (principal.role) |raw| rbac.parseAuthRole(raw) orelse {
+            errorResponse(r, .forbidden, error_codes.ERR_UNSUPPORTED_ROLE, "Unsupported role in token", requestId(alloc));
+            return AuthError.Unauthorized;
+        } else AuthRole.user;
         return .{
             .mode = .jwt_oidc,
             .role = role,
