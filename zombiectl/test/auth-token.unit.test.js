@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { extractDistinctIdFromToken, extractRoleFromToken } from "../src/program/auth-token.js";
+import { decodeTokenPayload, extractDistinctIdFromToken, extractRoleFromToken } from "../src/program/auth-token.js";
 
 function makeToken(payload) {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
@@ -42,4 +42,48 @@ test("extractRoleFromToken normalizes namespaced and invalid claims", () => {
   assert.equal(extractRoleFromToken(makeToken({ "https://usezombie.dev/role": "ADMIN" })), "admin");
   assert.equal(extractRoleFromToken(makeToken({ role: "owner" })), null);
   assert.equal(extractRoleFromToken("bad-token"), null);
+});
+
+test("extractRoleFromToken reads usezombie.com namespace claim", () => {
+  assert.equal(extractRoleFromToken(makeToken({ "https://usezombie.com/role": "operator" })), "operator");
+});
+
+test("extractRoleFromToken returns first valid role in priority order", () => {
+  // top-level role wins over metadata.role
+  assert.equal(extractRoleFromToken(makeToken({ role: "admin", metadata: { role: "user" } })), "admin");
+  // metadata.role wins when top-level is absent
+  assert.equal(extractRoleFromToken(makeToken({ metadata: { role: "user" }, custom_claims: { role: "admin" } })), "user");
+});
+
+test("extractRoleFromToken returns null for empty or whitespace-only role", () => {
+  assert.equal(extractRoleFromToken(makeToken({ role: "" })), null);
+  assert.equal(extractRoleFromToken(makeToken({ role: "   " })), null);
+});
+
+test("extractRoleFromToken returns null for null/undefined token", () => {
+  assert.equal(extractRoleFromToken(null), null);
+  assert.equal(extractRoleFromToken(undefined), null);
+});
+
+test("decodeTokenPayload returns parsed payload object", () => {
+  const payload = { sub: "user_1", role: "admin", iat: 1000 };
+  const result = decodeTokenPayload(makeToken(payload));
+  assert.equal(result.sub, "user_1");
+  assert.equal(result.role, "admin");
+  assert.equal(result.iat, 1000);
+});
+
+test("decodeTokenPayload returns null for non-string input", () => {
+  assert.equal(decodeTokenPayload(null), null);
+  assert.equal(decodeTokenPayload(undefined), null);
+  assert.equal(decodeTokenPayload(42), null);
+  assert.equal(decodeTokenPayload(""), null);
+});
+
+test("decodeTokenPayload returns null for malformed base64", () => {
+  assert.equal(decodeTokenPayload("header.!!!.sig"), null);
+});
+
+test("decodeTokenPayload returns null for token with fewer than 2 parts", () => {
+  assert.equal(decodeTokenPayload("single-segment"), null);
 });

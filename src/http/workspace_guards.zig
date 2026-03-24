@@ -101,3 +101,166 @@ pub fn enforce(
         },
     };
 }
+
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+
+test "CreditPolicy has exactly two variants" {
+    const fields = @typeInfo(CreditPolicy).@"enum".fields;
+    try std.testing.expectEqual(@as(usize, 2), fields.len);
+}
+
+test "CreditPolicy.none is the zero-value variant" {
+    try std.testing.expectEqual(@as(u0, 0), @intFromEnum(CreditPolicy.none));
+}
+
+test "CreditPolicy variant names match API contract" {
+    try std.testing.expectEqualStrings("none", @tagName(CreditPolicy.none));
+    try std.testing.expectEqualStrings("execution_required", @tagName(CreditPolicy.execution_required));
+}
+
+test "Requirement defaults: minimum_role=user, credit_policy=none" {
+    const req = Requirement{};
+    try std.testing.expectEqual(common.AuthRole.user, req.minimum_role);
+    try std.testing.expectEqual(CreditPolicy.none, req.credit_policy);
+}
+
+test "Requirement accepts explicit field overrides" {
+    const req = Requirement{
+        .minimum_role = .admin,
+        .credit_policy = .execution_required,
+    };
+    try std.testing.expectEqual(common.AuthRole.admin, req.minimum_role);
+    try std.testing.expectEqual(CreditPolicy.execution_required, req.credit_policy);
+}
+
+test "Access default is empty — null credit and null billing_state" {
+    const access = Access{};
+    try std.testing.expectEqual(@as(?workspace_credit.CreditView, null), access.credit);
+    try std.testing.expectEqual(@as(?workspace_billing.StateView, null), access.billing_state);
+}
+
+test "Access.deinit with null fields does not crash" {
+    const access = Access{};
+    access.deinit(std.testing.allocator);
+}
+
+test "Access.deinit frees allocated credit.currency" {
+    const alloc = std.testing.allocator;
+    const currency = try alloc.dupe(u8, "USD");
+
+    var access = Access{
+        .credit = .{
+            .currency = currency,
+            .initial_credit_cents = 1000,
+            .consumed_credit_cents = 0,
+            .remaining_credit_cents = 1000,
+            .exhausted_at = null,
+        },
+        .billing_state = null,
+    };
+    // Should free currency without error; testing allocator will catch leaks.
+    access.deinit(alloc);
+    access.credit = null; // prevent double-free in case test framework retries
+}
+
+test "Access.deinit frees billing_state plan_sku and subscription_id" {
+    const alloc = std.testing.allocator;
+    const plan_sku = try alloc.dupe(u8, "free_v1");
+    const sub_id = try alloc.dupe(u8, "sub_abc123");
+
+    var access = Access{
+        .credit = null,
+        .billing_state = .{
+            .plan_tier = .free,
+            .billing_status = .active,
+            .plan_sku = plan_sku,
+            .subscription_id = sub_id,
+            .grace_expires_at = null,
+        },
+    };
+    access.deinit(alloc);
+    access.billing_state = null;
+}
+
+test "Access.deinit frees billing_state with null subscription_id" {
+    const alloc = std.testing.allocator;
+    const plan_sku = try alloc.dupe(u8, "scale_v1");
+
+    var access = Access{
+        .credit = null,
+        .billing_state = .{
+            .plan_tier = .scale,
+            .billing_status = .active,
+            .plan_sku = plan_sku,
+            .subscription_id = null,
+            .grace_expires_at = null,
+        },
+    };
+    access.deinit(alloc);
+    access.billing_state = null;
+}
+
+test "Access.deinit frees both credit and billing_state together" {
+    const alloc = std.testing.allocator;
+    const currency = try alloc.dupe(u8, "USD");
+    const plan_sku = try alloc.dupe(u8, "free_v1");
+    const sub_id = try alloc.dupe(u8, "sub_xyz");
+
+    var access = Access{
+        .credit = .{
+            .currency = currency,
+            .initial_credit_cents = 500,
+            .consumed_credit_cents = 200,
+            .remaining_credit_cents = 300,
+            .exhausted_at = null,
+        },
+        .billing_state = .{
+            .plan_tier = .free,
+            .billing_status = .active,
+            .plan_sku = plan_sku,
+            .subscription_id = sub_id,
+            .grace_expires_at = null,
+        },
+    };
+    access.deinit(alloc);
+    access.credit = null;
+    access.billing_state = null;
+}
+
+test "ExecutionResult holds credit and billing_state fields" {
+    const result = ExecutionResult{
+        .credit = .{
+            .currency = "USD",
+            .initial_credit_cents = 1000,
+            .consumed_credit_cents = 100,
+            .remaining_credit_cents = 900,
+            .exhausted_at = null,
+        },
+        .billing_state = .{
+            .plan_tier = .free,
+            .billing_status = .active,
+            .plan_sku = "free_v1",
+            .subscription_id = null,
+            .grace_expires_at = null,
+        },
+    };
+    try std.testing.expectEqual(@as(i64, 900), result.credit.remaining_credit_cents);
+    try std.testing.expectEqualStrings("free_v1", result.billing_state.plan_sku);
+}
+
+// Compile-time layout sanity checks
+comptime {
+    // Access must be a reasonable size (two optionals wrapping structs).
+    const access_size = @sizeOf(Access);
+    if (access_size == 0) @compileError("Access should not be zero-sized");
+
+    // Requirement is tiny — two enum-width fields.
+    const req_size = @sizeOf(Requirement);
+    if (req_size == 0) @compileError("Requirement should not be zero-sized");
+
+    // CreditPolicy must have exactly 2 variants.
+    const cp_fields = @typeInfo(CreditPolicy).@"enum".fields;
+    if (cp_fields.len != 2) @compileError("CreditPolicy must have exactly 2 variants");
+}
