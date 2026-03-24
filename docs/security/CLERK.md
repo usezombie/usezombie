@@ -155,9 +155,36 @@ Accepted source locations are provider-specific but normalize into one contract:
 - Clerk top-level `role`
 - Clerk `metadata.role`
 - custom OIDC top-level `role`
-- custom OIDC nested or namespaced `role`
+- custom OIDC nested or namespaced `role` (e.g. `custom_claims.role`, `app_metadata.role`, `https://usezombie.dev/role`)
 
-Server-side authorization consumes the normalized value and rejects unknown roles. API-key auth maps to `admin`.
+Server-side authorization consumes the normalized value and rejects unknown roles with 403 `ERR_UNSUPPORTED_ROLE`. API-key auth maps to `admin`.
+
+### RBAC Hierarchy
+
+```
+admin > operator > user
+```
+
+| Role | Assigned when | What it can do |
+|------|--------------|----------------|
+| `user` | Default — JWT has no role claim | Read-only. Authenticated but blocked from all mutations (403 on any `workspace_guards.enforce` call). |
+| `operator` | Clerk admin sets `metadata.role = "operator"` | All workspace mutations: harness changes, skill secrets, billing upgrade, run sync, proposal decisions. |
+| `admin` | Clerk admin sets `metadata.role = "admin"`, or via API key | Everything operator can do, plus admin-only endpoints (billing lifecycle events like `PAYMENT_FAILED`, `DOWNGRADE_TO_FREE`). |
+
+### How Roles Are Assigned
+
+Roles are managed in the **identity provider (Clerk)**, not in the UseZombie backend. The backend only reads and enforces — it never writes roles.
+
+- **JWT auth**: Role comes from the token claims. If absent, defaults to `user`.
+- **API key auth**: Always maps to `admin` (API keys are issued to trusted operators/automation).
+
+To grant `operator` or `admin` to a user, a Clerk org admin sets `role` in the user's metadata via the Clerk dashboard or Clerk API.
+
+### Self-Serve Gap (Known Friction)
+
+Today, a new user who signs up gets `user` by default and cannot perform any mutations until a Clerk admin manually upgrades their role. This creates onboarding friction for self-serve signups.
+
+A future improvement should auto-assign `operator` to workspace creators or provide a self-serve role upgrade path tied to workspace ownership, removing the dependency on manual Clerk admin intervention.
 
 ## New User (First Signup)
 
