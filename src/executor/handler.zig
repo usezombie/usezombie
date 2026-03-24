@@ -4,6 +4,7 @@
 //! This is the core of the executor API (§2.0).
 
 const std = @import("std");
+const json = @import("json_helpers.zig");
 const protocol = @import("protocol.zig");
 const types = @import("types.zig");
 const session_mod = @import("session.zig");
@@ -67,15 +68,15 @@ pub const Handler = struct {
         const p = params orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing params");
         if (p != .object) return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Params must be object");
 
-        const workspace_path = getStringParam(p, "workspace_path") orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing workspace_path");
+        const workspace_path = json.getStr(p, "workspace_path") orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing workspace_path");
 
         const correlation = types.CorrelationContext{
-            .trace_id = getStringParam(p, "trace_id") orelse "",
-            .run_id = getStringParam(p, "run_id") orelse "",
-            .workspace_id = getStringParam(p, "workspace_id") orelse "",
-            .stage_id = getStringParam(p, "stage_id") orelse "",
-            .role_id = getStringParam(p, "role_id") orelse "",
-            .skill_id = getStringParam(p, "skill_id") orelse "",
+            .trace_id = json.getStr(p, "trace_id") orelse "",
+            .run_id = json.getStr(p, "run_id") orelse "",
+            .workspace_id = json.getStr(p, "workspace_id") orelse "",
+            .stage_id = json.getStr(p, "stage_id") orelse "",
+            .role_id = json.getStr(p, "role_id") orelse "",
+            .skill_id = json.getStr(p, "skill_id") orelse "",
         };
 
         const session_ptr = self.alloc.create(session_mod.Session) catch {
@@ -110,7 +111,7 @@ pub const Handler = struct {
         const p = params orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing params");
         if (p != .object) return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Params must be object");
 
-        const exec_id_hex = getStringParam(p, "execution_id") orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing execution_id");
+        const exec_id_hex = json.getStr(p, "execution_id") orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing execution_id");
         const exec_id = parseExecutionId(exec_id_hex) orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Invalid execution_id");
 
         const session = self.store.get(exec_id) orelse return self.errorResponse(alloc, id, protocol.ErrorCode.execution_failed, "Session not found");
@@ -123,17 +124,17 @@ pub const Handler = struct {
             return self.errorResponse(alloc, id, protocol.ErrorCode.lease_expired, "Lease expired");
         }
 
-        const stage_id = getStringParam(p, "stage_id") orelse "";
-        const role_id = getStringParam(p, "role_id") orelse "";
+        const stage_id = json.getStr(p, "stage_id") orelse "";
+        const role_id = json.getStr(p, "role_id") orelse "";
         const hex = types.executionIdHex(exec_id);
 
         // Extract M12_003 payload fields.
         const agent_config = getObjectParam(p, "agent_config");
         const tools_spec = getArrayParam(p, "tools");
-        const message = getStringParam(p, "message");
+        const message = json.getStr(p, "message");
         const context = getObjectParam(p, "context");
 
-        const model_name = if (agent_config) |ac| runner.getStr(ac, "model") orelse "default" else "default";
+        const model_name = if (agent_config) |ac| json.getStr(ac, "model") orelse "default" else "default";
         log.info("executor.runner.start execution_id={s} stage_id={s} role_id={s} model={s}", .{ &hex, stage_id, role_id, model_name });
 
         // Invoke NullClaw runner — this blocks until agent execution completes.
@@ -170,7 +171,7 @@ pub const Handler = struct {
         const p = params orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing params");
         if (p != .object) return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Params must be object");
 
-        const exec_id_hex = getStringParam(p, "execution_id") orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing execution_id");
+        const exec_id_hex = json.getStr(p, "execution_id") orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing execution_id");
         const exec_id = parseExecutionId(exec_id_hex) orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Invalid execution_id");
 
         const session = self.store.get(exec_id) orelse return self.errorResponse(alloc, id, protocol.ErrorCode.execution_failed, "Session not found");
@@ -184,7 +185,7 @@ pub const Handler = struct {
         const p = params orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing params");
         if (p != .object) return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Params must be object");
 
-        const exec_id_hex = getStringParam(p, "execution_id") orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing execution_id");
+        const exec_id_hex = json.getStr(p, "execution_id") orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing execution_id");
         const exec_id = parseExecutionId(exec_id_hex) orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Invalid execution_id");
 
         const session = self.store.get(exec_id) orelse return self.errorResponse(alloc, id, protocol.ErrorCode.execution_failed, "Session not found");
@@ -199,7 +200,7 @@ pub const Handler = struct {
         const p = params orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing params");
         if (p != .object) return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Params must be object");
 
-        const exec_id_hex = getStringParam(p, "execution_id") orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing execution_id");
+        const exec_id_hex = json.getStr(p, "execution_id") orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing execution_id");
         const exec_id = parseExecutionId(exec_id_hex) orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Invalid execution_id");
 
         const session = self.store.remove(exec_id) orelse return self.errorResponse(alloc, id, protocol.ErrorCode.execution_failed, "Session not found");
@@ -214,7 +215,7 @@ pub const Handler = struct {
         const p = params orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing params");
         if (p != .object) return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Params must be object");
 
-        const exec_id_hex = getStringParam(p, "execution_id") orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing execution_id");
+        const exec_id_hex = json.getStr(p, "execution_id") orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Missing execution_id");
         const exec_id = parseExecutionId(exec_id_hex) orelse return self.errorResponse(alloc, id, protocol.ErrorCode.invalid_params, "Invalid execution_id");
 
         const session = self.store.get(exec_id) orelse return self.errorResponse(alloc, id, protocol.ErrorCode.execution_failed, "Session not found");
@@ -232,15 +233,6 @@ pub const Handler = struct {
         , .{ id, code, message });
     }
 };
-
-fn getStringParam(obj: std.json.Value, key: []const u8) ?[]const u8 {
-    if (obj != .object) return null;
-    const val = obj.object.get(key) orelse return null;
-    return switch (val) {
-        .string => |s| s,
-        else => null,
-    };
-}
 
 fn getObjectParam(obj: std.json.Value, key: []const u8) ?std.json.Value {
     if (obj != .object) return null;

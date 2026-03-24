@@ -14,6 +14,7 @@
 
 const std = @import("std");
 const runner = @import("runner.zig");
+const json = @import("json_helpers.zig");
 const types = @import("types.zig");
 const executor_metrics = @import("executor_metrics.zig");
 const handler_mod = @import("handler.zig");
@@ -184,14 +185,14 @@ test "T7: all FailureClass variants produce non-empty labels" {
 
 // ── T9: DRY — getStr helper ─────────────────────────────────────────
 test "T9: getStr returns null for non-object" {
-    try std.testing.expect(runner.getStr(.{ .integer = 1 }, "k") == null);
+    try std.testing.expect(json.getStr(.{ .integer = 1 }, "k") == null);
 }
 
 test "T9: getStr returns null for missing key" {
     const alloc = std.testing.allocator;
     var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
     defer obj.object.deinit();
-    try std.testing.expect(runner.getStr(obj, "nope") == null);
+    try std.testing.expect(json.getStr(obj, "nope") == null);
 }
 
 test "T9: getStr returns string value" {
@@ -199,7 +200,7 @@ test "T9: getStr returns string value" {
     var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
     defer obj.object.deinit();
     try obj.object.put("k", .{ .string = "v" });
-    try std.testing.expectEqualStrings("v", runner.getStr(obj, "k").?);
+    try std.testing.expectEqualStrings("v", json.getStr(obj, "k").?);
 }
 
 // ── T10: Constants — error code values ───────────────────────────────
@@ -475,7 +476,7 @@ test "T9: getFloat returns null for missing key" {
     const alloc = std.testing.allocator;
     var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
     defer obj.object.deinit();
-    try std.testing.expect(runner.getFloat(obj, "nope") == null);
+    try std.testing.expect(json.getFloat(obj, "nope") == null);
 }
 
 // ── T9: DRY — getFloat returns float for float value ─────────────────
@@ -484,7 +485,7 @@ test "T9: getFloat returns float for float value" {
     var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
     defer obj.object.deinit();
     try obj.object.put("temp", .{ .float = 0.42 });
-    try std.testing.expectEqual(@as(f64, 0.42), runner.getFloat(obj, "temp").?);
+    try std.testing.expectEqual(@as(f64, 0.42), json.getFloat(obj, "temp").?);
 }
 
 // ── T9: DRY — getFloat returns null for string value ──────────────────
@@ -493,5 +494,5 @@ test "T9: getFloat returns null for string value" {
     var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
     defer obj.object.deinit();
     try obj.object.put("temp", .{ .string = "not a float" });
-    try std.testing.expect(runner.getFloat(obj, "temp") == null);
+    try std.testing.expect(json.getFloat(obj, "temp") == null);
 }

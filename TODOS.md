@@ -211,15 +211,3 @@ picking it up in 3 months understands the motivation and where to start.
 **Status:** DONE
 **Implemented in:** M12_003 — replaced hardcoded `'orchestrator'`, `'runtime_stage'`, `'runtime_summary'`, `'stage_completed'` SQL literals with named constants in `billing_runtime.zig` (LEDGER_SOURCE_RUNTIME_STAGE, LEDGER_SOURCE_RUNTIME_SUMMARY, LEDGER_EVENT_STAGE_COMPLETED, LEDGER_ACTOR_ORCHESTRATOR) and parameterized queries ($N placeholders). Fixed `retry.zig` to use the constant instead of `'orchestrator'` literal. DB schema uses TEXT columns for actor/role fields — no ENUM or CHECK constraints that restrict to static values.
 
----
-
-## Docs: PlanetScale Pricing Note in Bootstrap Playbook
-
-**What:** Add a one-liner to `playbooks/M1_001_BOOTSTRAP.md` noting that PlanetScale's Hobby tier was removed in 2024 — the minimum plan is $39/mo.
-**Why:** The README now publicly names PlanetScale as part of the opinionated stack. Any new operator following the bootstrap playbook will hit this pricing wall with no warning, causing friction and potential churn before they see any value.
-**Pros:** Prevents a trust-destroying surprise on step 1. Tiny effort.
-**Cons:** None.
-**Context:** PlanetScale removed the free Hobby tier in April 2024.
-**Effort:** S
-**Priority:** P1
-**Depends on:** None

@@ -29,6 +29,7 @@ const tools_mod = nullclaw.tools;
 const memory_mod = nullclaw.memory;
 const observability = nullclaw.observability;
 
+const json = @import("json_helpers.zig");
 const types = @import("types.zig");
 const executor_metrics = @import("executor_metrics.zig");
 
@@ -219,13 +220,13 @@ fn executeInner(
 /// temperature (convenience alias), max_tokens (convenience alias).
 fn applyAgentConfig(cfg: *Config, ac: std.json.Value) void {
     if (ac != .object) return;
-    if (getStr(ac, "model")) |model| cfg.default_model = model;
-    if (getStr(ac, "provider")) |prov| cfg.default_provider = prov;
-    if (getFloat(ac, "temperature")) |t| {
+    if (json.getStr(ac, "model")) |model| cfg.default_model = model;
+    if (json.getStr(ac, "provider")) |prov| cfg.default_provider = prov;
+    if (json.getFloat(ac, "temperature")) |t| {
         cfg.default_temperature = t;
         cfg.temperature = t;
     }
-    if (getInt(ac, "max_tokens")) |mt| cfg.max_tokens = @intCast(mt);
+    if (json.getInt(ac, "max_tokens")) |mt| cfg.max_tokens = @intCast(mt);
     // system_prompt is not a Config field — it's passed via the message.
     // The agent receives it as part of the composed message from composeMessage().
 }
@@ -259,8 +260,8 @@ fn buildToolsFromSpec(
 
     for (spec.array.items) |item| {
         if (item != .object) continue;
-        const name = getStr(item, "name") orelse continue;
-        const enabled = getBool(item, "enabled");
+        const name = json.getStr(item, "name") orelse continue;
+        const enabled = json.getBoolDefaultTrue(item, "enabled");
         if (!enabled) continue;
 
         if (std.mem.eql(u8, name, "file_read")) {
@@ -317,7 +318,7 @@ pub fn composeMessage(
     };
 
     for (fields) |f| {
-        if (getStr(ctx, f.key)) |content| {
+        if (json.getStr(ctx, f.key)) |content| {
             if (content.len > 0) {
                 try parts.appendSlice(alloc, "\n\n---\n## ");
                 try parts.appendSlice(alloc, f.label);
@@ -366,45 +367,6 @@ pub fn errorCodeForFailure(failure: types.FailureClass) []const u8 {
 fn elapsedSeconds(start_ms: i64) u64 {
     const elapsed_ms = std.time.milliTimestamp() - start_ms;
     return @as(u64, @intCast(@max(0, elapsed_ms))) / 1000;
-}
-
-// ── JSON helpers ─────────────────────────────────────────────────────────────
-
-pub fn getStr(obj: std.json.Value, key: []const u8) ?[]const u8 {
-    if (obj != .object) return null;
-    const val = obj.object.get(key) orelse return null;
-    return switch (val) {
-        .string => |s| s,
-        else => null,
-    };
-}
-
-fn getInt(obj: std.json.Value, key: []const u8) ?i64 {
-    if (obj != .object) return null;
-    const val = obj.object.get(key) orelse return null;
-    return switch (val) {
-        .integer => |i| i,
-        else => null,
-    };
-}
-
-pub fn getFloat(obj: std.json.Value, key: []const u8) ?f64 {
-    if (obj != .object) return null;
-    const val = obj.object.get(key) orelse return null;
-    return switch (val) {
-        .float => |f| f,
-        .integer => |i| @as(f64, @floatFromInt(i)),
-        else => null,
-    };
-}
-
-fn getBool(obj: std.json.Value, key: []const u8) bool {
-    if (obj != .object) return true; // default enabled
-    const val = obj.object.get(key) orelse return true;
-    return switch (val) {
-        .bool => |b| b,
-        else => true,
-    };
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -469,52 +431,6 @@ test "composeMessage with non-object context returns original" {
     const alloc = std.testing.allocator;
     const composed = try composeMessage(alloc, "msg", .{ .integer = 42 });
     try std.testing.expectEqualStrings("msg", composed);
-}
-
-test "getStr returns null for missing key" {
-    const alloc = std.testing.allocator;
-    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
-    defer obj.object.deinit();
-    try std.testing.expect(getStr(obj, "missing") == null);
-}
-
-test "getStr returns null for non-string value" {
-    const alloc = std.testing.allocator;
-    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
-    defer obj.object.deinit();
-    try obj.object.put("key", .{ .integer = 42 });
-    try std.testing.expect(getStr(obj, "key") == null);
-}
-
-test "getStr returns string value" {
-    const alloc = std.testing.allocator;
-    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
-    defer obj.object.deinit();
-    try obj.object.put("key", .{ .string = "value" });
-    try std.testing.expectEqualStrings("value", getStr(obj, "key").?);
-}
-
-test "getFloat returns float for integer value" {
-    const alloc = std.testing.allocator;
-    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
-    defer obj.object.deinit();
-    try obj.object.put("temp", .{ .integer = 1 });
-    try std.testing.expectEqual(@as(f64, 1.0), getFloat(obj, "temp").?);
-}
-
-test "getBool defaults to true when key missing" {
-    const alloc = std.testing.allocator;
-    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
-    defer obj.object.deinit();
-    try std.testing.expect(getBool(obj, "missing"));
-}
-
-test "getBool returns explicit false" {
-    const alloc = std.testing.allocator;
-    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
-    defer obj.object.deinit();
-    try obj.object.put("enabled", .{ .bool = false });
-    try std.testing.expect(!getBool(obj, "enabled"));
 }
 
 test "execute returns failure for null message" {

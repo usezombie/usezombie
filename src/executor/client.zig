@@ -4,6 +4,7 @@
 //! Translates JSON responses into AgentResult and FailureClass types.
 
 const std = @import("std");
+const json = @import("json_helpers.zig");
 const transport = @import("transport.zig");
 const protocol = @import("protocol.zig");
 const types = @import("types.zig");
@@ -190,10 +191,10 @@ pub const ExecutorClient = struct {
         if (result != .object) return ClientError.InvalidResponse;
 
         return .{
-            .content = try self.alloc.dupe(u8, getStringField(result, "content") orelse ""),
-            .token_count = getIntField(result, "token_count"),
-            .wall_seconds = getIntField(result, "wall_seconds"),
-            .exit_ok = getBoolField(result, "exit_ok"),
+            .content = try self.alloc.dupe(u8, json.getStr(result, "content") orelse ""),
+            .token_count = json.getIntOrZero(result, "token_count"),
+            .wall_seconds = json.getIntOrZero(result, "wall_seconds"),
+            .exit_ok = json.getBool(result, "exit_ok"),
             .failure = null,
         };
     }
@@ -245,9 +246,9 @@ pub const ExecutorClient = struct {
 
         return .{
             .content = "",
-            .token_count = getIntField(result, "token_count"),
-            .wall_seconds = getIntField(result, "wall_seconds"),
-            .exit_ok = getBoolField(result, "exit_ok"),
+            .token_count = json.getIntOrZero(result, "token_count"),
+            .wall_seconds = json.getIntOrZero(result, "wall_seconds"),
+            .exit_ok = json.getBool(result, "exit_ok"),
             .failure = null,
         };
     }
@@ -279,33 +280,6 @@ pub const ExecutorClient = struct {
     }
 };
 
-fn getStringField(obj: std.json.Value, key: []const u8) ?[]const u8 {
-    if (obj != .object) return null;
-    const val = obj.object.get(key) orelse return null;
-    return switch (val) {
-        .string => |s| s,
-        else => null,
-    };
-}
-
-fn getIntField(obj: std.json.Value, key: []const u8) u64 {
-    if (obj != .object) return 0;
-    const val = obj.object.get(key) orelse return 0;
-    return switch (val) {
-        .integer => |i| @intCast(@max(0, i)),
-        else => 0,
-    };
-}
-
-fn getBoolField(obj: std.json.Value, key: []const u8) bool {
-    if (obj != .object) return false;
-    const val = obj.object.get(key) orelse return false;
-    return switch (val) {
-        .bool => |b| b,
-        else => false,
-    };
-}
-
 // ── Tests ────────────────────────────────────────────────────────────────
 
 test "classifyError maps all known error codes" {
@@ -321,51 +295,6 @@ test "classifyError falls back to executor_crash for unknown codes" {
     try std.testing.expectEqual(types.FailureClass.executor_crash, classifyError(0));
     try std.testing.expectEqual(types.FailureClass.executor_crash, classifyError(-999));
     try std.testing.expectEqual(types.FailureClass.executor_crash, classifyError(42));
-}
-
-test "getStringField returns null for missing key" {
-    const alloc = std.testing.allocator;
-    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
-    defer obj.object.deinit();
-    try std.testing.expect(getStringField(obj, "missing") == null);
-}
-
-test "getIntField returns 0 for missing key" {
-    const alloc = std.testing.allocator;
-    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
-    defer obj.object.deinit();
-    try std.testing.expectEqual(@as(u64, 0), getIntField(obj, "missing"));
-}
-
-test "getBoolField returns false for missing key" {
-    const alloc = std.testing.allocator;
-    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
-    defer obj.object.deinit();
-    try std.testing.expectEqual(false, getBoolField(obj, "missing"));
-}
-
-test "getStringField returns null for non-string value" {
-    const alloc = std.testing.allocator;
-    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
-    defer obj.object.deinit();
-    try obj.object.put("key", .{ .integer = 42 });
-    try std.testing.expect(getStringField(obj, "key") == null);
-}
-
-test "getIntField returns value for integer field" {
-    const alloc = std.testing.allocator;
-    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
-    defer obj.object.deinit();
-    try obj.object.put("count", .{ .integer = 7 });
-    try std.testing.expectEqual(@as(u64, 7), getIntField(obj, "count"));
-}
-
-test "getBoolField returns value for bool field" {
-    const alloc = std.testing.allocator;
-    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
-    defer obj.object.deinit();
-    try obj.object.put("ok", .{ .bool = true });
-    try std.testing.expectEqual(true, getBoolField(obj, "ok"));
 }
 
 // ── StagePayload / AgentConfig default values ────────────────────────────
@@ -412,35 +341,3 @@ test "classifyError maps all known protocol error codes" {
     try std.testing.expectEqual(types.FailureClass.executor_crash, classifyError(protocol.ErrorCode.execution_failed));
 }
 
-// ── JSON field helpers edge cases ────────────────────────────────────────
-
-test "getStringField returns null for non-object input" {
-    try std.testing.expect(getStringField(.{ .integer = 42 }, "key") == null);
-    try std.testing.expect(getStringField(.null, "key") == null);
-    try std.testing.expect(getStringField(.{ .bool = true }, "key") == null);
-}
-
-test "getIntField returns 0 for negative integer" {
-    const alloc = std.testing.allocator;
-    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
-    defer obj.object.deinit();
-    try obj.object.put("val", .{ .integer = -5 });
-    // @max(0, -5) == 0, so @intCast yields 0.
-    try std.testing.expectEqual(@as(u64, 0), getIntField(obj, "val"));
-}
-
-test "getBoolField returns false for non-bool value" {
-    const alloc = std.testing.allocator;
-    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
-    defer obj.object.deinit();
-    try obj.object.put("flag", .{ .string = "true" });
-    try std.testing.expectEqual(false, getBoolField(obj, "flag"));
-}
-
-test "getIntField returns value for valid integer" {
-    const alloc = std.testing.allocator;
-    var obj = std.json.Value{ .object = std.json.ObjectMap.init(alloc) };
-    defer obj.object.deinit();
-    try obj.object.put("count", .{ .integer = 42 });
-    try std.testing.expectEqual(@as(u64, 42), getIntField(obj, "count"));
-}
