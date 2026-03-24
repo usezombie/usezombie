@@ -130,8 +130,8 @@ jobs:
             flyctl status --app "${APP}" || true
             echo "Fly releases:"
             flyctl releases --app "${APP}" || true
-            echo "Fly logs (no-tail):"
-            flyctl logs --app "${APP}" --no-tail || true
+            echo "Fly logs (bounded to 30s):"
+            timeout 30s flyctl logs --app "${APP}" || true
           fi
           exit "$STATUS"
         env:
@@ -166,8 +166,8 @@ jobs:
           else
             echo "jq unavailable; skipping per-machine status output"
           fi
-          echo "Fly app logs (no-tail):"
-          flyctl logs --app "${APP}" --no-tail || true
+          echo "Fly app logs (bounded to 30s):"
+          timeout 30s flyctl logs --app "${APP}" || true
           exit 1
         env:
           FLY_API_TOKEN: ${{ env.FLY_API_TOKEN }}
