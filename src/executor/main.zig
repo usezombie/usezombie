@@ -129,6 +129,8 @@ test {
     _ = @import("network.zig");
     _ = @import("executor_metrics.zig");
     _ = @import("client.zig");
+    _ = @import("runner.zig");
     _ = @import("integration_test.zig");
     _ = @import("crash_test.zig");
+    _ = @import("runner_test.zig");
 }

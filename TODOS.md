@@ -132,15 +132,9 @@ picking it up in 3 months understands the motivation and where to start.
 
 ## M12_003: Executor NullClaw Invocation — Dynamic Agent Execution
 
-**What:** Wire real NullClaw invocation into the executor sidecar. Currently `StartStage` returns a placeholder — the executor accepts RPCs without executing anything.
-**Why:** Without NullClaw invocation, the entire sidecar architecture is pointless. No process isolation, no sandbox enforcement, no blast radius reduction.
-**Pros:** Completes the executor runtime boundary. Enables dynamic agent execution in a sandboxed sidecar process.
-**Cons:** Requires protocol expansion (StartStage payload), runner module, and worker pipeline switch. Touches 4-5 files.
-**Context:** M12_002 delivered the executor API, transport, sessions, lease, metrics, and sandbox stubs. M12_003 fills the gap: real execution. The executor must be agent-agnostic — no hardcoded roles. It receives a NullClaw config + tools + message and runs it. Worker falls back to in-process execution when executor is not configured (macOS dev).
-**Tracked in:** `docs/spec/v1/M12_003_EXECUTOR_NULLCLAW_INVOCATION.md`
-**Effort:** L
-**Priority:** P0
-**Depends on:** M12_002 (DONE)
+**Status:** DONE
+**Implemented in:** M12_003 — `src/executor/runner.zig`, handler.zig StartStage wiring, client.zig payload extension, worker_stage_executor.zig dispatch switch, executor_metrics.zig stage counters/histogram, error codes UZ-EXEC-012/013/014.
+**Note:** This TODO is closed. Runner module bridges handler to NullClaw, executor is agent-agnostic, worker falls back to in-process when executor unavailable.
 
 ---
 
@@ -201,6 +195,21 @@ picking it up in 3 months understands the motivation and where to start.
 **Effort:** S (config only)
 **Priority:** P2
 **Depends on:** M7_001 green (Fly.io deploy pipeline green)
+
+---
+
+## M12_003 Follow-On: Audit for Hardcoded echo/scout/warden Assumptions
+
+**Status:** DONE
+**Implemented in:** M12_003 — executor dispatch is agent-agnostic (no actor-specific tool building), `resolveSystemPrompt` uses binding.kind to select prompt files (matches existing `runByRole` pattern). Custom skills get `""` — custom runners handle their own prompts. No echo/scout/warden hardcodes in executor or dispatch path.
+**Note:** `PromptFiles` struct still has 3 fixed fields (echo/scout/warden) — this is the prompt file loading mechanism, not an agent restriction. Dynamic prompt loading via SkillBinding.system_prompt is a future enhancement tracked in profile evolution.
+
+---
+
+## M12_003 Follow-On: Audit for Hardcoded Strings in Database Tables
+
+**Status:** DONE
+**Implemented in:** M12_003 — replaced hardcoded `'orchestrator'`, `'runtime_stage'`, `'runtime_summary'`, `'stage_completed'` SQL literals with named constants in `billing_runtime.zig` (LEDGER_SOURCE_RUNTIME_STAGE, LEDGER_SOURCE_RUNTIME_SUMMARY, LEDGER_EVENT_STAGE_COMPLETED, LEDGER_ACTOR_ORCHESTRATOR) and parameterized queries ($N placeholders). Fixed `retry.zig` to use the constant instead of `'orchestrator'` literal. DB schema uses TEXT columns for actor/role fields — no ENUM or CHECK constraints that restrict to static values.
 
 ---
 
