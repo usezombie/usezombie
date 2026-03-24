@@ -11,6 +11,7 @@ paths = [
 description = "Ignore deterministic JWT fixtures in jwks unit tests"
 paths = [
   '''(^|/)src/auth/jwks_test\.zig$''',
+  '''(^|/)src/http/rbac_http_integration_test\.zig$''',
 ]
 
 [[allowlists]]

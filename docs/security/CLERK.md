@@ -41,7 +41,7 @@ sequenceDiagram
     Z->>Z: Verify RS256 signature
     Z->>Z: Parse claims (sub, iss, aud, exp)
     Z->>Z: Check issuer, audience, expiry
-    Z->>Z: Normalize provider claims (tenant_id, workspace_id, org_id, aud, scopes)
+    Z->>Z: Normalize provider claims (tenant_id, workspace_id, org_id, role, aud, scopes)
     Z->>Z: Authorize workspace via tenant_id
     Z-->>C: 200 OK / 401 Unauthorized
 ```
@@ -55,7 +55,7 @@ Step-by-step:
 5. Verify RS256 signature against JWKS public key
 6. Parse standard claims: `sub`, `iss`, `aud`, `exp`
 7. Check issuer match, audience match, token not expired
-8. Normalize provider claims into a canonical identity contract: `tenant_id`, `workspace_id`, `org_id`, `audience`, `scopes`
+8. Normalize provider claims into a canonical identity contract: `tenant_id`, `workspace_id`, `org_id`, `role`, `audience`, `scopes`
 9. Authorize workspace access: query DB for workspace ownership by `tenant_id`
 
 ## Authentication Flow: CLI Login (signup or signin)
@@ -142,6 +142,23 @@ Auth accepts two user auth types:
 - OIDC JWT via the configured provider
 - bearer `API_KEY` for users/operators issued API keys
 
+## Role Claim Contract
+
+JWTs used against workspace control-plane endpoints must normalize a `role` claim with one of:
+
+- `user`
+- `operator`
+- `admin`
+
+Accepted source locations are provider-specific but normalize into one contract:
+
+- Clerk top-level `role`
+- Clerk `metadata.role`
+- custom OIDC top-level `role`
+- custom OIDC nested or namespaced `role`
+
+Server-side authorization consumes the normalized value and rejects unknown roles. API-key auth maps to `admin`.
+
 ## New User (First Signup)
 
 1. User has no account. Runs `zombiectl login`.
@@ -171,6 +188,7 @@ Auth accepts two user auth types:
 6. Missing `kid` bypass — tokens without kid are rejected before key lookup.
 7. JWKS poisoning — only RSA keys with valid kid/n/e are accepted.
 8. Session hijacking — session IDs are 96-bit CSPRNG, 5-min TTL.
+9. Role confusion via hidden CLI commands — authorization now depends on server-side role checks, not help-text visibility.
 
 ## Required Configuration
 
@@ -195,7 +213,9 @@ Auth coverage includes `jwks.zig`, `claims.zig`, `oidc.zig`, `clerk.zig`, and `s
 - JWKS parsing (truncated, empty modulus, null keys, duplicate kids)
 - RS256 edge cases (wrong modulus, empty sig, length mismatch)
 - Clerk claim normalization (metadata.tenant_id, top-level, missing, non-JSON)
+- Clerk and custom provider role normalization (`user`/`operator`/`admin`)
 - Custom provider claim normalization (nested and namespaced tenant/workspace claims, aud arrays, scope arrays)
+- Live HTTP RBAC enforcement for `harness`, `skill-secret`, and admin billing-event endpoints, including deterministic `403 INSUFFICIENT_ROLE` rejection for non-operator/non-admin tokens
 - Runtime config parsing for supported and invalid `OIDC_PROVIDER` values
 - Session store (create, poll, complete, max limit, double complete, injection payloads, independence)
 
@@ -207,3 +227,4 @@ Auth coverage includes `jwks.zig`, `claims.zig`, `oidc.zig`, `clerk.zig`, and `s
 4. New user with no tenant_id authenticates but cannot access workspace endpoints.
 5. Session complete with empty token is rejected with `INVALID_REQUEST`.
 6. Session complete without auth is rejected with `UNAUTHORIZED`.
+7. Unknown or malformed role claims are rejected before operator/admin endpoints execute.
