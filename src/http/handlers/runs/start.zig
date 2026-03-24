@@ -14,6 +14,7 @@ const profile_linkage = @import("../../../audit/profile_linkage.zig");
 const id_format = @import("../../../types/id_format.zig");
 const error_codes = @import("../../../errors/codes.zig");
 const log = std.log.scoped(.http);
+const API_ACTOR = "api";
 
 const queue_unavailable_code = error_codes.ERR_QUEUE_UNAVAILABLE;
 const queue_unavailable_message = "Queue unavailable";
@@ -101,7 +102,7 @@ pub fn handleStartRun(ctx: *common.Context, r: zap.Request) void {
         return;
     }
 
-    const billing_state = workspace_billing.reconcileWorkspaceBilling(conn, alloc, req.workspace_id, std.time.milliTimestamp(), principal.user_id orelse "api") catch |err| {
+    const billing_state = workspace_billing.reconcileWorkspaceBilling(conn, alloc, req.workspace_id, std.time.milliTimestamp(), principal.user_id orelse API_ACTOR) catch |err| {
         if (workspace_billing.errorCode(err)) |code| {
             common.errorResponse(r, .internal_server_error, code, workspace_billing.errorMessage(err) orelse "Workspace billing failure", req_id);
             return;

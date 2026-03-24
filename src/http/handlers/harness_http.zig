@@ -7,6 +7,7 @@ const harness_handlers = @import("harness_control_plane.zig");
 const common = @import("common.zig");
 
 const log = std.log.scoped(.http);
+const API_ACTOR = "api";
 
 pub const Context = common.Context;
 
@@ -42,7 +43,7 @@ pub fn handlePutHarnessSource(ctx: *Context, r: zap.Request, workspace_id: []con
     // putSource is the ingestion step that costs credits — it writes new harness
     // data into the workspace.  compile and activate operate on already-ingested
     // data, so they use the default credit_policy (.none).
-    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, principal.user_id orelse "api", .{
+    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, principal.user_id orelse API_ACTOR, .{
         .minimum_role = .operator,
         .credit_policy = .execution_required,
     }) orelse return;
@@ -100,7 +101,7 @@ pub fn handleCompileHarness(ctx: *Context, r: zap.Request, workspace_id: []const
         return;
     };
     defer ctx.pool.release(conn);
-    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, principal.user_id orelse "api", .{
+    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, principal.user_id orelse API_ACTOR, .{
         .minimum_role = .operator,
     }) orelse return;
     defer access.deinit(alloc);
@@ -177,7 +178,7 @@ pub fn handleActivateHarness(ctx: *Context, r: zap.Request, workspace_id: []cons
         return;
     };
     defer ctx.pool.release(conn);
-    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, principal.user_id orelse "api", .{
+    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, principal.user_id orelse API_ACTOR, .{
         .minimum_role = .operator,
     }) orelse return;
     defer access.deinit(alloc);
@@ -252,7 +253,7 @@ pub fn handleGetHarnessActive(ctx: *Context, r: zap.Request, workspace_id: []con
         return;
     };
     defer ctx.pool.release(conn);
-    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, principal.user_id orelse "api", .{
+    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, principal.user_id orelse API_ACTOR, .{
         .minimum_role = .operator,
     }) orelse return;
     defer access.deinit(alloc);

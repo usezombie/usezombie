@@ -44,6 +44,8 @@ const RunningServer = struct {
     session_store: auth_sessions.SessionStore,
     verifier: oidc.Verifier,
     worker_state: worker.WorkerState,
+    // Queue intentionally uninitialized — do not add tests that touch ctx.queue
+    // without initializing this field first.
     queue: queue_redis.Client = undefined,
     ctx: handler.Context,
     thread: std.Thread,
