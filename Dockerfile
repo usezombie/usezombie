@@ -4,7 +4,7 @@
 #   Local: zig build -Dtarget=x86_64-linux -Doptimize=ReleaseSafe
 #          mkdir -p dist && cp zig-out/bin/zombied dist/zombied-linux-amd64
 
-FROM debian:trixie-slim
+FROM debian:bookworm-slim
 ARG TARGETARCH=amd64
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bubblewrap \

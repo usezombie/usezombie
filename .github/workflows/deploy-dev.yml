@@ -115,14 +115,14 @@ jobs:
             GRAFANA_OTLP_ENDPOINT="$GRAFANA_OTLP_ENDPOINT" \
             GRAFANA_OTLP_INSTANCE_ID="$GRAFANA_OTLP_INSTANCE_ID" \
             GRAFANA_OTLP_API_KEY="$GRAFANA_OTLP_API_KEY" \
-            --app ${{ vars.FLY_APP_DEV }} --stage
+            --app "${{ vars.FLY_APP_DEV }}" --stage
         env:
           FLY_API_TOKEN: ${{ env.FLY_API_TOKEN }}
 
       - name: Deploy zombied-dev
         run: |
           set +e
-          flyctl deploy --app ${{ vars.FLY_APP_DEV }} --image ghcr.io/usezombie/zombied:dev-latest --config deploy/fly/zombied-dev/fly.toml --wait-timeout 120
+          flyctl deploy --app "${{ vars.FLY_APP_DEV }}" --image ghcr.io/usezombie/zombied:dev-latest --config deploy/fly/zombied-dev/fly.toml --wait-timeout 120
           STATUS=$?
           if [ "$STATUS" -ne 0 ]; then
             APP="${{ vars.FLY_APP_DEV }}"
