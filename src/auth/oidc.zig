@@ -34,6 +34,7 @@ pub const Principal = struct {
     tenant_id: ?[]u8,
     org_id: ?[]u8,
     workspace_id: ?[]u8,
+    role: ?[]u8,
     audience: ?[]u8,
     scopes: ?[]u8,
 };
@@ -94,6 +95,7 @@ pub const Verifier = struct {
             .tenant_id = normalized.tenant_id,
             .org_id = normalized.org_id,
             .workspace_id = normalized.workspace_id,
+            .role = normalized.role,
             .audience = normalized.audience,
             .scopes = normalized.scopes,
         };
@@ -129,6 +131,7 @@ test "verifyAuthorization happy path via vendor-neutral oidc facade" {
             if (principal.tenant_id) |v| std.testing.allocator.free(v);
             if (principal.org_id) |v| std.testing.allocator.free(v);
             if (principal.workspace_id) |v| std.testing.allocator.free(v);
+            if (principal.role) |v| std.testing.allocator.free(v);
             if (principal.audience) |v| std.testing.allocator.free(v);
             if (principal.scopes) |v| std.testing.allocator.free(v);
         }
@@ -159,4 +162,10 @@ test "parseProvider accepts supported adapters" {
 
 test "parseProvider rejects invalid provider" {
     try std.testing.expectError(ParseProviderError.InvalidProvider, parseProvider("not-a-provider"));
+}
+
+test "parseProvider is case-insensitive and supportedProviderList is stable" {
+    try std.testing.expectEqual(Provider.clerk, try parseProvider("CLERK"));
+    try std.testing.expectEqual(Provider.custom, try parseProvider("Custom"));
+    try std.testing.expectEqualStrings("clerk, custom", supportedProviderList());
 }

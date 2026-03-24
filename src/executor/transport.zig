@@ -175,11 +175,22 @@ pub const Client = struct {
     }
 };
 
+var test_socket_counter = std.atomic.Value(u32).init(0);
+
+fn makeTestSocketPath(alloc: std.mem.Allocator, label: []const u8) ![]u8 {
+    const suffix = test_socket_counter.fetchAdd(1, .acq_rel);
+    const stamp: u64 = @intCast(@max(std.time.nanoTimestamp(), 0));
+    return std.fmt.allocPrint(alloc, "/tmp/zombie-{s}-{d}-{d}.sock", .{ label, stamp, suffix });
+}
+
 test "Server and Client communicate over Unix socket" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
     const alloc = std.testing.allocator;
-    const path = "/tmp/zombie-executor-test.sock";
+    const path = try makeTestSocketPath(alloc, "executor-test");
+    defer alloc.free(path);
+    const connect_retry_sleep_ms = 20;
+    const connect_retry_count = 50;
 
     const echo_handler = struct {
         fn handle(a: std.mem.Allocator, payload: []const u8) anyerror![]u8 {
@@ -192,11 +203,23 @@ test "Server and Client communicate over Unix socket" {
     defer server.stop();
 
     const server_thread = try std.Thread.spawn(.{}, Server.serve, .{&server});
-
-    std.Thread.sleep(50 * std.time.ns_per_ms);
+    defer server_thread.join();
 
     var client = Client.init(alloc, path);
-    try client.connect();
+    var connected = false;
+    var retry_index: usize = 0;
+    while (retry_index < connect_retry_count) : (retry_index += 1) {
+        client.connect() catch |err| switch (err) {
+            ConnectionError.SocketConnectFailed => {
+                std.Thread.sleep(connect_retry_sleep_ms * std.time.ns_per_ms);
+                continue;
+            },
+            else => return err,
+        };
+        connected = true;
+        break;
+    }
+    if (!connected) return error.SocketConnectFailed;
     defer client.close();
 
     const sock = client.fd.?;
@@ -209,5 +232,35 @@ test "Server and Client communicate over Unix socket" {
 
     client.close();
     server.stop();
-    server_thread.join();
+}
+
+test "Client.sendRequest rejects use before connect" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const path = try makeTestSocketPath(std.testing.allocator, "executor-unconnected");
+    defer std.testing.allocator.free(path);
+
+    var client = Client.init(std.testing.allocator, path);
+    try std.testing.expectError(error.ConnectionClosed, client.sendRequest(1, "ping", null));
+}
+
+test "Server.stop unblocks idle serve loop without leaked listener" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const echo_handler = struct {
+        fn handle(a: std.mem.Allocator, payload: []const u8) anyerror![]u8 {
+            return a.dupe(u8, payload);
+        }
+    }.handle;
+
+    const path = try makeTestSocketPath(std.testing.allocator, "executor-stop-test");
+    defer std.testing.allocator.free(path);
+
+    var server = Server.init(std.testing.allocator, path, echo_handler);
+    try server.bind();
+    const thread = try std.Thread.spawn(.{}, Server.serve, .{&server});
+    std.Thread.sleep(30 * std.time.ns_per_ms);
+    server.stop();
+    thread.join();
+    try std.testing.expect(server.listener == null);
 }

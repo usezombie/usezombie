@@ -5,8 +5,12 @@ const posthog_events = @import("../../observability/posthog_events.zig");
 const obs_log = @import("../../observability/logging.zig");
 const error_codes = @import("../../errors/codes.zig");
 const common = @import("common.zig");
+const workspace_guards = @import("../workspace_guards.zig");
 
 const log = std.log.scoped(.http);
+const API_ACTOR = "api";
+const ERR_REQUEST_BODY_REQUIRED = "Request body required";
+const ERR_MALFORMED_JSON = "Malformed JSON";
 
 fn parseBillingLifecycleEvent(raw: []const u8) ?workspace_billing.BillingLifecycleEvent {
     if (std.ascii.eqlIgnoreCase(raw, "PAYMENT_FAILED")) return .payment_failed;
@@ -31,11 +35,11 @@ pub fn handleUpgradeWorkspaceToScale(ctx: *common.Context, r: zap.Request, works
     };
 
     const body = r.body orelse {
-        common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, "Request body required", req_id);
+        common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, ERR_REQUEST_BODY_REQUIRED, req_id);
         return;
     };
     const parsed = std.json.parseFromSlice(Req, alloc, body, .{}) catch {
-        common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, "Malformed JSON", req_id);
+        common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, ERR_MALFORMED_JSON, req_id);
         return;
     };
     defer parsed.deinit();
@@ -46,16 +50,17 @@ pub fn handleUpgradeWorkspaceToScale(ctx: *common.Context, r: zap.Request, works
     };
     defer ctx.pool.release(conn);
 
-    if (!common.authorizeWorkspaceAndSetTenantContext(conn, principal, workspace_id)) {
-        common.errorResponse(r, .forbidden, error_codes.ERR_FORBIDDEN, "Workspace access denied", req_id);
-        return;
-    }
+    const actor = principal.user_id orelse API_ACTOR;
+    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, actor, .{
+        .minimum_role = .operator,
+    }) orelse return;
+    defer access.deinit(alloc);
 
     log.debug("billing.upgrade_request workspace_id={s}", .{workspace_id});
 
     const upgraded = workspace_billing.upgradeWorkspaceToScale(conn, alloc, workspace_id, .{
         .subscription_id = parsed.value.subscription_id,
-        .actor = principal.user_id orelse "api",
+        .actor = actor,
     }) catch |err| switch (err) {
         error.InvalidSubscriptionId => {
             posthog_events.trackApiErrorWithContext(ctx.posthog, principal.user_id orelse "", error_codes.ERR_BILLING_INVALID_SUBSCRIPTION_ID, "subscription_id is required", workspace_id, req_id);
@@ -100,12 +105,12 @@ pub fn handleSetWorkspaceScoringConfig(ctx: *common.Context, r: zap.Request, wor
     };
 
     const body = r.body orelse {
-        common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, "Request body required", req_id);
+        common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, ERR_REQUEST_BODY_REQUIRED, req_id);
         return;
     };
     if (!common.checkBodySize(r, body, req_id)) return;
     const parsed = std.json.parseFromSlice(Req, alloc, body, .{}) catch {
-        common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, "Malformed JSON", req_id);
+        common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, ERR_MALFORMED_JSON, req_id);
         return;
     };
     defer parsed.deinit();
@@ -123,10 +128,11 @@ pub fn handleSetWorkspaceScoringConfig(ctx: *common.Context, r: zap.Request, wor
     };
     defer ctx.pool.release(conn);
 
-    if (!common.authorizeWorkspaceAndSetTenantContext(conn, principal, workspace_id)) {
-        common.errorResponse(r, .forbidden, error_codes.ERR_FORBIDDEN, "Workspace access denied", req_id);
-        return;
-    }
+    const actor = principal.user_id orelse API_ACTOR;
+    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, actor, .{
+        .minimum_role = .operator,
+    }) orelse return;
+    defer access.deinit(alloc);
 
     var q = conn.query(
         \\UPDATE workspace_entitlements
@@ -179,11 +185,11 @@ pub fn handleApplyWorkspaceBillingEvent(ctx: *common.Context, r: zap.Request, wo
     };
 
     const body = r.body orelse {
-        common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, "Request body required", req_id);
+        common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, ERR_REQUEST_BODY_REQUIRED, req_id);
         return;
     };
     const parsed = std.json.parseFromSlice(Req, alloc, body, .{}) catch {
-        common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, "Malformed JSON", req_id);
+        common.errorResponse(r, .bad_request, error_codes.ERR_INVALID_REQUEST, ERR_MALFORMED_JSON, req_id);
         return;
     };
     defer parsed.deinit();
@@ -199,17 +205,18 @@ pub fn handleApplyWorkspaceBillingEvent(ctx: *common.Context, r: zap.Request, wo
     };
     defer ctx.pool.release(conn);
 
-    if (!common.authorizeWorkspaceAndSetTenantContext(conn, principal, workspace_id)) {
-        common.errorResponse(r, .forbidden, error_codes.ERR_FORBIDDEN, "Workspace access denied", req_id);
-        return;
-    }
+    const actor = principal.user_id orelse API_ACTOR;
+    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, actor, .{
+        .minimum_role = .admin,
+    }) orelse return;
+    defer access.deinit(alloc);
 
     log.debug("billing.apply_event workspace_id={s} event_type={s}", .{ workspace_id, parsed.value.event_type });
 
     const state = workspace_billing.applyBillingLifecycleEvent(conn, alloc, workspace_id, .{
         .event = event,
         .reason = parsed.value.reason,
-        .actor = principal.user_id orelse "api",
+        .actor = actor,
     }) catch |err| {
         if (workspace_billing.errorCode(err)) |code| {
             posthog_events.trackApiErrorWithContext(ctx.posthog, principal.user_id orelse "", code, workspace_billing.errorMessage(err) orelse "Workspace billing failure", workspace_id, req_id);

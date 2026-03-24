@@ -40,6 +40,7 @@ pub fn handleListAgentProposals(ctx: *common.Context, r: zap.Request, agent_id: 
         common.errorResponse(r, .forbidden, error_codes.ERR_FORBIDDEN, "Workspace access denied", req_id);
         return;
     }
+    if (!common.requireRole(r, req_id, principal, .operator)) return;
 
     log.debug("agent.list_proposals agent_id={s}", .{agent_id});
 
@@ -99,6 +100,7 @@ pub fn handleGetAgentImprovementReport(ctx: *common.Context, r: zap.Request, age
         common.errorResponse(r, .forbidden, error_codes.ERR_FORBIDDEN, "Workspace access denied", req_id);
         return;
     }
+    if (!common.requireRole(r, req_id, principal, .operator)) return;
 
     log.debug("agent.get_improvement_report agent_id={s}", .{agent_id});
 
@@ -164,6 +166,7 @@ pub fn handleRevertAgentHarnessChange(ctx: *common.Context, r: zap.Request, agen
         common.errorResponse(r, .forbidden, error_codes.ERR_FORBIDDEN, "Workspace access denied", req_id);
         return;
     }
+    if (!common.requireRole(r, req_id, principal, .operator)) return;
 
     const operator_identity = principal.user_id orelse "api";
     log.debug("agent.revert_harness_change agent_id={s} change_id={s}", .{ agent_id, change_id });
@@ -236,6 +239,7 @@ fn handleManualProposalDecision(
         common.errorResponse(r, .forbidden, error_codes.ERR_FORBIDDEN, "Workspace access denied", req_id);
         return;
     }
+    if (!common.requireRole(r, req_id, principal, .operator)) return;
 
     log.debug("agent.proposal_decision agent_id={s} proposal_id={s} action={s}", .{ agent_id, proposal_id, @tagName(action) });
 

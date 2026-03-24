@@ -13,6 +13,7 @@ const trace_ctx = @import("../../observability/trace.zig");
 const db = @import("../../db/pool.zig");
 const error_codes = @import("../../errors/codes.zig");
 const id_format = @import("../../types/id_format.zig");
+const rbac = @import("../rbac.zig");
 
 pub const TraceContext = trace_ctx.TraceContext;
 
@@ -51,9 +52,11 @@ pub const AuthMode = enum {
     api_key,
     jwt_oidc,
 };
+pub const AuthRole = rbac.AuthRole;
 
 pub const AuthPrincipal = struct {
     mode: AuthMode,
+    role: AuthRole = .user,
     user_id: ?[]const u8 = null,
     tenant_id: ?[]const u8 = null,
     workspace_scope_id: ?[]const u8 = null,
@@ -157,6 +160,7 @@ fn authenticateApiKey(provided: []const u8, ctx: *Context) AuthError!AuthPrincip
     if (!matchApiKey(provided, ctx.api_keys)) return AuthError.Unauthorized;
     return .{
         .mode = .api_key,
+        .role = .admin,
         .user_id = null,
         .tenant_id = null,
         .workspace_scope_id = null,
@@ -185,8 +189,10 @@ pub fn authenticate(alloc: std.mem.Allocator, r: zap.Request, ctx: *Context) Aut
         if (principal.workspace_id) |workspace_id| {
             if (!id_format.isSupportedWorkspaceId(workspace_id)) return AuthError.Unauthorized;
         }
+        const role = if (principal.role) |raw| rbac.parseAuthRole(raw) orelse return AuthError.Unauthorized else AuthRole.user;
         return .{
             .mode = .jwt_oidc,
+            .role = role,
             .user_id = principal.subject,
             .tenant_id = principal.tenant_id,
             .workspace_scope_id = principal.workspace_id,
@@ -234,6 +240,14 @@ pub fn writeAuthErrorWithTracking(r: zap.Request, req_id: []const u8, err: AuthE
         AuthError.Unauthorized => errorResponse(r, .unauthorized, error_codes.ERR_UNAUTHORIZED, "Invalid or missing token", req_id),
         AuthError.AuthServiceUnavailable => errorResponse(r, .service_unavailable, error_codes.ERR_AUTH_UNAVAILABLE, "Authentication service unavailable", req_id),
     }
+}
+
+pub fn requireRole(r: zap.Request, req_id: []const u8, principal: AuthPrincipal, required: AuthRole) bool {
+    if (principal.role.allows(required)) return true;
+    var msg_buf: [64]u8 = undefined;
+    const message = std.fmt.bufPrint(&msg_buf, "{s} role required", .{required.label()}) catch "Insufficient role";
+    errorResponse(r, .forbidden, error_codes.ERR_INSUFFICIENT_ROLE, message, req_id);
+    return false;
 }
 
 pub fn mapOidcVerifyError(err: anyerror) AuthError {

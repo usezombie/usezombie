@@ -9,6 +9,7 @@ pub const IdentityClaims = struct {
     tenant_id: ?[]u8,
     org_id: ?[]u8,
     workspace_id: ?[]u8,
+    role: ?[]u8,
     audience: ?[]u8,
     scopes: ?[]u8,
 };
@@ -25,8 +26,16 @@ const CLAIM_SCOPE = "scope";
 const CLAIM_SCOPES = "scopes";
 const CLAIM_SCP = "scp";
 const CLAIM_AUD = "aud";
+const CLAIM_ROLE = "role";
 const NAMESPACE_DEV = "https://usezombie.dev/";
 const NAMESPACE_PROD = "https://usezombie.com/";
+
+fn normalizeSupportedRole(raw: []const u8) ?[]const u8 {
+    if (std.ascii.eqlIgnoreCase(raw, "user")) return "user";
+    if (std.ascii.eqlIgnoreCase(raw, "operator")) return "operator";
+    if (std.ascii.eqlIgnoreCase(raw, "admin")) return "admin";
+    return null;
+}
 
 /// Extract Clerk-specific claims from a verified JWT payload.
 /// Looks for `org_id` at top level and `tenant_id`/`workspace_id`
@@ -46,6 +55,7 @@ pub fn extractClerkClaims(alloc: std.mem.Allocator, claims_json: []const u8) !Cl
         .tenant_id = tenant_id,
         .org_id = org_id,
         .workspace_id = getClerkWorkspaceId(parsed.value.object),
+        .role = getClerkRole(parsed.value.object),
         .audience = getAudience(parsed.value.object),
         .scopes = try getScopesOwned(alloc, parsed.value.object),
     });
@@ -68,6 +78,7 @@ pub fn extractCustomClaims(alloc: std.mem.Allocator, claims_json: []const u8) !C
         .tenant_id = tenant_id,
         .org_id = org_id,
         .workspace_id = getCustomWorkspaceId(parsed.value.object),
+        .role = getCustomRole(parsed.value.object),
         .audience = getAudience(parsed.value.object),
         .scopes = try getScopesOwned(alloc, parsed.value.object),
     });
@@ -87,6 +98,7 @@ fn duplicateClaims(alloc: std.mem.Allocator, view: struct {
     tenant_id: ?[]const u8,
     org_id: ?[]const u8,
     workspace_id: ?[]const u8,
+    role: ?[]const u8,
     audience: ?[]const u8,
     scopes: ?[]u8,
 }) !IdentityClaims {
@@ -96,6 +108,7 @@ fn duplicateClaims(alloc: std.mem.Allocator, view: struct {
         .tenant_id = if (view.tenant_id) |v| try alloc.dupe(u8, v) else null,
         .org_id = if (view.org_id) |v| try alloc.dupe(u8, v) else null,
         .workspace_id = if (view.workspace_id) |v| try alloc.dupe(u8, v) else null,
+        .role = if (view.role) |v| try alloc.dupe(u8, v) else null,
         .audience = if (view.audience) |v| try alloc.dupe(u8, v) else null,
         .scopes = view.scopes,
     };
@@ -121,6 +134,19 @@ fn getClerkWorkspaceId(obj: std.json.ObjectMap) ?[]const u8 {
     if (metadata != .object) return null;
     if (jwks.getString(metadata.object, CLAIM_WORKSPACE_ID)) |v| return v;
     return jwks.getString(metadata.object, CLAIM_WORKSPACE_CAMEL);
+}
+
+fn getClerkRole(obj: std.json.ObjectMap) ?[]const u8 {
+    if (jwks.getString(obj, CLAIM_ROLE)) |v| {
+        if (normalizeSupportedRole(v)) |role| return role;
+    }
+
+    const metadata = obj.get("metadata") orelse return null;
+    if (metadata != .object) return null;
+    if (jwks.getString(metadata.object, CLAIM_ROLE)) |v| {
+        if (normalizeSupportedRole(v)) |role| return role;
+    }
+    return null;
 }
 
 fn getCustomTenantId(obj: std.json.ObjectMap) ?[]const u8 {
@@ -151,6 +177,14 @@ fn getCustomWorkspaceId(obj: std.json.ObjectMap) ?[]const u8 {
     }, &.{ "custom_claims", "metadata", "app_metadata" });
 }
 
+fn getCustomRole(obj: std.json.ObjectMap) ?[]const u8 {
+    return getFirstSupportedRole(obj, &.{
+        CLAIM_ROLE,
+        NAMESPACE_DEV ++ CLAIM_ROLE,
+        NAMESPACE_PROD ++ CLAIM_ROLE,
+    }, &.{ "custom_claims", "metadata", "app_metadata" });
+}
+
 fn getFirstValue(
     obj: std.json.ObjectMap,
     direct_keys: []const []const u8,
@@ -164,6 +198,28 @@ fn getFirstValue(
         if (child != .object) continue;
         for (direct_keys) |key| {
             if (jwks.getString(child.object, key)) |v| return v;
+        }
+    }
+    return null;
+}
+
+fn getFirstSupportedRole(
+    obj: std.json.ObjectMap,
+    direct_keys: []const []const u8,
+    nested_objects: []const []const u8,
+) ?[]const u8 {
+    for (direct_keys) |key| {
+        if (jwks.getString(obj, key)) |v| {
+            if (normalizeSupportedRole(v)) |role| return role;
+        }
+    }
+    for (nested_objects) |nested| {
+        const child = obj.get(nested) orelse continue;
+        if (child != .object) continue;
+        for (direct_keys) |key| {
+            if (jwks.getString(child.object, key)) |v| {
+                if (normalizeSupportedRole(v)) |role| return role;
+            }
         }
     }
     return null;
@@ -208,12 +264,14 @@ test "extractClerkClaims from metadata.tenant_id" {
         if (result.tenant_id) |v| std.testing.allocator.free(v);
         if (result.org_id) |v| std.testing.allocator.free(v);
         if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
         if (result.audience) |v| std.testing.allocator.free(v);
         if (result.scopes) |v| std.testing.allocator.free(v);
     }
     try std.testing.expectEqualStrings("tenant_a", result.tenant_id.?);
     try std.testing.expectEqualStrings("org_1", result.org_id.?);
     try std.testing.expectEqualStrings("ws_a", result.workspace_id.?);
+    try std.testing.expect(result.role == null);
     try std.testing.expectEqualStrings("https://api.usezombie.com", result.audience.?);
     try std.testing.expectEqualStrings("runs:read runs:write", result.scopes.?);
 }
@@ -227,12 +285,14 @@ test "extractClerkClaims from top-level tenant_id" {
         if (result.tenant_id) |v| std.testing.allocator.free(v);
         if (result.org_id) |v| std.testing.allocator.free(v);
         if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
         if (result.audience) |v| std.testing.allocator.free(v);
         if (result.scopes) |v| std.testing.allocator.free(v);
     }
     try std.testing.expectEqualStrings("tenant_b", result.tenant_id.?);
     try std.testing.expectEqualStrings("ws_b", result.workspace_id.?);
     try std.testing.expect(result.org_id == null);
+    try std.testing.expect(result.role == null);
     try std.testing.expect(result.audience == null);
     try std.testing.expect(result.scopes == null);
 }
@@ -246,12 +306,14 @@ test "extractClerkClaims with no tenant or org" {
         if (result.tenant_id) |v| std.testing.allocator.free(v);
         if (result.org_id) |v| std.testing.allocator.free(v);
         if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
         if (result.audience) |v| std.testing.allocator.free(v);
         if (result.scopes) |v| std.testing.allocator.free(v);
     }
     try std.testing.expect(result.tenant_id == null);
     try std.testing.expect(result.org_id == null);
     try std.testing.expect(result.workspace_id == null);
+    try std.testing.expect(result.role == null);
     try std.testing.expect(result.audience == null);
     try std.testing.expect(result.scopes == null);
 }
@@ -265,12 +327,14 @@ test "extractCustomClaims normalizes namespaced claims and aud array" {
         if (result.tenant_id) |v| std.testing.allocator.free(v);
         if (result.org_id) |v| std.testing.allocator.free(v);
         if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
         if (result.audience) |v| std.testing.allocator.free(v);
         if (result.scopes) |v| std.testing.allocator.free(v);
     }
     try std.testing.expectEqualStrings("tenant_custom_ns", result.tenant_id.?);
     try std.testing.expectEqualStrings("org_custom_ns", result.org_id.?);
     try std.testing.expectEqualStrings("ws_custom_ns", result.workspace_id.?);
+    try std.testing.expect(result.role == null);
     try std.testing.expectEqualStrings("https://api.usezombie.com", result.audience.?);
     try std.testing.expectEqualStrings("runs:read runs:write", result.scopes.?);
 }
@@ -284,14 +348,114 @@ test "extractCustomClaims normalizes nested custom_claims payload" {
         if (result.tenant_id) |v| std.testing.allocator.free(v);
         if (result.org_id) |v| std.testing.allocator.free(v);
         if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
         if (result.audience) |v| std.testing.allocator.free(v);
         if (result.scopes) |v| std.testing.allocator.free(v);
     }
     try std.testing.expectEqualStrings("tenant_custom", result.tenant_id.?);
     try std.testing.expectEqualStrings("org_custom", result.org_id.?);
     try std.testing.expectEqualStrings("ws_custom", result.workspace_id.?);
+    try std.testing.expect(result.role == null);
     try std.testing.expectEqualStrings("https://api.usezombie.com", result.audience.?);
     try std.testing.expectEqualStrings("runs:read workspace:pause", result.scopes.?);
+}
+
+test "extractClerkClaims reads role from metadata" {
+    const json =
+        \\{"sub":"user_4","iss":"https://clerk.example.com","exp":9999999999,"metadata":{"tenant_id":"tenant_role","workspace_id":"ws_role","role":"operator"}}
+    ;
+    const result = try extractClerkClaims(std.testing.allocator, json);
+    defer {
+        if (result.tenant_id) |v| std.testing.allocator.free(v);
+        if (result.org_id) |v| std.testing.allocator.free(v);
+        if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
+        if (result.audience) |v| std.testing.allocator.free(v);
+        if (result.scopes) |v| std.testing.allocator.free(v);
+    }
+    try std.testing.expectEqualStrings("operator", result.role.?);
+}
+
+test "extractCustomClaims reads top-level or nested role claims" {
+    const json =
+        \\{"sub":"user_5","iss":"https://idp.example.com","custom_claims":{"tenant_id":"tenant_role","workspaceId":"ws_role","role":"admin"}}
+    ;
+    const result = try extractCustomClaims(std.testing.allocator, json);
+    defer {
+        if (result.tenant_id) |v| std.testing.allocator.free(v);
+        if (result.org_id) |v| std.testing.allocator.free(v);
+        if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
+        if (result.audience) |v| std.testing.allocator.free(v);
+        if (result.scopes) |v| std.testing.allocator.free(v);
+    }
+    try std.testing.expectEqualStrings("admin", result.role.?);
+}
+
+test "extractClerkClaims reads top-level role and camel workspace key" {
+    const json =
+        \\{"sub":"user_6","iss":"https://clerk.example.com","exp":9999999999,"role":"admin","workspaceId":"ws_camel"}
+    ;
+    const result = try extractClerkClaims(std.testing.allocator, json);
+    defer {
+        if (result.tenant_id) |v| std.testing.allocator.free(v);
+        if (result.org_id) |v| std.testing.allocator.free(v);
+        if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
+        if (result.audience) |v| std.testing.allocator.free(v);
+        if (result.scopes) |v| std.testing.allocator.free(v);
+    }
+    try std.testing.expectEqualStrings("admin", result.role.?);
+    try std.testing.expectEqualStrings("ws_camel", result.workspace_id.?);
+}
+
+test "extractCustomClaims joins only string scopes from mixed arrays" {
+    const json =
+        \\{"sub":"user_7","iss":"https://idp.example.com","scp":["runs:read",3,"workspace:pause",true],"metadata":{"https://usezombie.dev/role":"operator"}}
+    ;
+    const result = try extractCustomClaims(std.testing.allocator, json);
+    defer {
+        if (result.tenant_id) |v| std.testing.allocator.free(v);
+        if (result.org_id) |v| std.testing.allocator.free(v);
+        if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
+        if (result.audience) |v| std.testing.allocator.free(v);
+        if (result.scopes) |v| std.testing.allocator.free(v);
+    }
+    try std.testing.expectEqualStrings("operator", result.role.?);
+    try std.testing.expectEqualStrings("runs:read workspace:pause", result.scopes.?);
+}
+
+test "extractClerkClaims skips unsupported top-level role when metadata has supported fallback" {
+    const json =
+        \\{"sub":"user_8","iss":"https://clerk.example.com","exp":9999999999,"role":"member","metadata":{"role":"operator"}}
+    ;
+    const result = try extractClerkClaims(std.testing.allocator, json);
+    defer {
+        if (result.tenant_id) |v| std.testing.allocator.free(v);
+        if (result.org_id) |v| std.testing.allocator.free(v);
+        if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
+        if (result.audience) |v| std.testing.allocator.free(v);
+        if (result.scopes) |v| std.testing.allocator.free(v);
+    }
+    try std.testing.expectEqualStrings("operator", result.role.?);
+}
+
+test "extractCustomClaims skips unsupported namespaced role when nested fallback is supported" {
+    const json =
+        \\{"sub":"user_9","iss":"https://idp.example.com","https://usezombie.dev/role":"member","custom_claims":{"role":"admin"}}
+    ;
+    const result = try extractCustomClaims(std.testing.allocator, json);
+    defer {
+        if (result.tenant_id) |v| std.testing.allocator.free(v);
+        if (result.org_id) |v| std.testing.allocator.free(v);
+        if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
+        if (result.audience) |v| std.testing.allocator.free(v);
+        if (result.scopes) |v| std.testing.allocator.free(v);
+    }
+    try std.testing.expectEqualStrings("admin", result.role.?);
 }
 
 test "extractClerkClaims rejects non-JSON" {

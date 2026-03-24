@@ -284,6 +284,10 @@ pub fn handleStartRun(ctx: *common.Context, r: zap.Request) void {
         .state = final_state,
         .attempt = @as(u32, @intCast(final_attempt)),
         .run_snapshot_version = run_snapshot_version,
+        .plan_tier = billing_state.plan_tier.label(),
+        .billing_status = billing_state.billing_status.label(),
+        .credit_remaining_cents = credit.remaining_credit_cents,
+        .credit_currency = credit.currency,
         .request_id = req_id,
         .trace_id = trace_id,
     });
