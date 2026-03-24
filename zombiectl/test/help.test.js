@@ -178,6 +178,48 @@ describe("help output", () => {
     expect(output).toContain("NO_COLOR");
   });
 
+  test("--help with admin role token shows OPERATOR COMMANDS", async () => {
+    await withIsolatedStateDir(async () => {
+      const out = bufferStream();
+      const err = bufferStream();
+      const token = [
+        Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url"),
+        Buffer.from(JSON.stringify({ sub: "user_admin", role: "admin" })).toString("base64url"),
+        "sig",
+      ].join(".");
+      const code = await runCli(["--help"], {
+        stdout: out.stream,
+        stderr: err.stream,
+        env: { ZOMBIE_TOKEN: token, NO_COLOR: "1" },
+      });
+      expect(code).toBe(0);
+      const output = out.read();
+      expect(output).toContain("OPERATOR COMMANDS");
+      expect(output).toContain("workspace upgrade-scale");
+    });
+  });
+
+  test("--help with user role token does NOT show OPERATOR COMMANDS", async () => {
+    await withIsolatedStateDir(async () => {
+      const out = bufferStream();
+      const err = bufferStream();
+      const token = [
+        Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url"),
+        Buffer.from(JSON.stringify({ sub: "user_basic", role: "user" })).toString("base64url"),
+        "sig",
+      ].join(".");
+      const code = await runCli(["--help"], {
+        stdout: out.stream,
+        stderr: err.stream,
+        env: { ZOMBIE_TOKEN: token, NO_COLOR: "1" },
+      });
+      expect(code).toBe(0);
+      const output = out.read();
+      expect(output).not.toContain("OPERATOR COMMANDS");
+      expect(output).not.toContain("workspace upgrade-scale");
+    });
+  });
+
   test("--help shows global flags", async () => {
     const out = bufferStream();
     const err = bufferStream();

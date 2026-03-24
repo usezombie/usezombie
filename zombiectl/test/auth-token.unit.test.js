@@ -65,6 +65,22 @@ test("extractRoleFromToken returns null for null/undefined token", () => {
   assert.equal(extractRoleFromToken(undefined), null);
 });
 
+test("extractRoleFromToken reads app_metadata.role", () => {
+  assert.equal(extractRoleFromToken(makeToken({ app_metadata: { role: "operator" } })), "operator");
+  assert.equal(extractRoleFromToken(makeToken({ app_metadata: { role: "Admin" } })), "admin");
+});
+
+test("extractRoleFromToken reads namespaced metadata claims", () => {
+  assert.equal(
+    extractRoleFromToken(makeToken({ metadata: { "https://usezombie.dev/role": "operator" } })),
+    "operator",
+  );
+  assert.equal(
+    extractRoleFromToken(makeToken({ metadata: { "https://usezombie.com/role": "Admin" } })),
+    "admin",
+  );
+});
+
 test("decodeTokenPayload returns parsed payload object", () => {
   const payload = { sub: "user_1", role: "admin", iat: 1000 };
   const result = decodeTokenPayload(makeToken(payload));

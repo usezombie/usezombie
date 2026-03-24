@@ -488,6 +488,22 @@ test "extractCustomClaims rejects malformed and non-object JSON" {
     try std.testing.expectError(jwks.VerifyError.TokenMalformed, extractCustomClaims(std.testing.allocator, "null"));
 }
 
+test "extractClerkClaims returns null role when all levels have unsupported roles" {
+    const json =
+        \\{"sub":"user_10","iss":"https://clerk.example.com","exp":9999999999,"role":"member","metadata":{"role":"superuser"}}
+    ;
+    const result = try extractClerkClaims(std.testing.allocator, json);
+    defer {
+        if (result.tenant_id) |v| std.testing.allocator.free(v);
+        if (result.org_id) |v| std.testing.allocator.free(v);
+        if (result.workspace_id) |v| std.testing.allocator.free(v);
+        if (result.role) |v| std.testing.allocator.free(v);
+        if (result.audience) |v| std.testing.allocator.free(v);
+        if (result.scopes) |v| std.testing.allocator.free(v);
+    }
+    try std.testing.expect(result.role == null);
+}
+
 test "extractClerkClaims ignores unsupported role with no fallback" {
     const json =
         \\{"sub":"user_10","iss":"https://clerk.example.com","exp":9999999999,"role":"member"}

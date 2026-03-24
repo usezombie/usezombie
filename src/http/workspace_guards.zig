@@ -250,6 +250,13 @@ test "ExecutionResult holds credit and billing_state fields" {
     try std.testing.expectEqualStrings("free_v1", result.billing_state.plan_sku);
 }
 
+test "Requirement default minimum_role allows all AuthRole variants" {
+    const req = Requirement{};
+    try std.testing.expect(common.AuthRole.user.allows(req.minimum_role));
+    try std.testing.expect(common.AuthRole.operator.allows(req.minimum_role));
+    try std.testing.expect(common.AuthRole.admin.allows(req.minimum_role));
+}
+
 // Compile-time layout sanity checks
 comptime {
     // Access must be a reasonable size (two optionals wrapping structs).

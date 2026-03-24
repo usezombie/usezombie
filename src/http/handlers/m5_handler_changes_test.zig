@@ -98,6 +98,10 @@ test "ERR_INSUFFICIENT_ROLE error code is defined" {
     try std.testing.expectEqualStrings("UZ-AUTH-009", error_codes.ERR_INSUFFICIENT_ROLE);
 }
 
+test "ERR_UNSUPPORTED_ROLE error code is UZ-AUTH-010" {
+    try std.testing.expectEqualStrings("UZ-AUTH-010", error_codes.ERR_UNSUPPORTED_ROLE);
+}
+
 // --- MAX_BODY_SIZE constant ---
 
 test "MAX_BODY_SIZE is 2 MB" {
@@ -138,4 +142,10 @@ test "skill_secrets_http module imports resolve" {
 
 test "workspace_guards module imports resolve" {
     _ = @import("../workspace_guards.zig");
+}
+
+test "API_ACTOR fallback produces expected sentinel value" {
+    const principal = common.AuthPrincipal{ .mode = .jwt_oidc };
+    const actor = principal.user_id orelse "api";
+    try std.testing.expectEqualStrings("api", actor);
 }

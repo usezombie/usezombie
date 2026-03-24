@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { makeNoop, makeBufferStream, ui, WS_ID } from "./helpers.js";
 import { createCoreHandlers } from "../src/commands/core.js";
 import { ApiError } from "../src/lib/http.js";
+import { ERR_BILLING_CREDIT_EXHAUSTED } from "../src/constants/error-codes.js";
 
 function makeDeps(overrides = {}) {
   return {
@@ -104,7 +105,7 @@ describe("commandSpecsSync", () => {
       request: async () => {
         throw new ApiError("Free plan credit exhausted. Upgrade to Scale to continue.", {
           status: 403,
-          code: "UZ-BILLING-005",
+          code: ERR_BILLING_CREDIT_EXHAUSTED,
         });
       },
     });
@@ -112,8 +113,52 @@ describe("commandSpecsSync", () => {
     const workspaces = { current_workspace_id: WS_ID, items: [] };
     const core = createCoreHandlers(ctx, workspaces, deps);
 
-    await expect(core.commandSpecsSync([])).rejects.toMatchObject({ code: "UZ-BILLING-005" });
+    await expect(core.commandSpecsSync([])).rejects.toMatchObject({ code: ERR_BILLING_CREDIT_EXHAUSTED });
     expect(err.read()).toContain("Upgrade path:");
     expect(err.read()).toContain(`--workspace-id ${WS_ID}`);
+  });
+
+  test("JSON mode error path does NOT print upgrade hint on credit exhausted", async () => {
+    const err = makeBufferStream();
+    const deps = makeDeps({
+      request: async () => {
+        throw new ApiError("Free plan credit exhausted.", {
+          status: 403,
+          code: ERR_BILLING_CREDIT_EXHAUSTED,
+        });
+      },
+    });
+    const ctx = { stdout: makeNoop(), stderr: err.stream, jsonMode: true, env: {} };
+    const workspaces = { current_workspace_id: WS_ID, items: [] };
+    const core = createCoreHandlers(ctx, workspaces, deps);
+
+    await expect(core.commandSpecsSync([])).rejects.toMatchObject({ code: ERR_BILLING_CREDIT_EXHAUSTED });
+    expect(err.read()).not.toContain("Upgrade path:");
+  });
+
+  test("negative credit_remaining_cents triggers upgrade hint", async () => {
+    const out = makeBufferStream();
+    const deps = makeDeps({
+      request: async () => ({ synced_count: 1, total_pending: 0, plan_tier: "free", credit_remaining_cents: -50, credit_currency: "USD" }),
+    });
+    const ctx = { stdout: out.stream, stderr: makeNoop(), jsonMode: false, env: {} };
+    const workspaces = { current_workspace_id: WS_ID, items: [] };
+    const core = createCoreHandlers(ctx, workspaces, deps);
+    const code = await core.commandSpecsSync([]);
+    expect(code).toBe(0);
+    expect(out.read()).toContain("Upgrade path:");
+  });
+
+  test("missing credit_remaining_cents does NOT trigger upgrade hint", async () => {
+    const out = makeBufferStream();
+    const deps = makeDeps({
+      request: async () => ({ synced_count: 1, total_pending: 0, plan_tier: "free" }),
+    });
+    const ctx = { stdout: out.stream, stderr: makeNoop(), jsonMode: false, env: {} };
+    const workspaces = { current_workspace_id: WS_ID, items: [] };
+    const core = createCoreHandlers(ctx, workspaces, deps);
+    const code = await core.commandSpecsSync([]);
+    expect(code).toBe(0);
+    expect(out.read()).not.toContain("Upgrade path:");
   });
 });
