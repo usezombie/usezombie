@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const jwks = @import("jwks.zig");
+const rbac = @import("../http/rbac.zig");
 
 const log = std.log.scoped(.auth);
 
@@ -27,14 +28,17 @@ const CLAIM_SCOPES = "scopes";
 const CLAIM_SCP = "scp";
 const CLAIM_AUD = "aud";
 const CLAIM_ROLE = "role";
+
+// JWT claim namespace prefixes — these must match the identity provider's
+// custom claim configuration (Clerk/Auth0). Not user-configurable.
 const NAMESPACE_DEV = "https://usezombie.dev/";
 const NAMESPACE_PROD = "https://usezombie.com/";
 
+/// Validate and normalize a role string using the canonical RBAC enum.
+/// Returns the canonical label or null if the role is not recognized.
 fn normalizeSupportedRole(raw: []const u8) ?[]const u8 {
-    if (std.ascii.eqlIgnoreCase(raw, "user")) return "user";
-    if (std.ascii.eqlIgnoreCase(raw, "operator")) return "operator";
-    if (std.ascii.eqlIgnoreCase(raw, "admin")) return "admin";
-    return null;
+    const role = rbac.parseAuthRole(raw) orelse return null;
+    return role.label();
 }
 
 /// Extract Clerk-specific claims from a verified JWT payload.
