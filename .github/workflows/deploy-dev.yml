@@ -121,7 +121,8 @@ jobs:
 
       - name: Deploy zombied-dev
         run: |
-          set +e
+          flyctl deploy --app "${{ vars.FLY_APP_DEV }}" --image ghcr.io/usezombie/zombied:dev-latest --config deploy/fly/zombied-dev/fly.toml --wait-timeout 120 || STATUS=$?
+          STATUS=${STATUS:-0}
           flyctl deploy --app "${{ vars.FLY_APP_DEV }}" --image ghcr.io/usezombie/zombied:dev-latest --config deploy/fly/zombied-dev/fly.toml --wait-timeout 120
           STATUS=$?
           if [ "$STATUS" -ne 0 ]; then
