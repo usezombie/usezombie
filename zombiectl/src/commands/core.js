@@ -3,6 +3,7 @@ import { commandWorkspaceUpgradeScale } from "./workspace_billing.js";
 import { queueCliAnalyticsEvent, setCliAnalyticsContext } from "../lib/analytics.js";
 import { validateRequiredId } from "../program/validate.js";
 import { ERR_BILLING_CREDIT_EXHAUSTED } from "../constants/error-codes.js";
+import { ApiError } from "../lib/http.js";
 
 function createCoreHandlers(ctx, workspaces, deps) {
   const {
@@ -308,7 +309,7 @@ function createCoreHandlers(ctx, workspaces, deps) {
         body: "{}",
       });
     } catch (err) {
-      if (!ctx.jsonMode && err instanceof Error && err.code === ERR_BILLING_CREDIT_EXHAUSTED) {
+      if (!ctx.jsonMode && err instanceof ApiError && err.code === ERR_BILLING_CREDIT_EXHAUSTED) {
         writeLine(ctx.stderr, ui.info(`Upgrade path: zombiectl workspace upgrade-scale --workspace-id ${workspaceId} --subscription-id <SUBSCRIPTION_ID>`));
       }
       throw err;
