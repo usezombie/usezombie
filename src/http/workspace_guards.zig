@@ -112,7 +112,7 @@ test "CreditPolicy has exactly two variants" {
 }
 
 test "CreditPolicy.none is the zero-value variant" {
-    try std.testing.expectEqual(@as(u0, 0), @intFromEnum(CreditPolicy.none));
+    try std.testing.expectEqual(@as(u1, 0), @intFromEnum(CreditPolicy.none));
 }
 
 test "CreditPolicy variant names match API contract" {

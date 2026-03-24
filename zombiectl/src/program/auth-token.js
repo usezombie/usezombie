@@ -27,8 +27,11 @@ function extractRoleFromToken(token) {
     payload.role,
     payload.metadata?.role,
     payload.custom_claims?.role,
+    payload.app_metadata?.role,
     payload["https://usezombie.dev/role"],
     payload["https://usezombie.com/role"],
+    payload.metadata?.["https://usezombie.dev/role"],
+    payload.metadata?.["https://usezombie.com/role"],
   ];
   for (const raw of candidates) {
     if (typeof raw !== "string") continue;
