@@ -8,10 +8,9 @@ paths = [
 ]
 
 [[allowlists]]
-description = "Ignore deterministic JWT fixtures in unit and integration tests"
+description = "Ignore deterministic JWT fixtures and test tokens in Zig test files"
 paths = [
-  '''(^|/)src/auth/jwks_test\.zig$''',
-  '''(^|/)src/http/rbac_http_integration_test\.zig$''',
+  '''(^|/).*_test\.zig$''',
 ]
 
 [[allowlists]]

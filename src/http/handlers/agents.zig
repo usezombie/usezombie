@@ -97,9 +97,7 @@ pub fn handleGetAgentImprovementReport(ctx: *common.Context, r: zap.Request, age
     defer ctx.pool.release(conn);
 
     const workspace_id = resolveAgentWorkspace(conn, alloc, agent_id, req_id, r) orelse return;
-    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, principal.user_id orelse API_ACTOR, .{
-        .minimum_role = .operator,
-    }) orelse return;
+    const access = workspace_guards.enforce(r, req_id, conn, alloc, principal, workspace_id, principal.user_id orelse API_ACTOR, .{}) orelse return;
     defer access.deinit(alloc);
 
     log.debug("agent.get_improvement_report agent_id={s}", .{agent_id});

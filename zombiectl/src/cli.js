@@ -52,8 +52,8 @@ export async function runCli(argv, io = {}) {
     return 0;
   }
 
-  const creds = await loadCredentials();
-  const workspaces = await loadWorkspaces();
+  const creds = await loadCredentials().catch(() => ({}));
+  const workspaces = await loadWorkspaces().catch(() => ({ items: [], current_workspace_id: null }));
   const resolvedToken = creds.token || env.ZOMBIE_TOKEN || null;
   const resolvedApiKey = env.API_KEY || env.ZOMBIE_API_KEY || null;
   const resolvedAuthRole = extractRoleFromToken(resolvedToken) || (resolvedApiKey ? "admin" : null);

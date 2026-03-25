@@ -7,7 +7,8 @@
 _test-integration-zombied:
 	@echo "→ [zombied] Running Zig integration tests..."
 	@mkdir -p "$(ZIG_GLOBAL_CACHE_DIR)" "$(ZIG_LOCAL_CACHE_DIR)"
-	@ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
+	@env -u HANDLER_DB_TEST_URL -u REDIS_TLS_TEST_URL -u LIVE_DB \
+	 ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
 	 ZIG_LOCAL_CACHE_DIR="$(ZIG_LOCAL_CACHE_DIR)" \
 	 zig build test -- --test-filter "integration:"
 
@@ -44,7 +45,8 @@ _test-integration-redis:
 	fi
 	@echo "→ [zombied] Running Redis integration tests (REDIS_TLS_TEST_URL is set)..."
 	@mkdir -p "$(ZIG_GLOBAL_CACHE_DIR)" "$(ZIG_LOCAL_CACHE_DIR)"
-	@ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
+	@env -u HANDLER_DB_TEST_URL -u LIVE_DB \
+	 ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
 	 ZIG_LOCAL_CACHE_DIR="$(ZIG_LOCAL_CACHE_DIR)" \
 	 REDIS_TLS_TEST_URL="$$REDIS_TLS_TEST_URL" \
 	 zig build test -- --test-filter "integration:"
@@ -52,4 +54,3 @@ _test-integration-redis:
 
 test-integration: _test-integration-zombied _test-integration-db _test-integration-redis  ## Run all integration tests (Zig + DB + Redis)
 	@echo "✓ [zombied] All integration tests passed"
-

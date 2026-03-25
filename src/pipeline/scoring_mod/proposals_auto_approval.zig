@@ -124,6 +124,8 @@ pub fn applyProposal(
     applied_by: []const u8,
     now_ms: i64,
 ) !ApplyProposalResult {
+    if (proposal_id.len == 0) return .rejected;
+
     try beginTx(conn);
     var tx_open = true;
     errdefer if (tx_open) rollbackTx(conn);

@@ -73,6 +73,10 @@ pub const Server = struct {
             }};
             const ready = std.posix.poll(&fds, 200) catch continue;
             if (ready == 0) continue; // timeout — re-check running flag
+            // Re-check running after poll returns: stop() may have closed the
+            // listener fd while poll was blocked. Calling accept() on a closed
+            // fd triggers EBADF which is unreachable in std.posix — guard here.
+            if (!self.running.load(.acquire)) break;
 
             const conn = std.posix.accept(listener, null, null, 0) catch |err| {
                 if (!self.running.load(.acquire)) break;
