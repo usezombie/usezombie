@@ -48,12 +48,18 @@ _test-integration-redis:
 	  esac; \
 	fi; \
 	if [ -z "$$redis_tls_test_url" ]; then redis_tls_test_url="$(TEST_REDIS_TLS_URL_LOCAL)"; fi; \
+	ca_cert="$$REDIS_TLS_CA_CERT_FILE"; \
+	if [ -z "$$ca_cert" ]; then \
+	  mkdir -p .tmp; \
+	  docker compose cp redis:/tls/server.crt .tmp/redis-ca.crt 2>/dev/null && ca_cert="$$(pwd)/.tmp/redis-ca.crt" || true; \
+	fi; \
 	echo "→ [zombied] Running Redis integration tests using $$redis_tls_test_url..."; \
 	mkdir -p "$(ZIG_GLOBAL_CACHE_DIR)" "$(ZIG_LOCAL_CACHE_DIR)"; \
 	env -u TEST_DATABASE_URL -u LIVE_DB \
 	  ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
 	  ZIG_LOCAL_CACHE_DIR="$(ZIG_LOCAL_CACHE_DIR)" \
 	  TEST_REDIS_TLS_URL="$$redis_tls_test_url" \
+	  REDIS_TLS_CA_CERT_FILE="$$ca_cert" \
 	  zig build test
 	@echo "✓ [zombied] Redis integration tests passed"
 
@@ -75,6 +81,11 @@ _test-integration-full:
 	  esac; \
 	fi; \
 	if [ -z "$$redis_tls_test_url" ]; then redis_tls_test_url="$(TEST_REDIS_TLS_URL_LOCAL)"; fi; \
+	ca_cert="$$REDIS_TLS_CA_CERT_FILE"; \
+	if [ -z "$$ca_cert" ]; then \
+	  mkdir -p .tmp; \
+	  docker compose cp redis:/tls/server.crt .tmp/redis-ca.crt 2>/dev/null && ca_cert="$$(pwd)/.tmp/redis-ca.crt" || true; \
+	fi; \
 	echo "→ [zombied] Auto-migrating test database..."; \
 	mkdir -p "$(ZIG_GLOBAL_CACHE_DIR)" "$(ZIG_LOCAL_CACHE_DIR)"; \
 	ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
@@ -87,6 +98,7 @@ _test-integration-full:
 	LIVE_DB=1 \
 	TEST_DATABASE_URL="$$db_url" \
 	TEST_REDIS_TLS_URL="$$redis_tls_test_url" \
+	REDIS_TLS_CA_CERT_FILE="$$ca_cert" \
 	zig build test
 	@echo "✓ [zombied] Full integration suite passed"
 
