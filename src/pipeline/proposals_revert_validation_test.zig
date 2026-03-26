@@ -96,7 +96,7 @@ test "revertHarnessChange restores previous stage_insert profile and audit log" 
     try std.testing.expectEqualStrings("operator:kishore", result.applied_by);
 
     var active_q = try db_ctx.conn.query(
-        \\SELECT config_version_id, activated_by
+        \\SELECT config_version_id::text, activated_by
         \\FROM workspace_active_config
         \\WHERE workspace_id = $1
     , .{WS_REVERT_125});
@@ -148,7 +148,7 @@ test "revertHarnessChange restores previous stage_insert profile and audit log" 
     try std.testing.expect((try config_q.next()) == null);
 
     var change_q = try db_ctx.conn.query(
-        \\SELECT field_name, old_value, new_value, applied_by, reverted_from
+        \\SELECT field_name, old_value, new_value, applied_by, reverted_from::text
         \\FROM harness_change_log
         \\WHERE change_id = $1
     , .{result.change_id});

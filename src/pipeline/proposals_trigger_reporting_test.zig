@@ -26,6 +26,7 @@ fn seedRunFixture(conn: anytype, seed: u64, workspace_id: []const u8) ![]u8 {
 }
 
 fn insertScoreFixture(conn: anytype, seed: u64, agent_id: []const u8, workspace_id: []const u8, score: i32, scored_at: i64) !void {
+    // check-pg-drain: ok — helper uses support.insertScoreWithRun, which only calls exec-backed fixture helpers
     const spec_id = try support.allocTestUuid(std.testing.allocator, 0x121300000000 + seed);
     defer std.testing.allocator.free(spec_id);
     const run_id = try support.allocTestUuid(std.testing.allocator, 0x121400000000 + seed);
@@ -62,7 +63,7 @@ test "scoreRunIfTerminal persists proposal groundwork after sustained low-score 
     }
 
     var q = try db_ctx.conn.query(
-        \\SELECT trigger_reason, proposed_changes, approval_mode, generation_status, status, config_version_id, auto_apply_at
+        \\SELECT trigger_reason, proposed_changes, approval_mode, generation_status, status, config_version_id::text, auto_apply_at
         \\FROM agent_improvement_proposals
         \\WHERE agent_id = $1
     , .{uc2.AGENT_PROP_1});
@@ -168,6 +169,7 @@ test "scoreRunIfTerminal does not trigger at exact sustained-low threshold avera
 }
 
 test "loadImprovementReport summarizes counts, tiers, and stalled warning" {
+    const report_profile_json = "{\"agent_id\":\"agent\",\"stages\":[{\"stage_id\":\"plan\",\"role\":\"echo\",\"skill\":\"echo\"},{\"stage_id\":\"implement\",\"role\":\"scout\",\"skill\":\"scout\"},{\"stage_id\":\"verify\",\"role\":\"warden\",\"skill\":\"warden\",\"gate\":true,\"on_pass\":\"done\",\"on_fail\":\"retry\"}]}";
     const db_ctx = (try common.openHandlerTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
     defer db_ctx.pool.deinit();
     defer db_ctx.pool.release(db_ctx.conn);
@@ -179,6 +181,11 @@ test "loadImprovementReport summarizes counts, tiers, and stalled warning" {
     defer base.teardownTenant(db_ctx.conn);
 
     try support.insertAgentProfileWithTrust(db_ctx.conn, uc2.AGENT_REPORT_1, WS_PROP_REPORT, 0, "UNEARNED");
+    try support.insertActiveConfigWithProfile(db_ctx.conn, uc2.AGENT_REPORT_1, WS_PROP_REPORT, "0195b4ba-8d3a-7f13-8abc-2b3e1e0a6ad1", report_profile_json);
+    try support.insertConfigVersionOnly(db_ctx.conn, uc2.AGENT_REPORT_1, "0195b4ba-8d3a-7f13-8abc-2b3e1e0a6ad2", 2, report_profile_json);
+    try support.insertConfigVersionOnly(db_ctx.conn, uc2.AGENT_REPORT_1, "0195b4ba-8d3a-7f13-8abc-2b3e1e0a6ad3", 3, report_profile_json);
+    try support.insertConfigVersionOnly(db_ctx.conn, uc2.AGENT_REPORT_1, "0195b4ba-8d3a-7f13-8abc-2b3e1e0a6ad4", 4, report_profile_json);
+    try support.insertConfigVersionOnly(db_ctx.conn, uc2.AGENT_REPORT_1, "0195b4ba-8d3a-7f13-8abc-2b3e1e0a6ad5", 5, report_profile_json);
 
     var idx: usize = 0;
     while (idx < 5) : (idx += 1) {
@@ -382,7 +389,7 @@ test "reconcilePendingProposalGenerations rejects generated proposals that excee
     _ = try db_ctx.conn.exec(
         \\INSERT INTO agent_improvement_proposals
         \\  (proposal_id, agent_id, workspace_id, trigger_reason, proposed_changes, config_version_id, approval_mode, generation_status, status, auto_apply_at, created_at, updated_at)
-        \\VALUES ('prop_stage_limit_1', $1, $2, 'SUSTAINED_LOW_SCORE', '[]', '0195b4ba-8d3a-7f13-8abc-2b3e1e0a6f95', 'MANUAL', 'PENDING', 'PENDING_REVIEW', NULL, 0, 0)
+        \\VALUES ('0195b4ba-8d3a-7f13-8abc-2b3e1e0a6f99', $1, $2, 'SUSTAINED_LOW_SCORE', '[]', '0195b4ba-8d3a-7f13-8abc-2b3e1e0a6f95', 'MANUAL', 'PENDING', 'PENDING_REVIEW', NULL, 0, 0)
         \\ON CONFLICT DO NOTHING
     , .{ uc2.AGENT_PROP_5, WS_PROP_5 });
 
@@ -393,7 +400,7 @@ test "reconcilePendingProposalGenerations rejects generated proposals that excee
     var q = try db_ctx.conn.query(
         \\SELECT proposed_changes, generation_status, status, rejection_reason
         \\FROM agent_improvement_proposals
-        \\WHERE proposal_id = 'prop_stage_limit_1'
+        \\WHERE proposal_id = '0195b4ba-8d3a-7f13-8abc-2b3e1e0a6f99'
     , .{});
     defer q.deinit();
     const row = (try q.next()) orelse return error.TestUnexpectedResult;

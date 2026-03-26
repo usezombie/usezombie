@@ -73,7 +73,7 @@ test "reconcileDueAutoApprovalProposals applies overdue veto-window proposals" {
     try std.testing.expect((try proposal_q.next()) == null);
 
     var active_q = try db_ctx.conn.query(
-        \\SELECT config_version_id
+        \\SELECT config_version_id::text
         \\FROM workspace_active_config
         \\WHERE workspace_id = $1
     , .{WS_AUTO_1});

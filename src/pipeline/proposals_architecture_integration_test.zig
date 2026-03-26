@@ -61,7 +61,7 @@ test "integration: trusted vetoed proposal stays canceled after reconcile passes
     try std.testing.expect((try proposal_q.next()) == null);
 
     var active_q = try db_ctx.conn.query(
-        \\SELECT config_version_id
+        \\SELECT config_version_id::text
         \\FROM workspace_active_config
         \\WHERE workspace_id = $1
     , .{WS_ARCH_111});
@@ -131,7 +131,7 @@ test "integration: manual approval CAS drift rejects change and leaves active ha
     try std.testing.expect((try proposal_q.next()) == null);
 
     var active_q = try db_ctx.conn.query(
-        \\SELECT config_version_id
+        \\SELECT config_version_id::text
         \\FROM workspace_active_config
         \\WHERE workspace_id = $1
     , .{WS_ARCH_110});

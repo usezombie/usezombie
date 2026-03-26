@@ -1,6 +1,21 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { BrowserRouter } from "react-router-dom";
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const analytics = vi.hoisted(() => ({
+  trackLeadCaptureClicked: vi.fn(),
+  trackSignupCompleted: vi.fn(),
+}));
+
+vi.mock("../analytics/posthog", async () => {
+  const actual = await vi.importActual<typeof import("../analytics/posthog")>("../analytics/posthog");
+  return {
+    ...actual,
+    trackLeadCaptureClicked: analytics.trackLeadCaptureClicked,
+    trackSignupCompleted: analytics.trackSignupCompleted,
+  };
+});
+
 import Pricing from "./Pricing";
 
 function renderPricing() {
@@ -12,6 +27,11 @@ function renderPricing() {
 }
 
 describe("Pricing", () => {
+  beforeEach(() => {
+    analytics.trackLeadCaptureClicked.mockReset();
+    analytics.trackSignupCompleted.mockReset();
+  });
+
   it("renders the heading", () => {
     renderPricing();
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/start free\. upgrade when you need stronger control\./i);
@@ -94,6 +114,27 @@ describe("Pricing", () => {
     const scaleLink = screen.getByRole("link", { name: /upgrade in app/i });
     expect(hobbyLink).toHaveAttribute("href", "https://app.dev.usezombie.com");
     expect(scaleLink).toHaveAttribute("href", "https://app.dev.usezombie.com");
+  });
+
+  it("tracks Hobby CTA clicks as signup completion", () => {
+    renderPricing();
+    fireEvent.click(screen.getByRole("link", { name: /start free/i }));
+    expect(analytics.trackSignupCompleted).toHaveBeenCalledWith({
+      source: "pricing_hobby_start_free",
+      surface: "pricing",
+      mode: "humans",
+    });
+  });
+
+  it("tracks Scale CTA clicks as lead capture intent", () => {
+    renderPricing();
+    fireEvent.click(screen.getByRole("link", { name: /upgrade in app/i }));
+    expect(analytics.trackLeadCaptureClicked).toHaveBeenCalledWith({
+      page: "pricing",
+      surface: "pricing_card",
+      cta_id: "pricing_scale_upgrade",
+      plan_interest: "Scale",
+    });
   });
 
   it("renders price note only for Scale tier", () => {

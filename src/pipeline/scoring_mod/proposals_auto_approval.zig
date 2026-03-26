@@ -60,7 +60,7 @@ pub fn reconcileDueAutoApprovalProposals(
     }
 
     var q = try conn.query(
-        \\SELECT proposal_id, agent_id, workspace_id, config_version_id, proposed_changes
+        \\SELECT proposal_id::text, agent_id::text, workspace_id::text, config_version_id::text, proposed_changes
         \\FROM agent_improvement_proposals
         \\WHERE generation_status = $1
         \\  AND approval_mode = $2
@@ -130,7 +130,16 @@ pub fn applyProposal(
     var tx_open = true;
     errdefer if (tx_open) rollbackTx(conn);
 
-    if (!try support.markProposalApprovedIfExpected(conn, proposal_id, required_status, now_ms)) {
+    if (!try support.markProposalApprovedIfExpected(
+        conn,
+        agent_id,
+        workspace_id,
+        proposal_id,
+        config_version_id,
+        proposed_changes,
+        required_status,
+        now_ms,
+    )) {
         rollbackTx(conn);
         tx_open = false;
         return .rejected;

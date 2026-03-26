@@ -178,7 +178,7 @@ test "applyProposal succeeds with a valid VETO_WINDOW proposal" {
 
     // workspace_active_config must have been updated to a new config_version_id.
     var active_q = try db_ctx.conn.query(
-        \\SELECT config_version_id
+        \\SELECT config_version_id::text
         \\FROM workspace_active_config
         \\WHERE workspace_id = $1
     , .{WS_GUARD_3});

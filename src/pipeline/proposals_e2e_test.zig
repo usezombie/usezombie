@@ -24,6 +24,7 @@ fn seedRunFixture(conn: anytype, seed: u64, workspace_id: []const u8) ![]u8 {
 }
 
 fn insertScoreFixture(conn: anytype, seed: u64, agent_id: []const u8, workspace_id: []const u8, score: i32, scored_at: i64) !void {
+    // check-pg-drain: ok — helper uses support.insertScoreWithRun, which only calls exec-backed fixture helpers
     const spec_id = try support.allocTestUuid(std.testing.allocator, 0x131300000000 + seed);
     defer std.testing.allocator.free(spec_id);
     const run_id = try support.allocTestUuid(std.testing.allocator, 0x131400000000 + seed);
@@ -187,7 +188,7 @@ test "e2e: full pipeline from trust-earned to proposal auto-applied" {
 
     // Step 10 – workspace_active_config must now point to a new config_version_id.
     var active_q = try db_ctx.conn.query(
-        \\SELECT config_version_id
+        \\SELECT config_version_id::text
         \\FROM workspace_active_config
         \\WHERE workspace_id = $1
     , .{WS_E2E_1});

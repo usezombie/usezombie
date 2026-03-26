@@ -64,7 +64,7 @@ test "vetoAutoProposal stores veto reason and preserves harness state" {
     try std.testing.expect((try proposal_q.next()) == null);
 
     var active_q = try db_ctx.conn.query(
-        \\SELECT config_version_id
+        \\SELECT config_version_id::text
         \\FROM workspace_active_config
         \\WHERE workspace_id = $1
     , .{WS_VETO_1});
@@ -130,7 +130,7 @@ test "approveManualProposal applies proposal with operator identity" {
     try std.testing.expect((try proposal_q.next()) == null);
 
     var active_q = try db_ctx.conn.query(
-        \\SELECT config_version_id
+        \\SELECT config_version_id::text
         \\FROM workspace_active_config
         \\WHERE workspace_id = $1
     , .{WS_MANUAL_2});
@@ -276,6 +276,7 @@ test "approveManualProposal rejects activation failure when config context is mi
         \\ON CONFLICT DO NOTHING
     , .{WS_MANUAL_ACTIVATE});
     try support.insertAgentProfile(db_ctx.conn, uc2.AGENT_PROP_MANUAL_ACTIVATE_1, WS_MANUAL_ACTIVATE);
+    try support.insertAgentProfile(db_ctx.conn, "0195b4ba-8d3a-7f13-8abc-dd000000fffd", WS_MANUAL_ACTIVATE);
     try support.insertConfigVersionOnly(
         db_ctx.conn,
         "0195b4ba-8d3a-7f13-8abc-dd000000fffd",
@@ -317,7 +318,7 @@ test "approveManualProposal rejects activation failure when config context is mi
     try std.testing.expect((try proposal_q.next()) == null);
 
     var active_q = try db_ctx.conn.query(
-        \\SELECT config_version_id
+        \\SELECT config_version_id::text
         \\FROM workspace_active_config
         \\WHERE workspace_id = $1
     , .{WS_MANUAL_ACTIVATE});
@@ -378,7 +379,7 @@ test "applyProposal requires proposal to enter approved state before harness mut
     try std.testing.expect((try proposal_q.next()) == null);
 
     var active_q = try db_ctx.conn.query(
-        \\SELECT config_version_id
+        \\SELECT config_version_id::text
         \\FROM workspace_active_config
         \\WHERE workspace_id = $1
     , .{WS_GUARD});

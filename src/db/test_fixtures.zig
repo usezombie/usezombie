@@ -104,9 +104,9 @@ pub fn teardownTenantById(conn: *pg.Conn, tenant_id: []const u8) void {
 pub fn seedSpec(conn: *pg.Conn, spec_id: []const u8, workspace_id: []const u8) !void {
     _ = try conn.exec(
         \\INSERT INTO specs (spec_id, workspace_id, tenant_id, file_path, title, status, created_at, updated_at)
-        \\VALUES ($1, $2, $3, 'test-spec.md', 'Test Spec', 'active', 0, 0)
+        \\VALUES ($1, $2, $3, $4, 'Test Spec', 'active', 0, 0)
         \\ON CONFLICT DO NOTHING
-    , .{ spec_id, workspace_id, TEST_TENANT_ID });
+    , .{ spec_id, workspace_id, TEST_TENANT_ID, spec_id });
 }
 
 /// Insert a minimal run row. Spec and workspace must exist. Idempotent.
@@ -116,9 +116,9 @@ pub fn seedRun(conn: *pg.Conn, run_id: []const u8, workspace_id: []const u8, spe
         \\INSERT INTO runs
         \\  (run_id, workspace_id, spec_id, tenant_id, state, attempt, mode,
         \\   requested_by, idempotency_key, created_at, updated_at)
-        \\VALUES ($1, $2, $3, $4, 'completed', 1, 'auto', 'test', $1, 0, 0)
+        \\VALUES ($1, $2, $3, $4, 'completed', 1, 'auto', 'test', $5, 0, 0)
         \\ON CONFLICT DO NOTHING
-    , .{ run_id, workspace_id, spec_id, TEST_TENANT_ID });
+    , .{ run_id, workspace_id, spec_id, TEST_TENANT_ID, run_id });
 }
 
 /// Delete runs for a workspace. Call before teardownWorkspace if runs were seeded,
