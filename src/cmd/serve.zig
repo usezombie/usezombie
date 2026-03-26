@@ -163,24 +163,24 @@ pub fn run(alloc: std.mem.Allocator) !void {
 
     log.info("startup.redis_connect role=api status=start", .{});
     var api_queue = queue_redis.Client.connectFromEnv(alloc, .api) catch |err| {
-        log.err("startup.redis_connect role=api status=fail error_code=UZ-STARTUP-004 err={s}", .{@errorName(err)});
+        log.err("startup.redis_connect role=api status=fail error_code=" ++ error_codes.ERR_STARTUP_REDIS_CONNECT ++ " err={s}", .{@errorName(err)});
         std.process.exit(1);
     };
     defer api_queue.deinit();
     api_queue.ensureConsumerGroup() catch |err| {
-        log.err("startup.redis_group role=api status=fail error_code=UZ-STARTUP-004 err={s}", .{@errorName(err)});
+        log.err("startup.redis_group role=api status=fail error_code=" ++ error_codes.ERR_STARTUP_REDIS_CONNECT ++ " err={s}", .{@errorName(err)});
         std.process.exit(1);
     };
     log.info("startup.redis_connect role=api status=ok", .{});
 
     log.info("startup.redis_connect role=worker status=start", .{});
     var worker_queue_check = queue_redis.Client.connectFromEnv(alloc, .worker) catch |err| {
-        log.err("startup.redis_connect role=worker status=fail error_code=UZ-STARTUP-004 err={s}", .{@errorName(err)});
+        log.err("startup.redis_connect role=worker status=fail error_code=" ++ error_codes.ERR_STARTUP_REDIS_CONNECT ++ " err={s}", .{@errorName(err)});
         std.process.exit(1);
     };
     defer worker_queue_check.deinit();
     worker_queue_check.ensureConsumerGroup() catch |err| {
-        log.err("startup.redis_group role=worker status=fail error_code=UZ-STARTUP-004 err={s}", .{@errorName(err)});
+        log.err("startup.redis_group role=worker status=fail error_code=" ++ error_codes.ERR_STARTUP_REDIS_CONNECT ++ " err={s}", .{@errorName(err)});
         std.process.exit(1);
     };
     log.info("startup.redis_connect role=worker status=ok", .{});
