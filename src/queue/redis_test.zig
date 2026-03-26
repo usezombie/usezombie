@@ -41,9 +41,9 @@ test "loadCaBundle rejects relative custom CA path" {
     try std.testing.expectError(error.RedisTlsCaFileMustBeAbsolute, redis.testing.loadCaBundle(std.testing.allocator, "docker/redis/tls/ca.crt"));
 }
 
-test "integration: rediss ping via REDIS_TLS_TEST_URL" {
+test "integration: rediss ping via TEST_REDIS_TLS_URL" {
     const alloc = std.testing.allocator;
-    const tls_url = std.process.getEnvVarOwned(alloc, "REDIS_TLS_TEST_URL") catch return error.SkipZigTest;
+    const tls_url = std.process.getEnvVarOwned(alloc, "TEST_REDIS_TLS_URL") catch return error.SkipZigTest;
     defer alloc.free(tls_url);
 
     if (!std.mem.startsWith(u8, tls_url, "rediss://")) return error.SkipZigTest;
@@ -56,7 +56,7 @@ test "integration: rediss ping via REDIS_TLS_TEST_URL" {
 test "integration: ensureConsumerGroup is idempotent for readiness checks" {
     const alloc = std.testing.allocator;
     const redis_url = std.process.getEnvVarOwned(alloc, "REDIS_READY_TEST_URL") catch
-        std.process.getEnvVarOwned(alloc, "REDIS_TLS_TEST_URL") catch
+        std.process.getEnvVarOwned(alloc, "TEST_REDIS_TLS_URL") catch
         std.process.getEnvVarOwned(alloc, "REDIS_URL") catch return error.SkipZigTest;
     defer alloc.free(redis_url);
 

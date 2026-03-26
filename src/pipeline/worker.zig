@@ -78,8 +78,8 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
         alloc.free(prompts.warden);
     }
 
-    var profile = topology.defaultProfile(alloc) catch |err| {
-        obs_log.logErrWithHint(.worker, err, error_codes.ERR_WORKER_PROFILE_INIT, "worker.profile_init_fail", .{});
+    var profile = topology.loadProfile(alloc, cfg.pipeline_profile_path) catch |err| {
+        obs_log.logErrWithHint(.worker, err, error_codes.ERR_WORKER_PROFILE_INIT, "worker.profile_init_fail path={s}", .{cfg.pipeline_profile_path});
         return;
     };
     defer profile.deinit();
@@ -97,7 +97,7 @@ pub fn workerLoop(cfg: WorkerConfig, worker_state: *WorkerState) void {
     defer queue_client.deinit();
 
     queue_client.ensureConsumerGroup() catch |err| {
-        obs_log.logErrWithHint(.worker, err, error_codes.ERR_STARTUP_REDIS_CONNECT, "worker.redis_group_fail", .{});
+        obs_log.logErrWithHint(.worker, err, error_codes.ERR_STARTUP_REDIS_GROUP, "worker.redis_group_fail", .{});
         return;
     };
 

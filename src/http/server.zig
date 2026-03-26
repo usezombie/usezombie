@@ -12,6 +12,9 @@ const log = std.log.scoped(.http);
 
 pub const ServerConfig = struct {
     port: u16 = 3000,
+    /// Dual-stack "::" accepts both IPv4 and IPv6 connections.
+    /// Requires IPV6_V6ONLY=0 (Linux kernel default). If facilio or the OS
+    /// sets IPV6_V6ONLY=1, only IPv6 will be accepted.
     interface: []const u8 = "::",
     threads: i16 = 1,
     workers: i16 = 1,

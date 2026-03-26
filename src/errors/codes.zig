@@ -71,6 +71,7 @@ pub const ERR_STARTUP_ENV_CHECK = "UZ-STARTUP-001";
 pub const ERR_STARTUP_CONFIG_LOAD = "UZ-STARTUP-002";
 pub const ERR_STARTUP_DB_CONNECT = "UZ-STARTUP-003";
 pub const ERR_STARTUP_REDIS_CONNECT = "UZ-STARTUP-004";
+pub const ERR_STARTUP_REDIS_GROUP = "UZ-STARTUP-007";
 pub const ERR_STARTUP_MIGRATION_CHECK = "UZ-STARTUP-005";
 pub const ERR_STARTUP_OIDC_INIT = "UZ-STARTUP-006";
 pub const ERR_SANDBOX_BACKEND_UNAVAILABLE = "UZ-SANDBOX-001";
@@ -111,6 +112,8 @@ pub fn hint(code: []const u8) ?[]const u8 {
         return "An internal operation failed. Check the err= field for details. If persistent, check service connectivity and run 'zombied doctor'.";
     if (std.mem.eql(u8, code, ERR_STARTUP_REDIS_CONNECT))
         return "Redis is unreachable. Check that REDIS_URL_API and REDIS_URL_WORKER are set and the Redis server accepts connections. Run 'zombied doctor' to verify.";
+    if (std.mem.eql(u8, code, ERR_STARTUP_REDIS_GROUP))
+        return "Redis connected but consumer group creation failed. Check Redis ACL permissions allow XGROUP CREATE, or check server logs for errors.";
     if (std.mem.eql(u8, code, ERR_STARTUP_DB_CONNECT))
         return "Database is unreachable. Check that DATABASE_URL is set and the database server accepts connections.";
     if (std.mem.eql(u8, code, ERR_STARTUP_CONFIG_LOAD))
