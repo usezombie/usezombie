@@ -136,90 +136,66 @@ test "validateRoleSeparatedValues enforces split role URLs and redis TLS" {
 
 // --- Per-role mode validation (validateLoadedWithMode) ---
 
-test "validateLoadedWithMode worker rejects missing worker DB URL" {
-    const urls = EnvVars{
-        .db_api = null,
-        .db_worker = null,
-        .redis_api = null,
-        .redis_worker = @constCast("rediss://worker:pw@cache.local:6379"),
-        .alloc = std.testing.allocator,
+fn testEnvVars(
+    db_api: ?[]const u8,
+    db_worker: ?[]const u8,
+    redis_api: ?[]const u8,
+    redis_worker: ?[]const u8,
+) EnvVars {
+    const alloc = std.testing.allocator;
+    return .{
+        .db_api = if (db_api) |s| alloc.dupe(u8, s) catch @panic("OOM") else null,
+        .db_worker = if (db_worker) |s| alloc.dupe(u8, s) catch @panic("OOM") else null,
+        .redis_api = if (redis_api) |s| alloc.dupe(u8, s) catch @panic("OOM") else null,
+        .redis_worker = if (redis_worker) |s| alloc.dupe(u8, s) catch @panic("OOM") else null,
+        .alloc = alloc,
     };
+}
+
+test "validateLoadedWithMode worker rejects missing worker DB URL" {
+    var urls = testEnvVars(null, null, null, "rediss://worker:pw@cache.local:6379");
+    defer urls.deinit();
     try std.testing.expectError(EnvVarsErrors.MissingDatabaseUrlWorker, validateLoadedWithMode(urls, .worker));
 }
 
 test "validateLoadedWithMode worker rejects missing worker Redis URL" {
-    const urls = EnvVars{
-        .db_api = null,
-        .db_worker = @constCast("postgres://worker:pw@db.local:5432/worker"),
-        .redis_api = null,
-        .redis_worker = null,
-        .alloc = std.testing.allocator,
-    };
+    var urls = testEnvVars(null, "postgres://worker:pw@db.local:5432/worker", null, null);
+    defer urls.deinit();
     try std.testing.expectError(EnvVarsErrors.MissingRedisUrlWorker, validateLoadedWithMode(urls, .worker));
 }
 
 test "validateLoadedWithMode worker rejects non-TLS Redis" {
-    const urls = EnvVars{
-        .db_api = null,
-        .db_worker = @constCast("postgres://worker:pw@db.local:5432/worker"),
-        .redis_api = null,
-        .redis_worker = @constCast("redis://worker:pw@cache.local:6379"),
-        .alloc = std.testing.allocator,
-    };
+    var urls = testEnvVars(null, "postgres://worker:pw@db.local:5432/worker", null, "redis://worker:pw@cache.local:6379");
+    defer urls.deinit();
     try std.testing.expectError(EnvVarsErrors.RedisWorkerTlsRequired, validateLoadedWithMode(urls, .worker));
 }
 
 test "validateLoadedWithMode worker accepts valid worker URLs" {
-    const urls = EnvVars{
-        .db_api = null,
-        .db_worker = @constCast("postgres://worker:pw@db.local:5432/worker"),
-        .redis_api = null,
-        .redis_worker = @constCast("rediss://worker:pw@cache.local:6379"),
-        .alloc = std.testing.allocator,
-    };
+    var urls = testEnvVars(null, "postgres://worker:pw@db.local:5432/worker", null, "rediss://worker:pw@cache.local:6379");
+    defer urls.deinit();
     try validateLoadedWithMode(urls, .worker);
 }
 
 test "validateLoadedWithMode api rejects missing API DB URL" {
-    const urls = EnvVars{
-        .db_api = null,
-        .db_worker = null,
-        .redis_api = @constCast("rediss://api:pw@cache.local:6379"),
-        .redis_worker = null,
-        .alloc = std.testing.allocator,
-    };
+    var urls = testEnvVars(null, null, "rediss://api:pw@cache.local:6379", null);
+    defer urls.deinit();
     try std.testing.expectError(EnvVarsErrors.MissingDatabaseUrlApi, validateLoadedWithMode(urls, .api));
 }
 
 test "validateLoadedWithMode api rejects non-TLS Redis" {
-    const urls = EnvVars{
-        .db_api = @constCast("postgres://api:pw@db.local:5432/api"),
-        .db_worker = null,
-        .redis_api = @constCast("redis://api:pw@cache.local:6379"),
-        .redis_worker = null,
-        .alloc = std.testing.allocator,
-    };
+    var urls = testEnvVars("postgres://api:pw@db.local:5432/api", null, "redis://api:pw@cache.local:6379", null);
+    defer urls.deinit();
     try std.testing.expectError(EnvVarsErrors.RedisApiTlsRequired, validateLoadedWithMode(urls, .api));
 }
 
 test "validateLoadedWithMode api accepts valid API URLs" {
-    const urls = EnvVars{
-        .db_api = @constCast("postgres://api:pw@db.local:5432/api"),
-        .db_worker = null,
-        .redis_api = @constCast("rediss://api:pw@cache.local:6379"),
-        .redis_worker = null,
-        .alloc = std.testing.allocator,
-    };
+    var urls = testEnvVars("postgres://api:pw@db.local:5432/api", null, "rediss://api:pw@cache.local:6379", null);
+    defer urls.deinit();
     try validateLoadedWithMode(urls, .api);
 }
 
 test "validateLoadedWithMode worker rejects whitespace-only DB URL" {
-    const urls = EnvVars{
-        .db_api = null,
-        .db_worker = @constCast("  \t\n"),
-        .redis_api = null,
-        .redis_worker = @constCast("rediss://worker:pw@cache.local:6379"),
-        .alloc = std.testing.allocator,
-    };
+    var urls = testEnvVars(null, "  \t\n", null, "rediss://worker:pw@cache.local:6379");
+    defer urls.deinit();
     try std.testing.expectError(EnvVarsErrors.MissingDatabaseUrlWorker, validateLoadedWithMode(urls, .worker));
 }

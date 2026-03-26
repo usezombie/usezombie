@@ -196,27 +196,32 @@ test "Config.load succeeds with required env vars" {
 // --- T3: Error paths — missing required env ---
 
 test "Config.load rejects missing GITHUB_APP_ID" {
+    // Ensure clean state — unset both, defer restore
     std.posix.unsetenv("GITHUB_APP_ID");
     std.posix.unsetenv("GITHUB_APP_PRIVATE_KEY");
+    defer unsetWorkerTestEnv(&worker_test_env);
 
     try std.testing.expectError(ValidationError.MissingGitHubAppId, Config.load(std.testing.allocator));
 }
 
 test "Config.load rejects empty GITHUB_APP_ID" {
-    std.posix.setenv("GITHUB_APP_ID", "", true) catch {};
-    std.posix.setenv("GITHUB_APP_PRIVATE_KEY", "pem", true) catch {};
-    defer {
-        std.posix.unsetenv("GITHUB_APP_ID");
-        std.posix.unsetenv("GITHUB_APP_PRIVATE_KEY");
-    }
+    const env = [_][2][]const u8{
+        .{ "GITHUB_APP_ID", "" },
+        .{ "GITHUB_APP_PRIVATE_KEY", "pem" },
+    };
+    setWorkerTestEnv(&env);
+    defer unsetWorkerTestEnv(&env);
 
     try std.testing.expectError(ValidationError.MissingGitHubAppId, Config.load(std.testing.allocator));
 }
 
 test "Config.load rejects missing GITHUB_APP_PRIVATE_KEY" {
-    std.posix.setenv("GITHUB_APP_ID", "12345", true) catch {};
+    const env = [_][2][]const u8{
+        .{ "GITHUB_APP_ID", "12345" },
+    };
+    setWorkerTestEnv(&env);
     std.posix.unsetenv("GITHUB_APP_PRIVATE_KEY");
-    defer std.posix.unsetenv("GITHUB_APP_ID");
+    defer unsetWorkerTestEnv(&env);
 
     try std.testing.expectError(ValidationError.MissingGitHubAppPrivateKey, Config.load(std.testing.allocator));
 }

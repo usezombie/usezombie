@@ -408,7 +408,7 @@ test "parseServeArgs returns error for unknown arg after valid port" {
     try std.testing.expectError(ServeArgError.InvalidServeArgument, parseServeArgs(&it));
 }
 
-// --- T1: parsePortValue ---
+// --- T2: parsePortValue edge cases ---
 
 test "parsePortValue parses valid ports" {
     try std.testing.expectEqual(@as(?u16, 3000), parsePortValue("3000"));
