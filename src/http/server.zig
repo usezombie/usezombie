@@ -15,7 +15,7 @@ pub const ServerConfig = struct {
     /// Dual-stack "::" accepts both IPv4 and IPv6 connections.
     /// Requires IPV6_V6ONLY=0 (Linux kernel default). If facilio or the OS
     /// sets IPV6_V6ONLY=1, only IPv6 will be accepted.
-    interface: []const u8 = "::",
+    interface: [:0]const u8 = "::",
     threads: i16 = 1,
     workers: i16 = 1,
     max_clients: ?isize = 1024,
@@ -138,11 +138,10 @@ test "ServerConfig default interface is NOT IPv4-only — regression guard" {
     try std.testing.expect(!is_ipv4_only);
 }
 
-test "ServerConfig default interface ptr is null-terminated for C FFI" {
+test "ServerConfig interface type enforces null-termination for C FFI" {
     const cfg = ServerConfig{};
-    // Zap passes interface.ptr to facilio's C http_listen(). The pointer
-    // must reference a null-terminated string. Zig string literals are
-    // null-terminated, so cfg.interface.ptr[cfg.interface.len] == 0.
+    // The [:0]const u8 type guarantees null-termination at compile time.
+    // Zap passes interface.ptr to facilio's C http_listen() as [*c]const u8.
     try std.testing.expectEqual(@as(u8, 0), cfg.interface.ptr[cfg.interface.len]);
 }
 

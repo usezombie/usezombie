@@ -18,9 +18,10 @@ _zig_test_filter:
 	     rediss://*) redis_tls_test_url="$$REDIS_URL" ;; \
 	   esac; \
 	 fi; \
+	 env -u TEST_REDIS_TLS_URL \
 	 ZIG_GLOBAL_CACHE_DIR="$(ZIG_GLOBAL_CACHE_DIR)" \
 	 ZIG_LOCAL_CACHE_DIR="$(ZIG_LOCAL_CACHE_DIR)" \
-	 TEST_REDIS_TLS_URL="$$redis_tls_test_url" \
+	 $${redis_tls_test_url:+TEST_REDIS_TLS_URL="$$redis_tls_test_url"} \
 	 zig build -Dtest-filter="$$TEST_FILTER" test
 
 _test_e2e_backend:
