@@ -5,7 +5,7 @@
 # Workstream: 001
 # Sections:
 #   1 -> SSH access (vault keys + connectivity)
-#   2 -> host readiness (KVM, Tailscale, Docker, Firecracker)
+#   2 -> host readiness (Tailscale, bubblewrap, git, cgroups v2, OpenSSL)
 #   3 -> deploy readiness (/opt/zombie/ structure, systemd units)
 #
 # Usage:

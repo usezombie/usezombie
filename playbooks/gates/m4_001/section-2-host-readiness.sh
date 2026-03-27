@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # M4_001 Section 2: host readiness gate
-# Verifies playbook steps 2.0, 4.0, 5.0:
-#   - KVM available (kvm-ok or /dev/kvm exists)
+# Verifies playbook step 2.0 (Tailscale) and step 3.0 (runtime deps):
 #   - Tailscale installed and active
-#   - Docker installed and running
-#   - Firecracker binary installed
+#   - bubblewrap (bwrap) installed
+#   - git installed
+#   - cgroups v2 active
+#   - OpenSSL runtime available
 set -euo pipefail
 
 echo ""
@@ -75,19 +76,8 @@ if ! remote_cmd "echo ok" | grep -q "ok"; then
 fi
 echo "  ✓ SSH connected to ${ssh_user}@${ssh_host}"
 
-# 2.0 KVM available
-echo "-- checking KVM (step 2.0)"
-kvm_result="$(remote_cmd "test -e /dev/kvm && echo 'kvm_present' || (command -v kvm-ok >/dev/null 2>&1 && kvm-ok 2>&1 || echo 'kvm_missing')")"
-if echo "$kvm_result" | grep -q "kvm_present\|KVM acceleration can be used"; then
-  echo "  ✓ KVM available"
-else
-  echo "  ✗ KVM not available"
-  echo "    output: $kvm_result"
-  missing=$((missing + 1))
-fi
-
-# 3.0 + 4.0 Tailscale installed and active
-echo "-- checking Tailscale (step 3.0)"
+# 2.0 Tailscale installed and active
+echo "-- checking Tailscale (step 2.0)"
 ts_result="$(remote_cmd "command -v tailscale >/dev/null 2>&1 && tailscale status --json 2>/dev/null | head -1 || echo 'tailscale_missing'")"
 if echo "$ts_result" | grep -q "tailscale_missing"; then
   echo "  ✗ Tailscale not installed"
@@ -96,24 +86,44 @@ else
   echo "  ✓ Tailscale installed and active"
 fi
 
-# 4.0 Docker installed and running
-echo "-- checking Docker (step 4.0)"
-docker_result="$(remote_cmd "command -v docker >/dev/null 2>&1 && docker info --format '{{.ServerVersion}}' 2>/dev/null || echo 'docker_missing'")"
-if echo "$docker_result" | grep -q "docker_missing"; then
-  echo "  ✗ Docker not installed or not running"
+# 3.0 bubblewrap installed
+echo "-- checking bubblewrap (step 3.0)"
+bwrap_result="$(remote_cmd "command -v bwrap >/dev/null 2>&1 && bwrap --version 2>&1 || echo 'bwrap_missing'")"
+if echo "$bwrap_result" | grep -q "bwrap_missing"; then
+  echo "  ✗ bubblewrap (bwrap) not installed"
   missing=$((missing + 1))
 else
-  echo "  ✓ Docker running (version: $docker_result)"
+  echo "  ✓ bubblewrap installed ($bwrap_result)"
 fi
 
-# 5.0 Firecracker binary installed
-echo "-- checking Firecracker (step 5.0)"
-fc_result="$(remote_cmd "command -v firecracker >/dev/null 2>&1 && firecracker --version 2>&1 | head -1 || echo 'firecracker_missing'")"
-if echo "$fc_result" | grep -q "firecracker_missing"; then
-  echo "  ✗ Firecracker not installed"
+# 3.0 git installed
+echo "-- checking git (step 3.0)"
+git_result="$(remote_cmd "command -v git >/dev/null 2>&1 && git --version 2>&1 || echo 'git_missing'")"
+if echo "$git_result" | grep -q "git_missing"; then
+  echo "  ✗ git not installed"
   missing=$((missing + 1))
 else
-  echo "  ✓ Firecracker installed ($fc_result)"
+  echo "  ✓ $git_result"
+fi
+
+# 3.0 cgroups v2 active
+echo "-- checking cgroups v2 (step 3.0)"
+cg_result="$(remote_cmd "test -f /sys/fs/cgroup/cgroup.controllers && echo 'cgv2_ok' || echo 'cgv2_missing'")"
+if echo "$cg_result" | grep -q "cgv2_ok"; then
+  echo "  ✓ cgroups v2 active"
+else
+  echo "  ✗ cgroups v2 not active — executor resource limits will not work"
+  missing=$((missing + 1))
+fi
+
+# 3.0 OpenSSL runtime
+echo "-- checking OpenSSL (step 3.0)"
+ssl_result="$(remote_cmd "command -v openssl >/dev/null 2>&1 && openssl version 2>&1 || echo 'openssl_missing'")"
+if echo "$ssl_result" | grep -q "openssl_missing"; then
+  echo "  ✗ OpenSSL not installed"
+  missing=$((missing + 1))
+else
+  echo "  ✓ $ssl_result"
 fi
 
 if [ "$missing" -gt 0 ]; then

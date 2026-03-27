@@ -238,11 +238,15 @@ jobs:
           $SCP deploy/baremetal/*.service          "$TARGET:/opt/zombie/deploy/"
           $SSH "$TARGET" "chmod +x /opt/zombie/deploy/deploy.sh /opt/zombie/bin/*"
 
+          # Write Discord webhook to server env file (avoids exposing in ps output)
+          $SSH "$TARGET" "printf 'DISCORD_WEBHOOK_URL=%s\n' '$DISCORD_WEBHOOK_URL' > /opt/zombie/.discord-env && chmod 600 /opt/zombie/.discord-env"
+
           # Deploy executor first (worker Requires= it), then worker
           $SSH "$TARGET" \
-            "DISCORD_WEBHOOK_URL='$DISCORD_WEBHOOK_URL' /opt/zombie/deploy/deploy.sh executor $VERSION /opt/zombie/bin/zombied-executor"
+            "sudo bash -c 'source /opt/zombie/.discord-env && /opt/zombie/deploy/deploy.sh executor $VERSION /opt/zombie/bin/zombied-executor'"
           $SSH "$TARGET" \
-            "DISCORD_WEBHOOK_URL='$DISCORD_WEBHOOK_URL' /opt/zombie/deploy/deploy.sh worker $VERSION /opt/zombie/bin/zombied"
+            "sudo bash -c 'source /opt/zombie/.discord-env && /opt/zombie/deploy/deploy.sh worker $VERSION /opt/zombie/bin/zombied'"
+          $SSH "$TARGET" "rm -f /opt/zombie/.discord-env"
 
   # ── 4. Wait for Fly DEV to go green (via Cloudflare Tunnel) ─────────────
   verify-dev:

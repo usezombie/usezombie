@@ -27,6 +27,11 @@ readonly ENV_FILE="/opt/zombie/.env"
 readonly ENV_DEST="/etc/default/zombied-worker"
 readonly HOST="${DEPLOY_HOSTNAME:-$(hostname)}"
 
+# Populated by resolve_component()
+BINARY_NAME=""
+RELEASE_ARTIFACT=""
+SERVICE_NAME=""
+
 # ── Logging ──────────────────────────────────────────────────────────────────
 
 log()  { echo "[deploy] $*"; }
