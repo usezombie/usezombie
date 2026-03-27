@@ -55,10 +55,29 @@ Fields:
 
 ---
 
-## 3.0 Agent Verification — Fly Secrets Sync
+## 3.0 Agent Pre-Rotation — Capture Old Secret
 
 **Who:** Agent
-**Depends on:** Steps 1.0 and 2.0 complete
+**Run before:** Human starts §1.0 and §2.0
+
+### Steps
+
+1. Read the current (pre-rotation) bypass secret from vault and store locally for rejection testing:
+
+```bash
+OLD_BYPASS="$(op read 'op://ZOMBIE_PROD/vercel-bypass-app/credential')"
+echo "$OLD_BYPASS" > /tmp/old-bypass-secret.txt
+echo "Old bypass secret saved for post-rotation rejection test"
+```
+
+2. Signal human: "Pre-rotation snapshot captured. Proceed with §1.0 and §2.0."
+
+---
+
+## 4.0 Agent Verification — Fly Secrets Sync
+
+**Who:** Agent
+**Depends on:** §1.0, §2.0, and §3.0 complete
 
 ### Steps
 
@@ -84,7 +103,7 @@ curl -sf https://api-dev.usezombie.com/healthz
 curl -sf https://api-dev.usezombie.com/readyz | jq -e '.ready == true'
 ```
 
-4. Verify Vercel bypass works with the new secret:
+4. Verify Vercel bypass works with the new (rotated) secret from vault:
 
 ```bash
 NEW_SECRET="$(op read 'op://ZOMBIE_PROD/vercel-bypass-app/credential')"
@@ -94,18 +113,20 @@ curl -sf -o /dev/null -w '%{http_code}' \
 # Expected: 200
 ```
 
-5. Verify old bypass secret no longer works:
+5. Verify old bypass secret (captured in §3.0) no longer works:
 
 ```bash
+OLD_BYPASS="$(cat /tmp/old-bypass-secret.txt)"
 curl -sf -o /dev/null -w '%{http_code}' \
-  -H "x-vercel-protection-bypass: <OLD_BYPASS_SECRET_BEFORE_ROTATION>" \
+  -H "x-vercel-protection-bypass: $OLD_BYPASS" \
   "https://usezombie-app.vercel.app/sign-in"
 # Expected: 401 or 403
+rm /tmp/old-bypass-secret.txt
 ```
 
 ---
 
-## 4.0 Agent Verification — CI Masking
+## 5.0 Agent Verification — CI Masking
 
 **Who:** Agent
 
@@ -120,7 +141,7 @@ gh run view <run-id> --log --job <qa-dev-job-id> | grep -i "VERCEL_BYPASS"
 
 ---
 
-## 5.0 Exit Criteria
+## 6.0 Exit Criteria
 
 - [ ] Old Vercel bypass secret returns 401/403
 - [ ] New Vercel bypass secret returns 200
