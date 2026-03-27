@@ -98,7 +98,7 @@ curl -sf -o /dev/null -w '%{http_code}' \
 
 ```bash
 curl -sf -o /dev/null -w '%{http_code}' \
-  -H "x-vercel-protection-bypass: myWD904ByjIbDRaaYqlV7iWekLr6oDEG" \
+  -H "x-vercel-protection-bypass: <OLD_BYPASS_SECRET_BEFORE_ROTATION>" \
   "https://usezombie-app.vercel.app/sign-in"
 # Expected: 401 or 403
 ```
