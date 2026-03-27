@@ -219,6 +219,9 @@ jobs:
         run: SECTIONS=3 VAULT_DEV="${{ vars.VAULT_DEV }}" ./playbooks/gates/m4_001/run.sh
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          WORKER_ANT_SSH_KEY: ${{ env.WORKER_ANT_SSH_KEY }}
+          WORKER_ANT_HOST: ${{ env.WORKER_ANT_HOST }}
+          WORKER_ANT_USER: ${{ env.WORKER_ANT_USER }}
 
       - name: Deploy executor + worker to bare-metal
         run: |
