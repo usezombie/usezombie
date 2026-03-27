@@ -40,12 +40,12 @@ const DaemonApp = struct {
         }
 
         if (std.mem.eql(u8, path, "/metrics")) {
-            const body = renderDaemonMetrics(s.alloc, s) catch {
+            // Use the request arena so the body stays valid until httpz sends the response.
+            const body = renderDaemonMetrics(req.arena, s) catch {
                 res.status = @intFromEnum(std.http.Status.internal_server_error);
                 res.body = "";
                 return;
             };
-            defer s.alloc.free(body);
             res.status = @intFromEnum(std.http.Status.ok);
             res.header("content-type", "text/plain; charset=utf-8");
             res.body = body;

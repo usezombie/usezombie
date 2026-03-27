@@ -151,10 +151,10 @@ pub fn handleReadyz(ctx: *Context, req: *httpz.Request, res: *httpz.Response) vo
 }
 
 pub fn handleMetrics(ctx: *Context, req: *httpz.Request, res: *httpz.Response) void {
-    _ = req;
     const qh = queueHealth(ctx);
+    // Use the request arena so the body stays valid until httpz sends the response.
     const body = metrics.renderPrometheus(
-        ctx.alloc,
+        req.arena,
         ctx.worker_state.running.load(.acquire),
         if (qh) |v| v.queued_count else null,
         if (qh) |v| v.oldest_queued_age_ms else null,
@@ -163,7 +163,6 @@ pub fn handleMetrics(ctx: *Context, req: *httpz.Request, res: *httpz.Response) v
         res.body = "";
         return;
     };
-    defer ctx.alloc.free(body);
 
     res.status = @intFromEnum(std.http.Status.ok);
     res.header("content-type", "text/plain; charset=utf-8");

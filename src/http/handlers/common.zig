@@ -110,7 +110,7 @@ pub const MAX_BODY_SIZE: usize = 2 * 1024 * 1024; // 2MB — must match server.z
 /// Returns true if the body size is within the allowed limit.
 /// Sends a 413 response and returns false if the Content-Length header
 /// indicates the payload exceeds MAX_BODY_SIZE, or if the received body
-/// itself exceeds the limit after facil.io truncation.
+/// itself exceeds the limit.
 pub fn checkBodySize(req: *httpz.Request, res: *httpz.Response, body: []const u8, request_id: []const u8) bool {
     if (req.header("content-length")) |cl_str| {
         const cl = std.fmt.parseInt(usize, cl_str, 10) catch 0;
