@@ -423,6 +423,7 @@ Exit criteria:
 - No branch mutation outside lifecycle transitions.
 - No cross-worktree edits.
 - No secrets in commits/docs.
+- Never resolve or print credential values in conversation. Check effects (health endpoints, connectivity status), not raw secrets. Use `op://` references and vault item names — never the actual value.
 - Prefer CLI and text artifacts. Do not require GUI-only tooling when a CLI path exists.
 
 ## Cognitive Discipline
