@@ -62,11 +62,12 @@ true  (jq -e '.ready == true')
 
 Vercel deployments all marked "Ready" by Vercel status checks:
 
-| Project | Status |
-|---------|--------|
-| usezombie-app | Deployed |
-| usezombie-website | Deployed |
-| usezombie-agents-sh | Deployed |
+| Project | Status | Spec Dimension |
+|---------|--------|----------------|
+| usezombie-app | Deployed | §4.1, §4.3 |
+| usezombie-website | Deployed | §4.2, §4.4 |
+
+Note: `usezombie-agents-sh` also deploys via Vercel but is out of scope for this acceptance gate (no spec dimension defined).
 
 `smoke-post-deploy.yml` runs green for all three projects on every push to main.
 
@@ -106,8 +107,11 @@ This gate cannot be completed until the CLI is available.
 
 ---
 
-## 7. Known Issues
+## 7. P0 Security Actions (Must Complete Before Gate Close)
 
-- **Vercel bypass secret exposed** in CI run 23629344140 logs (before `::add-mask::` was added). Rotate `vercel-bypass-app` in Vercel dashboard + update 1Password.
-- **Upstash Redis password rotation** deferred — credential appeared in prior session. Rotate via Upstash dashboard + `fly secrets set`.
+- [ ] **Rotate Vercel bypass secret** — `vercel-bypass-app` exposed in CI run 23629344140 logs. Rotate in Vercel dashboard → update 1Password vault → verify `::add-mask::` masks the new value.
+- [ ] **Rotate Upstash Redis password** — credential appeared in prior session. Rotate via Upstash dashboard → `fly secrets set` on `zombied-dev` → verify worker reconnects.
+
+## 8. Known Issues (Non-Security)
+
 - **Redis worker WriteFailed** loop on DEV — non-fatal but noisy. Likely Upstash ACL issue.

@@ -132,7 +132,7 @@ Captured:
 
 Evidence location:
 
-- `docs/evidence/M7_001_DEV_ACCEPTANCE_EVIDENCE.md`
+- `docs/evidence/M3_001_DEV_DEPLOY_<YYYYMMDD>.md`
 
 ---
 
