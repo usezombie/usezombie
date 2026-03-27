@@ -4,7 +4,7 @@
 #   Local: zig build -Dtarget=x86_64-linux -Doptimize=ReleaseSafe
 #          mkdir -p dist && cp zig-out/bin/zombied dist/zombied-linux-amd64
 
-FROM alpine:3.23.3
+FROM mirror.gcr.io/library/alpine:3.23.3
 ARG TARGETARCH=amd64
 RUN apk add --no-cache \
     bubblewrap \
