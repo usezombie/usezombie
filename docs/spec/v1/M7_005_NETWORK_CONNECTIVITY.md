@@ -46,7 +46,7 @@ PlanetScale DEV database must be reachable from both the Fly.io API machine and 
 - 2.3 PENDING Vault items verified: `planetscale-dev/api-connection-string`, `planetscale-dev/worker-connection-string`, `planetscale-dev/migrator-connection-string`
 
 ```bash
-# Verify from Fly (via healthz)
+# Verify from Fly (via readyz)
 curl -sf https://api-dev.usezombie.com/readyz | jq '.database'
 
 # Verify vault items exist
