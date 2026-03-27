@@ -51,11 +51,11 @@ op_read_with_retry() {
   return 1
 }
 
-# SSH connection details — prefer env vars (set by CI deploy step) over vault lookup.
-# CI already loads these from 1Password and joins Tailscale before calling this gate.
-ssh_key="${WORKER_ANT_SSH_KEY:-$(op_read_with_retry "op://$vault_dev/zombie-dev-worker-ant/ssh-private-key" || true)}"
-ssh_host="${WORKER_ANT_HOST:-$(op_read_with_retry "op://$vault_dev/zombie-dev-worker-ant/hostname" || true)}"
-ssh_user="${WORKER_ANT_USER:-$(op_read_with_retry "op://$vault_dev/zombie-dev-worker-ant/deploy-user" || true)}"
+# SSH connection details from vault.
+# Vault hostname field should be the Tailscale hostname (CI joins tailnet before this step).
+ssh_key="$(op_read_with_retry "op://$vault_dev/zombie-dev-worker-ant/ssh-private-key" || true)"
+ssh_host="$(op_read_with_retry "op://$vault_dev/zombie-dev-worker-ant/tailscale-hostname" || true)"
+ssh_user="$(op_read_with_retry "op://$vault_dev/zombie-dev-worker-ant/deploy-user" || true)"
 
 if [ -z "$ssh_key" ] || [ -z "$ssh_host" ] || [ -z "$ssh_user" ]; then
   echo "  ✗ Cannot establish SSH — missing vault refs or env vars. Run section 1 first."
