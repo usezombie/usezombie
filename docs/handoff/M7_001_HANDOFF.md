@@ -53,12 +53,12 @@ Session root-caused DEV API 502 (IPv4-only bind on Fly IPv6 6PN), fixed it, expa
 ## Next Steps
 
 1. Wait for CI `test` + `qa` to go green on #91, then merge
-2. Deploy to Fly DEV: `fly deploy --app zombied-dev --image ghcr.io/usezombie/zombied:dev-latest`
-3. Verify `curl -sf https://api-dev.usezombie.com/healthz` returns 200 (M7_001 §1.4)
-4. Verify `curl -sf https://api-dev.usezombie.com/readyz | jq '.ready'` returns true (M7_001 §1.5)
-5. Investigate Redis `WriteFailed` on DEV worker — Upstash ACL or connectivity
-6. **Rotate Upstash Redis password** — appeared in conversation, rotate via Upstash dashboard + `fly secrets set`
-7. **Enable Upstash IP allowlist** — restrict to Fly `iad` egress IPs
+2. **Rotate Upstash Redis password** — appeared in conversation, rotate via Upstash dashboard + `fly secrets set`
+3. **Enable Upstash IP allowlist** — restrict to Fly `iad` egress IPs
+4. Deploy to Fly DEV: `fly deploy --app zombied-dev --image ghcr.io/usezombie/zombied:dev-latest`
+5. Verify `curl -sf https://api-dev.usezombie.com/healthz` returns 200 (M7_001 §1.4)
+6. Verify `curl -sf https://api-dev.usezombie.com/readyz | jq '.ready'` returns true (M7_001 §1.5)
+7. Investigate Redis `WriteFailed` on DEV worker — Upstash ACL or connectivity
 8. Run `zombied doctor` against DEV (M7_001 §3.3)
 9. UI smoke: Vercel preview URLs for app + website (M7_001 §4.0)
 10. CLI acceptance: `zombiectl login → workspace add → specs sync → run → runs list` (M7_001 §6.0)

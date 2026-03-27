@@ -47,8 +47,9 @@ Replace `zap.Request` with `httpz.Request`/`httpz.Response` across all 22 handle
 **Dimensions:**
 - 3.1 PENDING Migrate `src/http/handlers/common.zig` (14 zap refs — auth, CORS, trace context)
 - 3.2 PENDING Migrate `src/http/handlers/agents.zig` + `agents/*.zig` (12 refs)
-- 3.3 PENDING Migrate remaining handlers: health, runs, workspaces, billing, harness, specs, auth_sessions, skill_secrets, github_callback (30+ refs)
-- 3.4 PENDING Migrate `src/http/workspace_guards.zig` (3 refs)
+- 3.3 PENDING Migrate auth-path handlers: `auth_sessions.zig`, `github_callback.zig`, `skill_secrets.zig` (12 zap refs)
+- 3.4 PENDING Migrate resource handlers: `health.zig`, `runs.zig`, `workspaces.zig`, `billing.zig`, `harness.zig`, `specs.zig` (20+ zap refs)
+- 3.5 PENDING Migrate `src/http/workspace_guards.zig` (3 refs)
 
 ---
 
@@ -98,7 +99,7 @@ Full gate pass after migration.
 
 - [ ] 7.1 Zero `zap` imports remain in codebase
 - [ ] 7.2 `build.zig.zon` has no `zap` or `facilio` dependency
-- [ ] 7.3 Build time improved (no C compilation step)
+- [ ] 7.3 `make build` wall-clock time is lower than the pre-migration baseline (captured in §6.4)
 - [ ] 7.4 All existing HTTP tests and integration tests pass
 - [ ] 7.5 DEV API responds on dual-stack without C FFI workarounds
 
