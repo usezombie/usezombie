@@ -180,6 +180,9 @@ pub fn serve(ctx: *handler.Context, cfg: ServerConfig) !void {
             .count = @intCast(cfg.workers),
             .max_conn = if (cfg.max_clients) |mc| @intCast(mc) else null,
         },
+        .thread_pool = .{
+            .count = @intCast(cfg.threads),
+        },
         .request = .{
             .max_body_size = 2 * 1024 * 1024, // 2MB
         },
