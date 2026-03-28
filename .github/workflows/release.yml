@@ -310,10 +310,12 @@ jobs:
         run: |
           HOSTS='${{ vars.PROD_WORKER_HOSTS }}'
           CANARY=$(echo "$HOSTS" | jq -r '.[0]')
-          echo "name=$(echo "$CANARY" | jq -r '.name')" >> "$GITHUB_OUTPUT"
-          echo "host=$(echo "$CANARY" | jq -r '.host')" >> "$GITHUB_OUTPUT"
-          echo "vault_key=$(echo "$CANARY" | jq -r '.vault_key')" >> "$GITHUB_OUTPUT"
-          echo "fleet_count=$(echo "$HOSTS" | jq 'length')" >> "$GITHUB_OUTPUT"
+          {
+            echo "name=$(echo "$CANARY" | jq -r '.name')"
+            echo "host=$(echo "$CANARY" | jq -r '.host')"
+            echo "vault_key=$(echo "$CANARY" | jq -r '.vault_key')"
+            echo "fleet_count=$(echo "$HOSTS" | jq 'length')"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Load canary SSH key
         uses: 1password/load-secrets-action@v3
