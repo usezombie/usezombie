@@ -69,7 +69,7 @@ _actionlint_check:
 
 check-pg-drain: _pg_drain_check  ## Check that all conn.query() calls have a .drain()
 
-lint-zig: _fmt_check _zlint_check _pg_drain_check _zig_target_lint build-linux-bookworm  ## Lint zombied (Zig)
+lint-zig: _fmt_check _zlint_check _pg_drain_check _zig_target_lint  ## Lint zombied (Zig)
 	@echo "✓ [zombied] Lint passed"
 
 lint-website: _website_lint  ## Lint website only (ESLint + tsc)
