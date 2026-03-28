@@ -29,8 +29,9 @@ cta_secondary: "View pricing"
 steps:
   - title: "Write a spec"
     description: >
-      Describe what you want built in a markdown spec. UseZombie validates
-      file references and catches ambiguities before any agent runs.
+      Describe what you want built in markdown. Use your own format,
+      OpenSpec, gstack plans, or UseZombie's milestone specs. No CI
+      pipeline to configure. No YAML. Just a spec file.
   - title: "Agents implement with self-repair"
     description: >
       An agent implements your spec, then runs lint, test, and build gates.
@@ -87,6 +88,62 @@ features:
       Agent code runs inside Landlock filesystem isolation, cgroup memory
       and CPU limits, and network deny-by-default. Agents cannot exfiltrate
       data or escape their workspace.
+```
+
+---
+
+## Spec Sources — Bring Your Own Spec Format
+
+```yaml
+headline: "Write specs your way. UseZombie runs them."
+subline: >
+  UseZombie is spec-format agnostic. Bring specs from your existing workflow,
+  your planning agent, or an open standard. No CI pipeline to configure.
+  No YAML to write. Just specs in, PRs out.
+
+sources:
+  - name: "Milestone Spec-Driven Development"
+    description: >
+      UseZombie's native format. Markdown specs organized as
+      Milestones → Workstreams → Sections → Dimensions. Each spec
+      is a self-contained unit of work with acceptance criteria
+      and verification dimensions. Ship entire milestones in parallel
+      with multiple agents.
+    link: null
+    example: "docs/spec/v1/M16_001_SPEC_TO_PR_GATE_LOOP.md"
+
+  - name: "OpenSpec by Fission AI"
+    description: >
+      Open-source spec framework for AI-driven development. Markdown-based
+      specs stored in Git with proposal, design, and task artifacts.
+      Works with 20+ AI assistants. UseZombie consumes OpenSpec artifacts
+      as run input — propose with OpenSpec, execute with UseZombie.
+    link: "https://github.com/Fission-AI/OpenSpec"
+    example: "opsx/my-feature/specs/feature.md"
+
+  - name: "gstack /autoplan"
+    description: >
+      AI builder framework that produces structured plans through
+      CEO review, eng review, and design review pipelines. Plans
+      output implementation specs with scope decisions, architecture
+      diagrams, and test requirements. Feed the plan output directly
+      to UseZombie as a spec.
+    link: "https://garryslist.org"
+    example: "Plan from /office-hours → /plan-eng-review → zombiectl run"
+
+  - name: "Any markdown file"
+    description: >
+      No framework required. A plain markdown file describing what
+      you want built is a valid spec. UseZombie validates file
+      references and flags ambiguities before the agent runs.
+    link: null
+    example: "docs/build-webhook-endpoint.md"
+
+zero_config_message: >
+  No GitHub Actions to configure. No CI YAML to write. No deploy
+  pipeline to maintain. Submit a spec, UseZombie handles lint, test,
+  build, self-repair, and PR creation inside a sandboxed environment.
+  Your repo stays clean.
 ```
 
 ---
