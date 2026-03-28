@@ -151,7 +151,7 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Load npm token from 1Password
-        uses: 1password/load-secrets-action@v3
+        uses: 1password/load-secrets-action@v4
         with:
           export-env: true
         env:
@@ -213,7 +213,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Load PROD deploy secrets from 1Password
-        uses: 1password/load-secrets-action@v3
+        uses: 1password/load-secrets-action@v4
         with:
           export-env: true
         env:
@@ -237,7 +237,7 @@ jobs:
           GRAFANA_OTLP_INSTANCE_ID: op://${{ vars.VAULT_PROD }}/grafana-prod/instance-id
           GRAFANA_OTLP_API_KEY: op://${{ vars.VAULT_PROD }}/grafana-prod/api-key
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@v1.5
 
       - name: Sync Fly secrets from vault
         run: |
@@ -291,7 +291,7 @@ jobs:
           curl -sf https://api.usezombie.com/readyz | jq -e '.ready == true'
 
       - name: Join Tailscale network for private worker SSH
-        uses: tailscale/github-action@v3
+        uses: tailscale/github-action@v4
         with:
           authkey: ${{ env.TAILSCALE_AUTHKEY }}
           tags: tag:ci
