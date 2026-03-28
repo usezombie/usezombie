@@ -1,37 +1,217 @@
-# UseZombie — Agent Delivery Control Plane
+# UseZombie — Website Content Map
 
 Date: Mar 28, 2026
-Status: Active positioning baseline (replaces GTM.md)
+Status: Active content source for `ui/packages/website/`
+
+Maps to: `Hero.tsx`, `FeatureSection.tsx`, `FeatureFlow.tsx`, `HowItWorks.tsx`, `Home.tsx`, `Agents.tsx`, `Pricing.tsx`
 
 ---
 
-## Category and Positioning
+## Hero
 
-**Category:** Agent Delivery Control Plane
-
-**Entry message:** Submit a spec. Get a validated PR. No babysitting.
-
-**Promise:** Spec-driven pipelines with self-repairing agents, scored output, and evidence-backed PRs.
-
----
-
-## What Makes UseZombie Different
-
-1. **Spec-driven, not chat-thread driven.** Work starts from versioned specs and deterministic run state. No prompt archaeology.
-
-2. **Self-repair gate loop.** Agents run `make lint`, `make test`, and `make build` and fix their own errors before the PR lands. You review a passing build, not a broken draft.
-
-3. **Scored agents.** Every run produces a quality scorecard: wall time, repair loop count, token consumption, test delta. You can see whether the agent struggled or sailed through.
-
-4. **GitHub as output.** Runs produce a PR with branch push, scorecard comment, and an agent-generated explanation. Your review queue, not a chat thread, is the delivery surface.
-
-5. **Auto-merge on trust (Phase 2).** When a run's score exceeds a configured threshold, the PR merges autonomously. Ship when the evidence is good enough.
-
-6. **Honest restart semantics.** Runs recover from persisted stage state. No hidden in-memory chat state, no silent retries from scratch.
+```yaml
+badge: "For engineering teams · BYOK · No token markup"
+line1: "Submit a spec."
+line2: "Get a validated PR."
+kicker: >
+  UseZombie turns specs into validated pull requests with self-repairing
+  agents, run quality scoring, and evidence-backed scorecards so teams
+  ship with confidence, not babysitting.
+cta_primary: "Connect GitHub, automate PRs"
+cta_secondary: "View pricing"
+```
 
 ---
 
-## Current Product Story
+## How It Works (3 steps)
+
+```yaml
+steps:
+  - title: "Write a spec"
+    description: >
+      Describe what you want built in a markdown spec. UseZombie validates
+      file references and catches ambiguities before any agent runs.
+  - title: "Agents implement with self-repair"
+    description: >
+      An agent implements your spec, then runs lint, test, and build gates.
+      If a gate fails, the agent reads the error and fixes it automatically,
+      up to 3 repair loops.
+  - title: "Review a scored PR"
+    description: >
+      A passing run opens a PR with an agent-generated explanation,
+      a scorecard (gate results, repair loops, wall time, tokens consumed),
+      and the full diff. Review one PR instead of babysitting ten agent sessions.
+```
+
+---
+
+## Features (6 cards)
+
+```yaml
+features:
+  - number: "01"
+    title: "Spec-driven, not chat-driven"
+    description: >
+      Work starts from versioned markdown specs with deterministic run state.
+      No prompt archaeology. No lost chat threads.
+
+  - number: "02"
+    title: "Self-repair gate loop"
+    description: >
+      Agents run make lint, make test, and make build, then fix their own
+      errors before the PR lands. You review a passing build, not a broken draft.
+
+  - number: "03"
+    title: "Scored agent output"
+    description: >
+      Every run produces a quality scorecard: wall time, repair loop count,
+      token consumption, test delta. See whether the agent struggled or sailed.
+
+  - number: "04"
+    title: "Evidence-backed PRs"
+    description: >
+      PRs include an agent-generated explanation of what changed and why,
+      a scorecard comment with gate results, and the full diff. Review in
+      30 seconds, not 10 minutes.
+
+  - number: "05"
+    title: "Cost control built in"
+    description: >
+      Per-run token budgets, wall time limits, and repair loop caps prevent
+      runaway costs. Cancel runs mid-flight. One bad spec never becomes an
+      infinite token burn.
+
+  - number: "06"
+    title: "Sandboxed execution"
+    description: >
+      Agent code runs inside Landlock filesystem isolation, cgroup memory
+      and CPU limits, and network deny-by-default. Agents cannot exfiltrate
+      data or escape their workspace.
+```
+
+---
+
+## Feature Flow (visual pipeline)
+
+```yaml
+flow:
+  - label: "Spec"
+    detail: "Markdown spec submitted via CLI or API"
+  - label: "Validate"
+    detail: "File references checked, ambiguities flagged"
+  - label: "Agent"
+    detail: "NullClaw agent implements in sandboxed worktree"
+  - label: "Gates"
+    detail: "lint → test → build with self-repair loops"
+  - label: "Score"
+    detail: "Quality scorecard: loops, time, tokens, tests"
+  - label: "PR"
+    detail: "Branch pushed, PR opened with explanation + scorecard"
+```
+
+---
+
+## Target Users
+
+```yaml
+users:
+  - name: "Solo builder"
+    hook: "Submit a spec, get a PR, review instead of babysit."
+    detail: >
+      Agent handles the implementation loop and lint/test/build gates.
+      You write specs and review PRs. Everything between is autonomous.
+
+  - name: "Small team (2-5)"
+    hook: "Convert your spec backlog into a PR pipeline."
+    detail: >
+      Scorecards make agent quality visible and comparable across runs.
+      Cost control prevents runaway usage. Every PR arrives with evidence.
+
+  - name: "Agent-to-agent"
+    hook: "Your planner agent triggers runs via API."
+    detail: >
+      UseZombie is the execution layer. Upstream agent validates spec,
+      submits run, gets scorecard back. One stable API contract.
+```
+
+---
+
+## Agents Page (`Agents.tsx`)
+
+```yaml
+headline: "Agents are markdown files."
+subline: >
+  An agent profile is a markdown file with frontmatter config: model,
+  repair strategy, gate settings. The agent's score follows it across runs.
+
+agent_profiles:
+  - name: "fast-shipper"
+    strategy: "Speed-optimized. Minimal diff. One repair loop max."
+    model: "claude-sonnet-4-6"
+
+  - name: "test-heavy"
+    strategy: "Maximizes test coverage. Adds edge case tests. Thorough."
+    model: "claude-opus-4-6"
+
+  - name: "safe-conservative"
+    strategy: "Minimal changes. Defensive coding. Three repair loops."
+    model: "claude-sonnet-4-6"
+
+scoring_dimensions:
+  - "Gate pass rate (lint, test, build)"
+  - "Repair loop count (fewer = better)"
+  - "Wall time (faster = better)"
+  - "Token consumption (efficient = better)"
+  - "Test delta (more tests added = better)"
+  - "Diff size (smaller = better for same outcome)"
+
+phase2_teaser: >
+  Phase 2: multiple agents compete on the same spec in isolated worktrees.
+  The highest-scoring agent's PR is opened. Losers' branches are abandoned.
+  Score history accumulates. Poorly-performing agents get retired.
+```
+
+---
+
+## Pricing Page (`Pricing.tsx`)
+
+```yaml
+plans:
+  - name: "Hobby"
+    price: "Free"
+    credit: "$10 included credit"
+    features:
+      - "Unlimited specs"
+      - "Self-repair gate loop"
+      - "Scored PRs with evidence"
+      - "1 workspace"
+      - "Community support"
+
+  - name: "Scale"
+    price: "Pay as you go"
+    features:
+      - "Everything in Hobby"
+      - "Unlimited workspaces"
+      - "Priority execution queue"
+      - "Cost control dashboards"
+      - "Email support"
+```
+
+---
+
+## Messaging Guardrails
+
+**Do say:** deterministic, scored, self-repairing, spec-driven, evidence-backed, autonomous
+
+**Do not say:**
+- "AI writes your code" — UseZombie delivers validated PRs, not raw code
+- "fully autonomous" — until auto-merge ships in v2, a human reviews before merge
+- "agents keep running through upgrades"
+- "single binary"
+
+---
+
+## v1 / v2 Product Story (internal reference)
 
 ### v1 (shipping)
 
@@ -51,31 +231,3 @@ Status: Active positioning baseline (replaces GTM.md)
 - Progress streaming (SSE)
 - Failure replay narratives
 - Firecracker sandbox backend
-
----
-
-## Target Users
-
-**Solo builder.** Submit a spec, get a PR, review instead of babysit. Agent handles the implementation loop and lint/test/build gates.
-
-**Small engineering team (2–5).** Convert spec backlog into a PR pipeline. Scorecards make agent quality visible and comparable across runs.
-
-**Agent-to-agent.** An upstream planner agent triggers runs via API. UseZombie is the execution layer — receives the spec, delivers the PR.
-
----
-
-## Messaging Guardrails
-
-**Do say:**
-- deterministic
-- scored
-- self-repairing
-- spec-driven
-- evidence-backed
-- autonomous
-
-**Do not say:**
-- "AI writes your code" — UseZombie delivers validated PRs, not raw code
-- "fully autonomous" — until auto-merge ships in v2, a human reviews before merge
-- "agents keep running through upgrades"
-- "single binary"
