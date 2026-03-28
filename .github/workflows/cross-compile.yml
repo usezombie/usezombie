@@ -8,12 +8,14 @@ on:
       - 'src/**'
       - 'build.zig'
       - 'build.zig.zon'
+      - '.github/workflows/cross-compile.yml'
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
       - 'src/**'
       - 'build.zig'
       - 'build.zig.zon'
+      - '.github/workflows/cross-compile.yml'
 
 permissions:
   contents: read
