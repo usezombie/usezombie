@@ -475,8 +475,6 @@ pub fn executeRun(
         switch (terminal) {
             .done => {
                 // M16_001: Run gate tools if profile defines them.
-                var done_gate_results: ?[]const worker_gate_loop.GateToolResult = null;
-                var done_gate_loops: u32 = 0;
                 if (profile.gate_tools.len > 0) {
                     var gate_outcome = try worker_gate_loop.runGateLoop(.{
                         .alloc = run_alloc,
@@ -506,8 +504,22 @@ pub fn executeRun(
                         });
                         return;
                     }
-                    done_gate_results = gate_outcome.results.items;
-                    done_gate_loops = gate_outcome.total_repair_loops;
+                    // Call handleDoneOutcome inside the if block so gate results
+                    // are accessed before defer frees the ArrayList backing.
+                    try worker_stage_outcomes.handleDoneOutcome(.{
+                        .alloc = run_alloc, .conn = conn, .ctx = ctx, .cfg = cfg,
+                        .wt = &wt, .branch = branch, .running = running,
+                        .deadline_ms = deadline_ms, .token_cache = token_cache,
+                        .tenant_limiter = tenant_limiter,
+                        .final_stage_output = final_stage_output,
+                        .final_stage_actor = final_stage_actor,
+                        .attempt = attempt, .total_tokens = total_tokens,
+                        .total_wall_seconds = total_wall_seconds,
+                        .scoring_state = &scoring_state,
+                        .gate_results = gate_outcome.results.items,
+                        .gate_loop_count = gate_outcome.total_repair_loops,
+                    });
+                    return;
                 }
                 try worker_stage_outcomes.handleDoneOutcome(.{
                     .alloc = run_alloc, .conn = conn, .ctx = ctx, .cfg = cfg,
@@ -519,8 +531,6 @@ pub fn executeRun(
                     .attempt = attempt, .total_tokens = total_tokens,
                     .total_wall_seconds = total_wall_seconds,
                     .scoring_state = &scoring_state,
-                    .gate_results = done_gate_results,
-                    .gate_loop_count = done_gate_loops,
                 });
                 return;
             },

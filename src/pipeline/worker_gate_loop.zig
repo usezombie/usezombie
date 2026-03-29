@@ -106,8 +106,8 @@ pub fn runGateLoop(cfg: GateLoopConfig) !GateLoopOutcome {
                     defer cfg.alloc.free(repair_msg);
                     _ = exec.startStage(exec_id, .{
                         .stage_id = "gate_repair",
-                        .role_id = "scout",
-                        .skill_id = "scout",
+                        .role_id = topology.ROLE_SCOUT,
+                        .skill_id = topology.ROLE_SCOUT,
                         .message = repair_msg,
                     }) catch |err| {
                         log.warn("gate_loop.repair_stage_failed err={s} run_id={s}", .{ @errorName(err), cfg.run_id });
