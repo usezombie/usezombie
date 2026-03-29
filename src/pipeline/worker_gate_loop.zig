@@ -23,10 +23,19 @@ pub const MAX_OUTPUT_BYTES: usize = 4096;
 pub const GateToolResult = struct {
     gate_name: []const u8,
     exit_code: u32,
-    stdout: []const u8,
-    stderr: []const u8,
+    stdout: []const u8, // owned when from executeGateCommand
+    stderr: []const u8, // owned when from executeGateCommand
     wall_ms: u64,
     passed: bool,
+    owned: bool = false,
+
+    /// Free owned stdout/stderr. No-op for borrowed (test-constructed) results.
+    pub fn deinit(self: GateToolResult, alloc: std.mem.Allocator) void {
+        if (self.owned) {
+            if (self.stdout.len > 0) alloc.free(self.stdout);
+            if (self.stderr.len > 0) alloc.free(self.stderr);
+        }
+    }
 };
 
 pub const GateLoopOutcome = struct {
@@ -201,6 +210,7 @@ pub fn executeGateCommand(
             .stderr = try alloc.dupe(u8, @errorName(err)),
             .wall_ms = end_ms - start_ms,
             .passed = false,
+            .owned = true,
         };
     };
 
@@ -221,6 +231,7 @@ pub fn executeGateCommand(
             .stderr = try alloc.dupe(u8, "gate command timed out"),
             .wall_ms = end_ms - start_ms,
             .passed = false,
+            .owned = true,
         };
     }
 
@@ -244,6 +255,7 @@ pub fn executeGateCommand(
         .stderr = stderr_owned,
         .wall_ms = end_ms - start_ms,
         .passed = exit_code == 0,
+        .owned = true,
     };
 }
 
@@ -274,6 +286,7 @@ fn persistGateResults(
     const now_ms = std.time.milliTimestamp();
     for (results, 0..) |r, i| {
         const gate_id = try id_format.generateGateResultId(alloc);
+        defer alloc.free(gate_id);
         _ = try conn.exec(
             "INSERT INTO gate_results (id, run_id, gate_name, attempt, exit_code, stdout_tail, stderr_tail, wall_ms, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             .{ gate_id, run_id, r.gate_name, @as(i32, @intCast(i + 1)), @as(i32, @intCast(r.exit_code)), r.stdout, r.stderr, @as(i64, @intCast(r.wall_ms)), now_ms },

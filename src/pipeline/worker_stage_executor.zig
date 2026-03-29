@@ -492,7 +492,10 @@ pub fn executeRun(
                         .max_repair_loops = profile.max_repair_loops,
                         .gate_tool_timeout_ms = cfg.gate_tool_timeout_ms,
                     });
-                    defer gate_outcome.results.deinit(run_alloc);
+                    defer {
+                        for (gate_outcome.results.items) |r| r.deinit(run_alloc);
+                        gate_outcome.results.deinit(run_alloc);
+                    }
                     if (!gate_outcome.all_passed) {
                         try worker_stage_outcomes.handleGateExhaustedOutcome(.{
                             .alloc = run_alloc, .conn = conn, .ctx = ctx, .cfg = cfg,
