@@ -7,6 +7,8 @@ Status: Canonical architecture baseline for current implementation and near-term
 
 UseZombie accepts a spec request and produces a validated pull request through a deterministic control plane with explicit retries, auditable artifacts, and a replaceable execution substrate.
 
+For operational details (deployment, configuration, monitoring), see `docs/operator/`. For contributor setup and testing, see `docs/contributing/`.
+
 ## Version Roadmap
 
 ### v1 — Ship
