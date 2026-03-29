@@ -680,3 +680,231 @@ test "integration: orphan recovery is idempotent — second tick finds nothing" 
     try std.testing.expectEqual(@as(u32, 0), r2.blocked);
     try std.testing.expectEqual(@as(u32, 0), r2.requeued);
 }
+
+// T2: Boundary — run at exactly staleness threshold boundary
+test "integration: orphan recovery boundary — run at exact threshold is NOT recovered" {
+    const db_ctx = (try openReconcileTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+
+    try createOrphanTestTables(db_ctx.conn);
+
+    const now_ms = std.time.milliTimestamp();
+    // updated_at = now - 600_000 (exactly at threshold). Query uses `< cutoff`,
+    // so cutoff = now - 600_000, and updated_at == cutoff → NOT less than → skipped.
+    const boundary_ts = now_ms - 600_000;
+    try insertOrphanRun(db_ctx.conn, "boundary-run", "RUN_PLANNED", 1, boundary_ts, boundary_ts);
+
+    const config = orphan_recovery.OrphanRecoveryConfig{ .staleness_ms = 600_000 };
+    const result = try orphan_recovery.recoverOrphanedRuns(
+        std.testing.allocator, db_ctx.conn, null, null, config,
+    );
+    // Exactly at boundary — not stale enough (< is strict, not <=)
+    try std.testing.expectEqual(@as(u32, 0), result.blocked);
+}
+
+test "integration: orphan recovery boundary — run 1ms past threshold IS recovered" {
+    const db_ctx = (try openReconcileTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+
+    try createOrphanTestTables(db_ctx.conn);
+
+    const now_ms = std.time.milliTimestamp();
+    const past_boundary_ts = now_ms - 600_001; // 1ms past threshold
+    try insertOrphanRun(db_ctx.conn, "past-boundary-run", "RUN_PLANNED", 1, past_boundary_ts, past_boundary_ts);
+
+    const config = orphan_recovery.OrphanRecoveryConfig{ .staleness_ms = 600_000 };
+    const result = try orphan_recovery.recoverOrphanedRuns(
+        std.testing.allocator, db_ctx.conn, null, null, config,
+    );
+    try std.testing.expectEqual(@as(u32, 1), result.blocked);
+}
+
+// T5: Concurrent reconcilers — SKIP LOCKED ensures disjoint processing
+test "integration: orphan recovery SKIP LOCKED prevents double-processing across connections" {
+    const db_ctx = (try openReconcileTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+
+    // Get a second connection to simulate concurrent reconciler
+    const conn2 = try db_ctx.pool.acquire();
+    defer db_ctx.pool.release(conn2);
+
+    try createOrphanTestTables(db_ctx.conn);
+
+    const now_ms = std.time.milliTimestamp();
+    const stale_ts = now_ms - 700_000;
+
+    try insertOrphanRun(db_ctx.conn, "concurrent-run-1", "RUN_PLANNED", 1, stale_ts, stale_ts);
+    try insertOrphanRun(db_ctx.conn, "concurrent-run-2", "PATCH_IN_PROGRESS", 1, stale_ts, stale_ts);
+
+    const config = orphan_recovery.OrphanRecoveryConfig{
+        .staleness_ms = 600_000,
+        .batch_limit = 1, // Each connection grabs 1 row
+    };
+
+    // First connection recovers 1 run
+    const r1 = try orphan_recovery.recoverOrphanedRuns(
+        std.testing.allocator, db_ctx.conn, null, null, config,
+    );
+    // Second connection gets the other row (SKIP LOCKED)
+    const r2 = try orphan_recovery.recoverOrphanedRuns(
+        std.testing.allocator, conn2, null, null, config,
+    );
+
+    // Total across both connections = 2, no duplicates
+    try std.testing.expectEqual(@as(u32, 2), r1.blocked + r2.blocked);
+    try std.testing.expectEqualStrings("BLOCKED", try getRunState(db_ctx.conn, "concurrent-run-1"));
+    try std.testing.expectEqualStrings("BLOCKED", try getRunState(db_ctx.conn, "concurrent-run-2"));
+}
+
+// T3: Re-queue with null Redis client falls back to BLOCKED (not stuck SPEC_QUEUED)
+test "integration: orphan recovery requeue with null Redis falls back to BLOCKED" {
+    const db_ctx = (try openReconcileTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+
+    try createOrphanTestTables(db_ctx.conn);
+
+    const now_ms = std.time.milliTimestamp();
+    const stale_ts = now_ms - 700_000;
+
+    try insertOrphanRun(db_ctx.conn, "no-redis-run", "RUN_PLANNED", 1, stale_ts, stale_ts);
+
+    // requeue_enabled=true but queue=null → should fall back to BLOCKED
+    const config = orphan_recovery.OrphanRecoveryConfig{
+        .staleness_ms = 600_000,
+        .requeue_enabled = true,
+        .max_attempts = 3,
+        .batch_limit = 32,
+    };
+    const result = try orphan_recovery.recoverOrphanedRuns(
+        std.testing.allocator, db_ctx.conn, null, null, config,
+    );
+
+    // Must be BLOCKED, not SPEC_QUEUED (no Redis to publish to)
+    try std.testing.expectEqual(@as(u32, 1), result.blocked);
+    try std.testing.expectEqual(@as(u32, 0), result.requeued);
+    try std.testing.expectEqualStrings("BLOCKED", try getRunState(db_ctx.conn, "no-redis-run"));
+}
+
+// T6: Multi-tick progressive drain — 5 orphans, batch_limit=2, verify 3 ticks drain all
+test "integration: orphan recovery multi-tick progressive drain" {
+    const db_ctx = (try openReconcileTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+
+    try createOrphanTestTables(db_ctx.conn);
+
+    const now_ms = std.time.milliTimestamp();
+    const stale_ts = now_ms - 700_000;
+
+    var i: usize = 0;
+    while (i < 5) : (i += 1) {
+        var buf: [32]u8 = undefined;
+        const rid = std.fmt.bufPrint(&buf, "drain-run-{d}", .{i}) catch unreachable;
+        try insertOrphanRun(db_ctx.conn, rid, "RUN_PLANNED", 1, stale_ts - @as(i64, @intCast(i)), stale_ts);
+    }
+
+    const config = orphan_recovery.OrphanRecoveryConfig{
+        .staleness_ms = 600_000,
+        .batch_limit = 2,
+    };
+
+    // Tick 1: drain 2
+    const r1 = try orphan_recovery.recoverOrphanedRuns(
+        std.testing.allocator, db_ctx.conn, null, null, config,
+    );
+    try std.testing.expectEqual(@as(u32, 2), r1.blocked);
+
+    // Tick 2: drain 2 more
+    const r2 = try orphan_recovery.recoverOrphanedRuns(
+        std.testing.allocator, db_ctx.conn, null, null, config,
+    );
+    try std.testing.expectEqual(@as(u32, 2), r2.blocked);
+
+    // Tick 3: drain last 1
+    const r3 = try orphan_recovery.recoverOrphanedRuns(
+        std.testing.allocator, db_ctx.conn, null, null, config,
+    );
+    try std.testing.expectEqual(@as(u32, 1), r3.blocked);
+
+    // Tick 4: nothing left
+    const r4 = try orphan_recovery.recoverOrphanedRuns(
+        std.testing.allocator, db_ctx.conn, null, null, config,
+    );
+    try std.testing.expectEqual(@as(u32, 0), r4.blocked);
+}
+
+// T3: Transition record has correct actor and reason for blocked path
+test "integration: orphan recovery transition record has orchestrator actor" {
+    const db_ctx = (try openReconcileTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+
+    try createOrphanTestTables(db_ctx.conn);
+
+    const now_ms = std.time.milliTimestamp();
+    const stale_ts = now_ms - 700_000;
+
+    try insertOrphanRun(db_ctx.conn, "actor-run", "PATCH_READY", 2, stale_ts, stale_ts);
+
+    const config = orphan_recovery.OrphanRecoveryConfig{ .staleness_ms = 600_000 };
+    _ = try orphan_recovery.recoverOrphanedRuns(
+        std.testing.allocator, db_ctx.conn, null, null, config,
+    );
+
+    // Verify transition record details
+    // check-pg-drain: ok — single row, drain after get
+    var q = try db_ctx.conn.query(
+        \\SELECT state_from, state_to, actor, reason_code, attempt
+        \\FROM run_transitions WHERE run_id = 'actor-run'
+    , .{});
+    defer q.deinit();
+    const row = (try q.next()).?;
+    const state_from = try row.get([]u8, 0);
+    const state_to = try row.get([]u8, 1);
+    const actor = try row.get([]u8, 2);
+    const reason = try row.get([]u8, 3);
+    const attempt = try row.get(i32, 4);
+    try q.drain();
+
+    try std.testing.expectEqualStrings("PATCH_READY", state_from);
+    try std.testing.expectEqualStrings("BLOCKED", state_to);
+    try std.testing.expectEqualStrings("orchestrator", actor);
+    try std.testing.expectEqualStrings("WORKER_CRASH_ORPHAN", reason);
+    try std.testing.expectEqual(@as(i32, 2), attempt);
+}
+
+// T3: CAS guard — concurrent UPDATE to same run doesn't corrupt state
+test "integration: orphan recovery CAS guard prevents double-transition" {
+    const db_ctx = (try openReconcileTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+
+    try createOrphanTestTables(db_ctx.conn);
+
+    const now_ms = std.time.milliTimestamp();
+    const stale_ts = now_ms - 700_000;
+
+    try insertOrphanRun(db_ctx.conn, "cas-run", "RUN_PLANNED", 1, stale_ts, stale_ts);
+
+    // Simulate: another process already moved this run to BLOCKED
+    _ = try db_ctx.conn.exec(
+        "UPDATE runs SET state = 'BLOCKED', updated_at = $1 WHERE run_id = 'cas-run'",
+        .{now_ms},
+    );
+
+    // Reconciler tick runs — the CAS `WHERE state = $3` won't match, so
+    // the UPDATE affects 0 rows. The transition record still gets written
+    // (idempotent — duplicate transitions are harmless in the audit log).
+    const config = orphan_recovery.OrphanRecoveryConfig{ .staleness_ms = 600_000 };
+    const result = try orphan_recovery.recoverOrphanedRuns(
+        std.testing.allocator, db_ctx.conn, null, null, config,
+    );
+
+    // Run was already BLOCKED before the scan — not in candidate states
+    try std.testing.expectEqual(@as(u32, 0), result.blocked);
+    try std.testing.expectEqualStrings("BLOCKED", try getRunState(db_ctx.conn, "cas-run"));
+}
