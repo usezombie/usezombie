@@ -37,21 +37,22 @@ jobs:
           VAULT_PROD: ${{ vars.VAULT_PROD }}
         run: ./playbooks/gates/check-credentials.sh
 
-  # ── 1a. Compile linux/amd64 binaries (Debian bookworm — matches runtime) ─
-  # Run inside debian:bookworm-slim so system libssl-dev matches the
-  # production container (GLIBC 2.36).  Avoids --no-allow-shlib-undefined
-  # failures caused by Ubuntu runners shipping OpenSSL built against newer
-  # GLIBC versions.
+  # ── 1a. Compile linux/amd64 binaries (Alpine — musl-native static OpenSSL) ─
+  # Build inside Alpine so static OpenSSL archives are musl-compatible.
+  # Produces fully static binaries that run on bookworm (Fly.io) and Trixie (bare-metal).
   compile-dev:
     needs: check-credentials
     runs-on: ubuntu-latest
     container:
-      image: mirror.gcr.io/library/debian:bookworm-slim
+      image: mirror.gcr.io/library/alpine:3.21
     steps:
       - name: Install build dependencies
         run: |
-          apt-get update && apt-get install -y --no-install-recommends git libssl-dev ca-certificates xz-utils
-          rm -f /usr/lib/x86_64-linux-gnu/libssl.so /usr/lib/x86_64-linux-gnu/libcrypto.so
+          apk add --no-cache git openssl-dev openssl-libs-static ca-certificates xz
+          mkdir -p /usr/lib/x86_64-linux-gnu /usr/include/x86_64-linux-gnu
+          ln -sf /usr/lib/libssl.a /usr/lib/x86_64-linux-gnu/libssl.a
+          ln -sf /usr/lib/libcrypto.a /usr/lib/x86_64-linux-gnu/libcrypto.a
+          ln -sf /usr/include/openssl /usr/include/x86_64-linux-gnu/openssl
 
       - uses: actions/checkout@v6
 
