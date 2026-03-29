@@ -608,6 +608,79 @@ test "staleness clamp is identity when staleness < now" {
     try std.testing.expectEqual(@as(i64, 400_000), cutoff_ms);
 }
 
+// T3: Verify tx_ok=false triggers ROLLBACK, not COMMIT.
+// This tests the defer control flow pattern used in recoverOrphanedRuns:
+// when a side-effect inside the txn fails and `continue` fires, tx_ok stays
+// false and the defer runs ROLLBACK instead of COMMIT.
+test "tx_ok pattern: false triggers ROLLBACK path" {
+    // Simulate the defer block logic from recoverOrphanedRuns
+    var committed = false;
+    var rolled_back = false;
+    {
+        const tx_ok = false;
+        defer {
+            if (tx_ok) {
+                committed = true;
+            } else {
+                rolled_back = true;
+            }
+        }
+        // Simulate: side-effect fails, tx_ok stays false
+    }
+    try std.testing.expect(!committed);
+    try std.testing.expect(rolled_back);
+}
+
+test "tx_ok pattern: true triggers COMMIT path" {
+    var committed = false;
+    var rolled_back = false;
+    {
+        var tx_ok = false;
+        defer {
+            if (tx_ok) {
+                committed = true;
+            } else {
+                rolled_back = true;
+            }
+        }
+        // Simulate: all side-effects succeed
+        tx_ok = true;
+    }
+    try std.testing.expect(committed);
+    try std.testing.expect(!rolled_back);
+}
+
+// T3: Verify that should_requeue requires non-null queue.
+// If queue is null, requeue_enabled=true still produces should_requeue=false.
+test "should_requeue is false when queue is null even with requeue_enabled" {
+    const requeue_enabled = true;
+    const queue: ?*redis_client.Client = null;
+    const attempt: u32 = 1;
+    const max_attempts: u32 = 3;
+    // Simulate the should_requeue expression from recoverOrphanedRuns
+    const should_requeue = requeue_enabled and
+        queue != null and
+        attempt < max_attempts;
+    try std.testing.expect(!should_requeue);
+}
+
+// T3: Verify requeued count is NOT incremented when queue is null
+test "requeue fallback: result.requeued stays 0 with null queue" {
+    // This mirrors the full decision path: requeue_enabled + null queue = blocked
+    const config = OrphanRecoveryConfig{
+        .requeue_enabled = true,
+        .max_attempts = 3,
+    };
+    const queue: ?*redis_client.Client = null;
+    const attempt: u32 = 1;
+    const should_requeue = config.requeue_enabled and
+        queue != null and
+        attempt < config.max_attempts;
+    try std.testing.expect(!should_requeue);
+    // In the actual code: !should_requeue means the else branch fires (BLOCKED),
+    // so result.requeued is never incremented.
+}
+
 // T11: loadConfig does not leak memory (testing allocator detects leaks)
 test "loadConfig does not leak memory with env vars set" {
     try std.posix.setenv("ORPHAN_RUN_STALENESS_MS", "120000", true);

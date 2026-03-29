@@ -908,3 +908,90 @@ test "integration: orphan recovery CAS guard prevents double-transition" {
     try std.testing.expectEqual(@as(u32, 0), result.blocked);
     try std.testing.expectEqualStrings("BLOCKED", try getRunState(db_ctx.conn, "cas-run"));
 }
+
+// T3: Transaction rollback on partial failure — simulate: BEGIN succeeds,
+// transition UPDATE succeeds inside txn, then the process "crashes" (we ROLLBACK
+// manually). The run must remain in its original state.
+test "integration: orphan recovery rollback preserves original state on mid-row failure" {
+    const db_ctx = (try openReconcileTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+
+    try createOrphanTestTables(db_ctx.conn);
+
+    const now_ms = std.time.milliTimestamp();
+    const stale_ts = now_ms - 700_000;
+
+    try insertOrphanRun(db_ctx.conn, "rollback-run", "PATCH_IN_PROGRESS", 1, stale_ts, stale_ts);
+
+    // Simulate the exact pattern from recoverOrphanedRuns:
+    // BEGIN → UPDATE runs SET state='BLOCKED' → (failure) → ROLLBACK
+    _ = try db_ctx.conn.exec("BEGIN", .{});
+    _ = try db_ctx.conn.exec(
+        "UPDATE runs SET state = 'BLOCKED', updated_at = $1 WHERE run_id = 'rollback-run' AND state = 'PATCH_IN_PROGRESS'",
+        .{now_ms},
+    );
+    // Simulate mid-row failure (scoring fails, Redis fails, etc.)
+    _ = try db_ctx.conn.exec("ROLLBACK", .{});
+
+    // Run must be back in original state after rollback
+    try std.testing.expectEqualStrings("PATCH_IN_PROGRESS", try getRunState(db_ctx.conn, "rollback-run"));
+    try std.testing.expectEqual(@as(i32, 1), try getRunAttempt(db_ctx.conn, "rollback-run"));
+
+    // Now verify: a real recovery tick picks it up and completes
+    const config = orphan_recovery.OrphanRecoveryConfig{ .staleness_ms = 600_000 };
+    const result = try orphan_recovery.recoverOrphanedRuns(
+        std.testing.allocator, db_ctx.conn, null, null, config,
+    );
+    try std.testing.expectEqual(@as(u32, 1), result.blocked);
+    try std.testing.expectEqualStrings("BLOCKED", try getRunState(db_ctx.conn, "rollback-run"));
+}
+
+// T3: Verify requeue with null Redis doesn't leave runs in SPEC_QUEUED
+// (the exact bug Greptile caught — Redis publish fails, DB commits, run stuck)
+test "integration: orphan recovery null queue never produces SPEC_QUEUED state" {
+    const db_ctx = (try openReconcileTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+
+    try createOrphanTestTables(db_ctx.conn);
+
+    const now_ms = std.time.milliTimestamp();
+    const stale_ts = now_ms - 700_000;
+
+    // Insert 3 runs at attempt=1 (below max_attempts=3)
+    try insertOrphanRun(db_ctx.conn, "nq-run-1", "RUN_PLANNED", 1, stale_ts, stale_ts);
+    try insertOrphanRun(db_ctx.conn, "nq-run-2", "PATCH_IN_PROGRESS", 1, stale_ts, stale_ts);
+    try insertOrphanRun(db_ctx.conn, "nq-run-3", "VERIFICATION_IN_PROGRESS", 2, stale_ts, stale_ts);
+
+    // requeue_enabled=true BUT queue=null → must all be BLOCKED, never SPEC_QUEUED
+    const config = orphan_recovery.OrphanRecoveryConfig{
+        .staleness_ms = 600_000,
+        .requeue_enabled = true,
+        .max_attempts = 3,
+        .batch_limit = 32,
+    };
+    const result = try orphan_recovery.recoverOrphanedRuns(
+        std.testing.allocator, db_ctx.conn, null, null, config,
+    );
+
+    try std.testing.expectEqual(@as(u32, 3), result.blocked);
+    try std.testing.expectEqual(@as(u32, 0), result.requeued);
+
+    // Verify NO run ended up in SPEC_QUEUED
+    // check-pg-drain: ok — single row, drain after get
+    var q = try db_ctx.conn.query(
+        "SELECT COUNT(*)::BIGINT FROM runs WHERE state = 'SPEC_QUEUED'",
+        .{},
+    );
+    defer q.deinit();
+    const row = (try q.next()).?;
+    const spec_queued_count = try row.get(i64, 0);
+    try q.drain();
+    try std.testing.expectEqual(@as(i64, 0), spec_queued_count);
+
+    // All must be BLOCKED
+    try std.testing.expectEqualStrings("BLOCKED", try getRunState(db_ctx.conn, "nq-run-1"));
+    try std.testing.expectEqualStrings("BLOCKED", try getRunState(db_ctx.conn, "nq-run-2"));
+    try std.testing.expectEqualStrings("BLOCKED", try getRunState(db_ctx.conn, "nq-run-3"));
+}
