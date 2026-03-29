@@ -45,6 +45,10 @@ UseZombie serves several distinct audiences and workflows:
 6. **Workspace Operator Controls** -- Operators manage harnesses, skill secrets, and scoring configuration via RBAC-scoped endpoints (user / operator / admin).
 7. **Scored Agent Selection (Phase 2)** -- Multiple agent profiles compete on the same spec. The highest-scoring profile opens the PR; score history tracks quality over time.
 
+## Website content
+
+The website content map defines the marketing copy, feature cards, pricing tiers, and messaging guardrails for `ui/packages/website/`. See [`docs/contributing/website-content.md`](website-content.md) for the full content source.
+
 ## Questions
 
 Open a GitHub Discussion or reach out on Discord for questions that are not bug reports or feature requests.
