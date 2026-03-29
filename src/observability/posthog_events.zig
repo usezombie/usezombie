@@ -608,6 +608,31 @@ pub fn trackAuthRejected(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Orphan recovery events (M14_001)
+// ---------------------------------------------------------------------------
+
+pub fn trackRunOrphanRecovered(
+    client: ?*posthog.PostHogClient,
+    distinct_id: []const u8,
+    run_id: []const u8,
+    workspace_id: []const u8,
+    staleness_ms: u64,
+) void {
+    if (client) |ph| {
+        const props = [_]posthog.Property{
+            .{ .key = "run_id", .value = .{ .string = run_id } },
+            .{ .key = "workspace_id", .value = .{ .string = workspace_id } },
+            .{ .key = "staleness_ms", .value = .{ .integer = @intCast(staleness_ms) } },
+        };
+        ph.capture(.{
+            .distinct_id = distinct_id,
+            .event = "run_orphan_recovered",
+            .properties = &props,
+        }) catch {};
+    }
+}
+
 // Tests live in posthog_events_test.zig
 comptime {
     _ = @import("posthog_events_test.zig");

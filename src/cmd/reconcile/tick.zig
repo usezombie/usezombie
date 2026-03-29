@@ -18,6 +18,7 @@ const billing_adapter = @import("../../state/billing_adapter.zig");
 const billing_reconciler = @import("../../state/billing_reconciler.zig");
 const proposals = @import("../../pipeline/scoring_mod/proposals.zig");
 const posthog_events = @import("../../observability/posthog_events.zig");
+const orphan_recovery = @import("../../state/orphan_recovery.zig");
 const emit_mod = @import("emit.zig");
 
 const log = std.log.scoped(.reconcile);
@@ -59,6 +60,23 @@ pub fn reconcileTick(pool: *db.Pool, posthog_client: ?*posthog.PostHogClient) !o
                 item.fields_changed,
             );
         }
+    }
+
+    // M14_001: Orphan run recovery
+    const orphan_config = orphan_recovery.loadConfig(std.heap.page_allocator);
+    const orphan_result = orphan_recovery.recoverOrphanedRuns(
+        std.heap.page_allocator,
+        conn,
+        posthog_client,
+        orphan_config,
+    ) catch |err| blk: {
+        log.warn("reconcile.orphan_recovery_fail err={s}", .{@errorName(err)});
+        break :blk orphan_recovery.OrphanRecoveryResult{};
+    };
+    if (orphan_result.blocked > 0 or orphan_result.requeued > 0) {
+        log.info("reconcile.orphan_recovery blocked={d} requeued={d}", .{
+            orphan_result.blocked, orphan_result.requeued,
+        });
     }
 
     return .{
