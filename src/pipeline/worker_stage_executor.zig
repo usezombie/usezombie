@@ -22,6 +22,7 @@ const scoring = @import("scoring.zig");
 const worker_stage_types = @import("worker_stage_types.zig");
 const worker_stage_helpers = @import("worker_stage_helpers.zig");
 const worker_stage_outcomes = @import("worker_stage_outcomes.zig");
+const worker_gate_loop = @import("worker_gate_loop.zig");
 const sandbox_runtime = @import("sandbox_runtime.zig");
 const executor_client = @import("../executor/client.zig");
 const log = std.log.scoped(.worker);
@@ -230,6 +231,16 @@ pub fn executeRun(
     defer {
         git.removeWorktree(run_alloc, bare_path, wt.path);
         wt.deinit();
+    }
+
+    // M16_001 §4.1: Record base commit SHA for worktree isolation.
+    const head_sha = git.getHeadSha(run_alloc, wt.path) catch |err| blk: {
+        log.warn("pipeline.head_sha_fail err={s} run_id={s}", .{ @errorName(err), ctx.run_id });
+        break :blk "";
+    };
+    if (head_sha.len > 0) {
+        const now_ms = std.time.milliTimestamp();
+        _ = conn.exec("UPDATE runs SET base_commit_sha = $1, updated_at = $2 WHERE run_id = $3", .{ head_sha, now_ms, ctx.run_id }) catch {};
     }
 
     const branch = try std.fmt.allocPrint(run_alloc, "zombie/run-{s}", .{ctx.run_id});
@@ -463,23 +474,49 @@ pub fn executeRun(
 
         switch (terminal) {
             .done => {
+                // M16_001: Run gate tools if profile defines them.
+                var done_gate_results: ?[]const worker_gate_loop.GateToolResult = null;
+                var done_gate_loops: u32 = 0;
+                if (profile.gate_tools.len > 0) {
+                    const gate_outcome = try worker_gate_loop.runGateLoop(.{
+                        .alloc = run_alloc,
+                        .conn = conn,
+                        .run_id = ctx.run_id,
+                        .workspace_id = ctx.workspace_id,
+                        .wt_path = wt.path,
+                        .running = running,
+                        .deadline_ms = deadline_ms,
+                        .executor = if (exec_id != null) cfg.executor else null,
+                        .execution_id = exec_id,
+                        .gate_tools = profile.gate_tools,
+                        .max_repair_loops = profile.max_repair_loops,
+                        .gate_tool_timeout_ms = cfg.gate_tool_timeout_ms,
+                    });
+                    if (!gate_outcome.all_passed) {
+                        try worker_stage_outcomes.handleGateExhaustedOutcome(.{
+                            .alloc = run_alloc, .conn = conn, .ctx = ctx, .cfg = cfg,
+                            .gate_results = gate_outcome.results.items,
+                            .total_repair_loops = gate_outcome.total_repair_loops,
+                            .attempt = attempt, .total_wall_seconds = total_wall_seconds,
+                            .scoring_state = &scoring_state,
+                        });
+                        return;
+                    }
+                    done_gate_results = gate_outcome.results.items;
+                    done_gate_loops = gate_outcome.total_repair_loops;
+                }
                 try worker_stage_outcomes.handleDoneOutcome(.{
-                    .alloc = run_alloc,
-                    .conn = conn,
-                    .ctx = ctx,
-                    .cfg = cfg,
-                    .wt = &wt,
-                    .branch = branch,
-                    .running = running,
-                    .deadline_ms = deadline_ms,
-                    .token_cache = token_cache,
+                    .alloc = run_alloc, .conn = conn, .ctx = ctx, .cfg = cfg,
+                    .wt = &wt, .branch = branch, .running = running,
+                    .deadline_ms = deadline_ms, .token_cache = token_cache,
                     .tenant_limiter = tenant_limiter,
                     .final_stage_output = final_stage_output,
                     .final_stage_actor = final_stage_actor,
-                    .attempt = attempt,
-                    .total_tokens = total_tokens,
+                    .attempt = attempt, .total_tokens = total_tokens,
                     .total_wall_seconds = total_wall_seconds,
                     .scoring_state = &scoring_state,
+                    .gate_results = done_gate_results,
+                    .gate_loop_count = done_gate_loops,
                 });
                 return;
             },

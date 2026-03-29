@@ -153,6 +153,8 @@ pub fn applyProposalChangesToConfig(
     var candidate = topology.Profile{
         .agent_id = try alloc.dupe(u8, profile.agent_id),
         .stages = try stages.toOwnedSlice(alloc),
+        .gate_tools = try alloc.dupe(topology.GateTool, profile.gate_tools),
+        .max_repair_loops = profile.max_repair_loops,
         .alloc = alloc,
     };
     defer candidate.deinit();
