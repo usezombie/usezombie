@@ -8,8 +8,10 @@ const std = @import("std");
 const pg = @import("pg");
 const base = @import("../db/test_fixtures.zig");
 const topology = @import("topology.zig");
+const worker_gate_loop = @import("worker_gate_loop.zig");
 const scoring_types = @import("scoring_mod/types.zig");
 const scoring_math = @import("scoring_mod/math.zig");
+const classify = @import("scoring_mod/classify.zig");
 const metrics_counters = @import("../observability/metrics_counters.zig");
 const id_format = @import("../types/id_format.zig");
 const codes = @import("../errors/codes.zig");
@@ -269,6 +271,7 @@ test "gate error codes are defined and have hints" {
     try std.testing.expect(codes.hint(codes.ERR_GATE_COMMAND_FAILED) != null);
     try std.testing.expect(codes.hint(codes.ERR_GATE_COMMAND_TIMEOUT) != null);
     try std.testing.expect(codes.hint(codes.ERR_GATE_REPAIR_EXHAUSTED) != null);
+    try std.testing.expect(codes.hint(codes.ERR_GATE_PERSIST_FAILED) != null);
 }
 
 // ---------------------------------------------------------------------------
@@ -320,4 +323,60 @@ test "integration: concurrent gate_result inserts for different runs" {
             }
         } else |_| {}
     }
+}
+
+// ---------------------------------------------------------------------------
+// T1 — executeGateCommand: passing command returns exit_code 0
+// ---------------------------------------------------------------------------
+
+test "executeGateCommand with true returns passed" {
+    const alloc = std.testing.allocator;
+    const result = try worker_gate_loop.executeGateCommand(alloc, "/tmp", "run_lint", "true", 10_000);
+    try std.testing.expectEqual(@as(u32, 0), result.exit_code);
+    try std.testing.expect(result.passed);
+    try std.testing.expect(result.wall_ms < 5_000);
+}
+
+// ---------------------------------------------------------------------------
+// T3 — executeGateCommand: failing command returns non-zero
+// ---------------------------------------------------------------------------
+
+test "executeGateCommand with false returns failed" {
+    const alloc = std.testing.allocator;
+    const result = try worker_gate_loop.executeGateCommand(alloc, "/tmp", "run_build", "false", 10_000);
+    try std.testing.expect(result.exit_code != 0);
+    try std.testing.expect(!result.passed);
+}
+
+// ---------------------------------------------------------------------------
+// T2 — executeGateCommand: empty command returns error
+// ---------------------------------------------------------------------------
+
+test "executeGateCommand with empty command returns failed" {
+    const alloc = std.testing.allocator;
+    const result = try worker_gate_loop.executeGateCommand(alloc, "/tmp", "run_lint", "", 10_000);
+    try std.testing.expectEqual(@as(u32, 1), result.exit_code);
+    try std.testing.expect(!result.passed);
+    try std.testing.expectEqualStrings("empty command", result.stderr);
+}
+
+// ---------------------------------------------------------------------------
+// T1 — classify: blocked_gate_exhausted maps to tool_call_failure
+// ---------------------------------------------------------------------------
+
+test "classify gate_exhausted maps to tool_call_failure" {
+    const score = scoring_math.computeCompletionScore(.blocked_gate_exhausted);
+    try std.testing.expectEqual(@as(u8, 20), score);
+}
+
+// ---------------------------------------------------------------------------
+// T4 — executeGateCommand captures stdout from echo
+// ---------------------------------------------------------------------------
+
+test "executeGateCommand captures stdout" {
+    const alloc = std.testing.allocator;
+    const result = try worker_gate_loop.executeGateCommand(alloc, "/tmp", "run_test", "echo hello", 10_000);
+    try std.testing.expectEqual(@as(u32, 0), result.exit_code);
+    try std.testing.expect(result.passed);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "hello") != null);
 }

@@ -137,6 +137,8 @@ pub fn hint(code: []const u8) ?[]const u8 {
         return "A gate command exceeded its timeout. Increase GATE_TOOL_TIMEOUT_MS or optimize the gate command.";
     if (std.mem.eql(u8, code, ERR_GATE_REPAIR_EXHAUSTED))
         return "Agent exhausted all repair attempts without passing gates. Review gate results for the repeated failure pattern.";
+    if (std.mem.eql(u8, code, ERR_GATE_PERSIST_FAILED))
+        return "Gate results could not be written to the database. Check DB connectivity and that the gate_results table exists.";
     return null;
 }
 

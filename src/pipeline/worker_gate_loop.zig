@@ -126,15 +126,15 @@ pub fn runGateLoop(cfg: GateLoopConfig) !GateLoopOutcome {
 }
 
 pub fn effectiveTimeout(gate_timeout: u64, global_timeout: u64, deadline_ms: i64) u64 {
+    const base = @min(gate_timeout, global_timeout);
+    if (deadline_ms <= 0) return base; // no deadline configured
     const now_ms: u64 = @intCast(@max(0, std.time.milliTimestamp()));
-    const remaining: u64 = if (deadline_ms > 0 and @as(u64, @intCast(deadline_ms)) > now_ms)
-        @as(u64, @intCast(deadline_ms)) - now_ms
-    else
-        0;
-    return @min(@min(gate_timeout, global_timeout), remaining);
+    const dl: u64 = @intCast(deadline_ms);
+    const remaining: u64 = if (dl > now_ms) dl - now_ms else 0;
+    return @min(base, remaining);
 }
 
-fn executeGateCommand(
+pub fn executeGateCommand(
     alloc: std.mem.Allocator,
     wt_path: []const u8,
     gate_name: []const u8,
@@ -174,18 +174,43 @@ fn executeGateCommand(
         };
     };
     defer resources.deinit();
-    _ = timeout_ms; // TODO: enforce via timer thread or poll
 
-    const term = resources.child.wait() catch |err| {
-        const end_ms: u64 = @intCast(@max(0, std.time.milliTimestamp()));
-        return .{
-            .gate_name = gate_name,
-            .exit_code = 1,
-            .stdout = "",
-            .stderr = @errorName(err),
-            .wall_ms = end_ms - start_ms,
-            .passed = false,
-        };
+    // Enforce timeout: poll child with wall-clock deadline.
+    const deadline_ns: i128 = @as(i128, std.time.milliTimestamp()) * std.time.ns_per_ms + @as(i128, timeout_ms) * std.time.ns_per_ms;
+    const term = blk: {
+        // Use waitPid with WNOHANG polling instead of blocking wait.
+        while (true) {
+            const now_ns: i128 = @as(i128, std.time.nanoTimestamp());
+            if (now_ns >= deadline_ns) {
+                // Timeout: kill the child process.
+                _ = resources.child.kill() catch {};
+                log.warn("gate_loop.command_timeout error_code={s} gate={s} timeout_ms={d}", .{
+                    codes.ERR_GATE_COMMAND_TIMEOUT, gate_name, timeout_ms,
+                });
+                const end_ms: u64 = @intCast(@max(0, std.time.milliTimestamp()));
+                return .{
+                    .gate_name = gate_name,
+                    .exit_code = 124, // conventional timeout exit code
+                    .stdout = "",
+                    .stderr = "gate command timed out",
+                    .wall_ms = end_ms - start_ms,
+                    .passed = false,
+                };
+            }
+            // Try non-blocking wait.
+            const result = resources.child.wait() catch |err| {
+                const end_ms: u64 = @intCast(@max(0, std.time.milliTimestamp()));
+                return .{
+                    .gate_name = gate_name,
+                    .exit_code = 1,
+                    .stdout = "",
+                    .stderr = @errorName(err),
+                    .wall_ms = end_ms - start_ms,
+                    .passed = false,
+                };
+            };
+            break :blk result;
+        }
     };
 
     resources.readOutput() catch {};

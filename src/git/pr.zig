@@ -240,6 +240,8 @@ pub fn findOpenPullRequestByHead(
 
 /// Post a comment on an existing pull request (identified by its html_url).
 /// Best-effort: logs and returns on failure instead of propagating errors.
+/// NOTE: Auth header is passed via curl argv (same as createPullRequest/findOpenPullRequestByHead).
+/// Migration to std.http.Client to avoid /proc/pid/cmdline exposure is tracked as a follow-up.
 pub fn postPrComment(
     alloc: std.mem.Allocator,
     repo_url: []const u8,

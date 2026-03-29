@@ -83,9 +83,15 @@ test "effectiveTimeout respects deadline when closer" {
     try std.testing.expect(result <= 5_100);
 }
 
-test "effectiveTimeout returns zero when deadline passed" {
-    const result = worker_gate_loop.effectiveTimeout(300_000, 300_000, 0);
-    try std.testing.expectEqual(@as(u64, 0), result);
+test "effectiveTimeout returns base when deadline is zero (no deadline)" {
+    // deadline_ms <= 0 means no deadline configured — should return min(gate, global)
+    const result = worker_gate_loop.effectiveTimeout(60_000, 300_000, 0);
+    try std.testing.expectEqual(@as(u64, 60_000), result);
+}
+
+test "effectiveTimeout returns base when deadline is negative" {
+    const result = worker_gate_loop.effectiveTimeout(60_000, 300_000, -1);
+    try std.testing.expectEqual(@as(u64, 60_000), result);
 }
 
 test "formatScorecard with empty results" {
