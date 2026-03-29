@@ -124,3 +124,36 @@ test "profile with gate_tools deinit does not leak" {
         profile.deinit();
     }
 }
+
+// ---------------------------------------------------------------------------
+// T7 — Regression: custom roles are preserved (no hardcoded scout/echo/warden)
+// ---------------------------------------------------------------------------
+
+test "custom profile implement stage has custom role for repair turns" {
+    const alloc = std.testing.allocator;
+    const json =
+        \\{"agent_id":"custom-roles","stages":[
+        \\  {"stage_id":"plan","role":"planner","skill":"planner"},
+        \\  {"stage_id":"implement","role":"coder","skill":"clawhub://org/coder@1.0"},
+        \\  {"stage_id":"verify","role":"checker","skill":"clawhub://org/checker@1.0","gate":true,"on_pass":"done","on_fail":"retry"}
+        \\],"gate_tools":[{"name":"lint","command":"make lint"}]}
+    ;
+    var profile = try topology.parseProfileJson(alloc, json);
+    defer profile.deinit();
+
+    // The implement stage (buildStages()[0]) should have the custom role, not "scout".
+    const build_stages = profile.buildStages();
+    try std.testing.expectEqual(@as(usize, 1), build_stages.len);
+    try std.testing.expectEqualStrings("coder", build_stages[0].role_id);
+    try std.testing.expectEqualStrings("clawhub://org/coder@1.0", build_stages[0].skill_id);
+}
+
+test "default profile implement stage is scout (backward compat)" {
+    var profile = try topology.defaultProfile(std.testing.allocator);
+    defer profile.deinit();
+
+    const build_stages = profile.buildStages();
+    try std.testing.expectEqual(@as(usize, 1), build_stages.len);
+    try std.testing.expectEqualStrings("scout", build_stages[0].role_id);
+    try std.testing.expectEqualStrings("scout", build_stages[0].skill_id);
+}

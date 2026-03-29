@@ -476,6 +476,9 @@ pub fn executeRun(
             .done => {
                 // M16_001: Run gate tools if profile defines them.
                 if (profile.gate_tools.len > 0) {
+                    // Resolve the implement stage for repair turns (profile-driven, not hardcoded).
+                    const build_stages = profile.buildStages();
+                    const repair_stage = if (build_stages.len > 0) build_stages[0] else profile.stages[1];
                     var gate_outcome = try worker_gate_loop.runGateLoop(.{
                         .alloc = run_alloc,
                         .conn = conn,
@@ -489,6 +492,9 @@ pub fn executeRun(
                         .gate_tools = profile.gate_tools,
                         .max_repair_loops = profile.max_repair_loops,
                         .gate_tool_timeout_ms = cfg.gate_tool_timeout_ms,
+                        .repair_stage_id = repair_stage.stage_id,
+                        .repair_role_id = repair_stage.role_id,
+                        .repair_skill_id = repair_stage.skill_id,
                     });
                     defer {
                         for (gate_outcome.results.items) |r| r.deinit(run_alloc);

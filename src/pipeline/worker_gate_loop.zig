@@ -58,6 +58,9 @@ pub const GateLoopConfig = struct {
     gate_tools: []const topology.GateTool,
     max_repair_loops: u32,
     gate_tool_timeout_ms: u64,
+    repair_stage_id: []const u8,
+    repair_role_id: []const u8,
+    repair_skill_id: []const u8,
 };
 
 pub fn runGateLoop(cfg: GateLoopConfig) !GateLoopOutcome {
@@ -105,9 +108,9 @@ pub fn runGateLoop(cfg: GateLoopConfig) !GateLoopOutcome {
                     const repair_msg = try buildRepairMessage(cfg.alloc, fr);
                     defer cfg.alloc.free(repair_msg);
                     _ = exec.startStage(exec_id, .{
-                        .stage_id = "gate_repair",
-                        .role_id = topology.ROLE_SCOUT,
-                        .skill_id = topology.ROLE_SCOUT,
+                        .stage_id = cfg.repair_stage_id,
+                        .role_id = cfg.repair_role_id,
+                        .skill_id = cfg.repair_skill_id,
                         .message = repair_msg,
                     }) catch |err| {
                         log.warn("gate_loop.repair_stage_failed err={s} run_id={s}", .{ @errorName(err), cfg.run_id });
