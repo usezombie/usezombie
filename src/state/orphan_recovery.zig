@@ -21,6 +21,7 @@ const posthog = @import("posthog");
 const billing_runtime = @import("billing_runtime.zig");
 const scoring_types = @import("../pipeline/scoring_mod/types.zig");
 const scoring = @import("../pipeline/scoring.zig");
+const redis_client = @import("../queue/redis_client.zig");
 
 const log = std.log.scoped(.orphan_recovery);
 
@@ -69,10 +70,14 @@ pub fn loadConfig(alloc: std.mem.Allocator) OrphanRecoveryConfig {
 }
 
 /// Scan for orphaned runs and recover them. Returns counts of actions taken.
+/// `queue` is optional — if nil and requeue is enabled, runs are blocked instead
+/// of re-queued (safe fallback). Pass the Redis client when the reconciler has
+/// Redis connectivity to enable the full re-queue path.
 pub fn recoverOrphanedRuns(
     alloc: std.mem.Allocator,
     conn: *pg.Conn,
     posthog_client: ?*posthog.PostHogClient,
+    queue: ?*redis_client.Client,
     config: OrphanRecoveryConfig,
 ) !OrphanRecoveryResult {
     var result = OrphanRecoveryResult{};
@@ -87,7 +92,7 @@ pub fn recoverOrphanedRuns(
     // check-pg-drain: ok — full while loop exhausts all rows, natural drain
     var rows = try conn.query(
         \\SELECT r.run_id, r.state, r.attempt, r.workspace_id, r.updated_at,
-        \\       r.created_at, r.spec_id
+        \\       r.created_at
         \\FROM runs r
         \\WHERE r.state IN ($1, $2, $3, $4)
         \\  AND r.updated_at < $5
@@ -114,8 +119,10 @@ pub fn recoverOrphanedRuns(
 
         const staleness_ms_val: u64 = @intCast(@max(now_ms - updated_at, 0));
 
-        // §3.4: Circuit breaker — check if this run was already orphaned recently
+        // §3.4: Circuit breaker — check if this run was already orphaned recently.
+        // Re-queue requires: feature enabled + Redis client available + attempts remaining + not recently orphaned.
         const should_requeue = config.requeue_enabled and
+            queue != null and
             attempt < config.max_attempts and
             !wasRecentlyOrphaned(conn, run_id, now_ms);
 
@@ -136,10 +143,19 @@ pub fn recoverOrphanedRuns(
         }
 
         if (should_requeue) {
-            // §3.0: Re-queue path
+            // §3.0: Re-queue path — DB transition + Redis publish
             transitionToRequeue(alloc, conn, run_id, state_str, attempt, now_ms) catch |err| {
                 log.warn("orphan.requeue_fail run_id={s} err={s}", .{ run_id, @errorName(err) });
                 continue;
+            };
+            // Publish to Redis so a worker picks up the re-queued run.
+            // queue is guaranteed non-null here (checked in should_requeue).
+            queue.?.xaddRun(run_id, attempt + 1, workspace_id) catch |err| {
+                log.warn("orphan.redis_publish_fail run_id={s} err={s}", .{ run_id, @errorName(err) });
+                // DB already transitioned; run is SPEC_QUEUED but not in Redis.
+                // Next reconcile tick will see it's not in ORPHAN_CANDIDATE_STATES
+                // (SPEC_QUEUED is excluded), so it won't be double-processed.
+                // Manual intervention via zombiectl run retry needed.
             };
             result.requeued += 1;
             log.info("orphan.requeued run_id={s} state={s} attempt={d} staleness_ms={d}", .{

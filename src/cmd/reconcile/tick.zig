@@ -68,10 +68,14 @@ pub fn reconcileTick(pool: *db.Pool, posthog_client: ?*posthog.PostHogClient) !o
     defer orphan_arena.deinit();
     const orphan_alloc = orphan_arena.allocator();
     const orphan_config = orphan_recovery.loadConfig(orphan_alloc);
+    // NOTE: Redis client not yet plumbed to reconciler. Pass null — re-queue
+    // falls back to blocking. To enable re-queue, thread a Redis client from
+    // reconcile.zig → daemon.zig → tick.zig and pass it here.
     const orphan_result = orphan_recovery.recoverOrphanedRuns(
         orphan_alloc,
         conn,
         posthog_client,
+        null, // queue: ?*redis_client.Client — not available in reconciler yet
         orphan_config,
     ) catch |err| blk: {
         log.warn("reconcile.orphan_recovery_fail err={s}", .{@errorName(err)});
