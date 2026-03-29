@@ -58,7 +58,7 @@ pub const OrphanRecoveryResult = struct {
 pub fn loadConfig(alloc: std.mem.Allocator) OrphanRecoveryConfig {
     const staleness_ms = parseU64Env(alloc, "ORPHAN_RUN_STALENESS_MS", DEFAULT_STALENESS_MS);
     const requeue_enabled = parseBoolEnv(alloc, "ORPHAN_REQUEUE_ENABLED", false);
-    const max_attempts = parseU32Env(alloc, "DEFAULT_MAX_ATTEMPTS", 3);
+    const max_attempts = parseU32Env(alloc, "ORPHAN_MAX_ATTEMPTS", 3);
     const batch_limit = parseU32Env(alloc, "ORPHAN_BATCH_LIMIT", DEFAULT_BATCH_LIMIT);
     return .{
         .staleness_ms = staleness_ms,
@@ -77,21 +77,28 @@ pub fn recoverOrphanedRuns(
 ) !OrphanRecoveryResult {
     var result = OrphanRecoveryResult{};
     const now_ms = std.time.milliTimestamp();
-    const cutoff_ms = now_ms - @as(i64, @intCast(config.staleness_ms));
+    // Clamp staleness to avoid i64 overflow if misconfigured or clock is wrong.
+    const staleness_clamped: i64 = @intCast(@min(config.staleness_ms, @as(u64, @intCast(@max(now_ms, 0)))));
+    const cutoff_ms = now_ms - staleness_clamped;
 
     // §1.1: Query orphaned runs with FOR UPDATE SKIP LOCKED
+    // Uses IN ($1,$2,$3,$4) instead of ANY(array) because the Zig pg driver
+    // does not support array parameter encoding.
     // check-pg-drain: ok — full while loop exhausts all rows, natural drain
     var rows = try conn.query(
         \\SELECT r.run_id, r.state, r.attempt, r.workspace_id, r.updated_at,
         \\       r.created_at, r.spec_id
         \\FROM runs r
-        \\WHERE r.state = ANY($1)
-        \\  AND r.updated_at < $2
+        \\WHERE r.state IN ($1, $2, $3, $4)
+        \\  AND r.updated_at < $5
         \\ORDER BY r.updated_at ASC
-        \\LIMIT $3
+        \\LIMIT $6
         \\FOR UPDATE SKIP LOCKED
     , .{
-        @as([]const []const u8, &ORPHAN_CANDIDATE_STATES),
+        ORPHAN_CANDIDATE_STATES[0],
+        ORPHAN_CANDIDATE_STATES[1],
+        ORPHAN_CANDIDATE_STATES[2],
+        ORPHAN_CANDIDATE_STATES[3],
         cutoff_ms,
         @as(i32, @intCast(config.batch_limit)),
     });
@@ -128,13 +135,17 @@ pub fn recoverOrphanedRuns(
             });
         }
 
-        // §2.1: Score orphaned run with error_propagation outcome
-        scoreOrphanedRun(conn, alloc, run_id, workspace_id, created_at, now_ms);
+        // Only score and finalize billing for blocked runs (not re-queued ones).
+        // Re-queued runs will be scored when they reach a terminal state normally.
+        if (!should_requeue) {
+            // §2.1: Score orphaned run with error_propagation outcome
+            scoreOrphanedRun(conn, alloc, run_id, workspace_id, created_at, now_ms);
 
-        // §2.3: Finalize billing as non-billable
-        finalizeBillingNonBillable(conn, alloc, run_id, workspace_id, attempt);
+            // §2.3: Finalize billing as non-billable
+            finalizeBillingNonBillable(conn, alloc, run_id, workspace_id, attempt);
+        }
 
-        // §2.2: PostHog event
+        // §2.2: PostHog event (always, for visibility)
         posthog_events.trackRunOrphanRecovered(
             posthog_client,
             posthog_events.distinctIdOrSystem("system:reconcile"),
@@ -256,8 +267,9 @@ fn scoreOrphanedRun(
         .stderr_tail = null,
     };
 
-    // Look up agent_id for this run's workspace
-    const agent_id = lookupAgentId(conn, workspace_id);
+    // Look up agent_id for this run's workspace (owned copy, safe after q.deinit)
+    const agent_id = lookupAgentId(alloc, conn, workspace_id);
+    defer if (!std.mem.eql(u8, agent_id, "unknown")) alloc.free(agent_id);
 
     scoring.persistRunAnalysis(
         conn,
@@ -274,7 +286,9 @@ fn scoreOrphanedRun(
     };
 }
 
-fn lookupAgentId(conn: *pg.Conn, workspace_id: []const u8) []const u8 {
+/// Look up agent_id, returning an owned copy or the static "unknown" sentinel.
+/// Caller must free the returned slice with `alloc` unless it equals "unknown".
+fn lookupAgentId(alloc: std.mem.Allocator, conn: *pg.Conn, workspace_id: []const u8) []const u8 {
     // check-pg-drain: ok — single row expected, drain after read
     var q = conn.query(
         "SELECT agent_id FROM agent_profiles WHERE workspace_id = $1 AND is_active = true LIMIT 1",
@@ -285,7 +299,8 @@ fn lookupAgentId(conn: *pg.Conn, workspace_id: []const u8) []const u8 {
     const aid = row.get([]u8, 0) catch return "unknown";
     q.drain() catch {};
     if (aid.len == 0) return "unknown";
-    return aid;
+    // Dupe to outlive q.deinit() — caller frees.
+    return alloc.dupe(u8, aid) catch "unknown";
 }
 
 /// §2.3: Finalize billing as non-billable for orphaned runs.
@@ -507,11 +522,11 @@ test "parseBoolEnv returns default for missing env var" {
 test "loadConfig does not leak memory with env vars set" {
     try std.posix.setenv("ORPHAN_RUN_STALENESS_MS", "120000", true);
     try std.posix.setenv("ORPHAN_REQUEUE_ENABLED", "true", true);
-    try std.posix.setenv("DEFAULT_MAX_ATTEMPTS", "5", true);
+    try std.posix.setenv("ORPHAN_MAX_ATTEMPTS", "5", true);
     defer {
         std.posix.unsetenv("ORPHAN_RUN_STALENESS_MS");
         std.posix.unsetenv("ORPHAN_REQUEUE_ENABLED");
-        std.posix.unsetenv("DEFAULT_MAX_ATTEMPTS");
+        std.posix.unsetenv("ORPHAN_MAX_ATTEMPTS");
     }
     const cfg = loadConfig(std.testing.allocator);
     try std.testing.expectEqual(@as(u64, 120_000), cfg.staleness_ms);
