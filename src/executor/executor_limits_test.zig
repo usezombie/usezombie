@@ -55,11 +55,16 @@ test "T2: CgroupScope.wasOomKilled returns false on non-Linux" {
 // ─────────────────────────────────────────────────────────────────────────────
 
 test "T5: setExecutorMemoryPeakBytes is monotone under concurrent updates from 8 threads" {
-    executor_metrics.setExecutorMemoryPeakBytes(1_000_000);
+    // Seed at 500 KB. Threads write 200 KB–1 600 KB (thread_id * 200_000).
+    // Threads 1–2 write values below the seed (200 KB, 400 KB) — must not regress peak.
+    // Threads 3–8 write values above the seed (600 KB–1 600 KB) — must raise peak.
+    // Asserting final peak >= 1_600_000 proves both the CAS fires for higher values
+    // and lower-valued threads cannot regress it.
+    executor_metrics.setExecutorMemoryPeakBytes(500_000);
 
     const Worker = struct {
         fn run(thread_id: usize) void {
-            executor_metrics.setExecutorMemoryPeakBytes(thread_id * 100_000);
+            executor_metrics.setExecutorMemoryPeakBytes(thread_id * 200_000);
         }
     };
 
@@ -70,7 +75,8 @@ test "T5: setExecutorMemoryPeakBytes is monotone under concurrent updates from 8
     for (&threads) |*t| t.join();
 
     const snap = executor_metrics.executorSnapshot();
-    try std.testing.expect(snap.memory_peak_bytes >= 1_000_000);
+    // Thread 8 writes 1_600_000; peak must have risen to at least that.
+    try std.testing.expect(snap.memory_peak_bytes >= 1_600_000);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

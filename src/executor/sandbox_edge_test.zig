@@ -321,25 +321,24 @@ test "T3: SessionStore.reapExpired only removes expired sessions, leaves active 
     defer store.deinit();
 
     // Create 3 sessions that will expire (1ms lease).
-    for (0..3) |i| {
+    // Use string literals — stack-buffer stage_id would outlive the loop
+    // iteration and produce dangling pointers since Session stores the slice
+    // header without copying the bytes.
+    for (0..3) |_| {
         const s = try page.create(session_mod.Session);
-        var buf: [8]u8 = undefined;
-        const sid = std.fmt.bufPrint(&buf, "exp-{d}", .{i}) catch "exp";
         s.* = session_mod.Session.create(page, "/tmp/ws", .{
             .trace_id = "t", .run_id = "r", .workspace_id = "w",
-            .stage_id = sid, .role_id = "echo", .skill_id = "echo",
+            .stage_id = "exp", .role_id = "echo", .skill_id = "echo",
         }, .{}, 1); // 1ms — will expire
         try store.put(s);
     }
 
     // Create 2 sessions with long lease (30s).
-    for (0..2) |i| {
+    for (0..2) |_| {
         const s = try page.create(session_mod.Session);
-        var buf: [8]u8 = undefined;
-        const sid = std.fmt.bufPrint(&buf, "act-{d}", .{i}) catch "act";
         s.* = session_mod.Session.create(page, "/tmp/ws", .{
             .trace_id = "t", .run_id = "r", .workspace_id = "w",
-            .stage_id = sid, .role_id = "echo", .skill_id = "echo",
+            .stage_id = "act", .role_id = "echo", .skill_id = "echo",
         }, .{}, 30_000); // 30s — will NOT expire
         try store.put(s);
     }

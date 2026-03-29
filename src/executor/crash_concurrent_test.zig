@@ -207,13 +207,14 @@ test "T5: 20 sessions all expire simultaneously — reapExpired clears all" {
     var store = session_mod.SessionStore.init(page);
     defer store.deinit();
 
-    for (0..20) |i| {
+    for (0..20) |_| {
         const s = try page.create(session_mod.Session);
-        var buf: [16]u8 = undefined;
-        const sid = std.fmt.bufPrint(&buf, "mass-{d}", .{i}) catch "mass";
+        // Use a string literal — stack-buffer stage_id would outlive the loop
+        // iteration and produce dangling pointers since Session stores the slice
+        // header without copying the bytes.
         s.* = session_mod.Session.create(page, "/tmp/ws", .{
             .trace_id = "t", .run_id = "r", .workspace_id = "w",
-            .stage_id = sid, .role_id = "echo", .skill_id = "echo",
+            .stage_id = "mass", .role_id = "echo", .skill_id = "echo",
         }, .{}, 1); // 1ms — expires immediately
         try store.put(s);
     }
