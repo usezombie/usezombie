@@ -14,12 +14,11 @@ Checks run in API mode:
 
 | Check | What it verifies | If it fails |
 |-------|-----------------|-------------|
-| PostgreSQL connection | Can connect and run a query against the database | Verify `DATABASE_URL` is correct. Check that PostgreSQL is running and reachable from this host. |
-| Redis connection | Can connect and ping Redis | Verify `REDIS_URL` is correct. Check that Redis is running and reachable. |
+| PostgreSQL connection | Can connect and run a query against the database | Verify `DATABASE_URL_API` is correct. Check that PostgreSQL is running and reachable from this host. |
+| Redis connection | Can connect and ping Redis | Verify `REDIS_URL_API` is correct. Check that Redis is running and reachable. |
 | Clerk configuration | `CLERK_SECRET_KEY` is set and non-empty | Set the variable in your `.env` or environment. Obtain the key from the Clerk dashboard. |
 | Required env vars | All required API variables are present | See [Environment variables](/operator/configuration/environment) for the full list. |
 | Port availability | API port (default 3000) is not already bound | Stop the conflicting process or change `PORT`. |
-| Metrics port availability | Metrics port (default 9091) is not already bound | Stop the conflicting process or change `METRICS_PORT`. |
 
 ## Worker mode
 

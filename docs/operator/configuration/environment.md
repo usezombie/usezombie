@@ -44,24 +44,19 @@ Variables required by `zombied worker`.
 |----------|----------|---------|-------------|
 | `DATABASE_URL_WORKER` | Yes | — | PostgreSQL connection string for the worker role. |
 | `REDIS_URL_WORKER` | Yes | — | Redis connection string for work queue claims. |
-| `SANDBOX_BACKEND` | No | `host` | Sandbox backend: `host` (no isolation) or `bubblewrap`. |
+| `SANDBOX_BACKEND` | No | `bubblewrap` (Linux), `host` (macOS) | Sandbox backend: `host` (no isolation) or `bubblewrap`. |
 | `WORKER_CONCURRENCY` | No | `1` | Number of concurrent runs this worker can claim. |
 | `RUN_TIMEOUT_MS` | No | `300000` | Maximum wall-clock time for a single run (5 min default). |
 | `EXECUTOR_SOCKET_PATH` | No | `/run/zombie/executor.sock` | Path to the executor Unix socket. |
 | `DRAIN_TIMEOUT_MS` | No | `270000` | Graceful shutdown timeout when draining active runs. |
 | `EXECUTOR_STARTUP_TIMEOUT_MS` | No | `5000` | How long to wait for executor sidecar to become available. |
 | `EXECUTOR_LEASE_TIMEOUT_MS` | No | `30000` | Executor lease validity period (heartbeat interval). |
+| `GITHUB_APP_ID` | Yes | — | GitHub App ID for signing installation token JWTs. |
+| `GITHUB_APP_PRIVATE_KEY` | Yes | — | GitHub App private key (PEM) for JWT signing. |
 
 ## Executor
 
-Variables required by `zombied-executor`.
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `SANDBOX_BACKEND` | No | `host` | Sandbox backend: `host` or `bubblewrap`. Must match the worker setting. |
-| `EXECUTOR_MEMORY_LIMIT_MB` | No | `512` | Memory limit per agent execution in megabytes. |
-| `EXECUTOR_CPU_LIMIT_PERCENT` | No | `100` | CPU limit as a percentage of one core. |
-| `SANDBOX_KILL_GRACE_MS` | No | `5000` | Grace period before force-killing a sandbox after timeout. |
+Variables required by `zombied-executor`. The executor binary has no unique variables beyond the shared ones below.
 
 <Info>
   Network policy (deny-by-default) is applied automatically by the executor's sandbox layer. There is no environment variable to configure it. The policy is hardcoded in `network.zig` and denies all egress by default.
@@ -69,9 +64,12 @@ Variables required by `zombied-executor`.
 
 ## Shared variables
 
-These variables are used by multiple roles.
+These variables are used by both the Worker and Executor processes.
 
-| Variable | Used by | Description |
-|----------|---------|-------------|
-| `SANDBOX_BACKEND` | Worker, Executor | Must be set to the same value on both. |
-| `LOG_LEVEL` | All | Log verbosity: `debug`, `info`, `warn`, `error`. Default: `info`. |
+| Variable | Used by | Default | Description |
+|----------|---------|---------|-------------|
+| `SANDBOX_BACKEND` | Worker, Executor | `bubblewrap` (Linux), `host` (macOS) | Sandbox backend. Must match on both. |
+| `EXECUTOR_MEMORY_LIMIT_MB` | Worker, Executor | `512` | Memory limit per agent execution in megabytes. |
+| `EXECUTOR_CPU_LIMIT_PERCENT` | Worker, Executor | `100` | CPU limit as a percentage of one core. |
+| `SANDBOX_KILL_GRACE_MS` | Worker, Executor | `250` | Grace period (ms) before force-killing a sandbox after timeout. |
+| `LOG_LEVEL` | All | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. |

@@ -1,6 +1,6 @@
 # Contributing
 
-UseZombie is open source under the [MIT License](https://github.com/usezombie/zombie/blob/main/LICENSE).
+UseZombie is open source under the [MIT License](https://github.com/usezombie/usezombie/blob/main/LICENSE).
 
 ## What we welcome
 

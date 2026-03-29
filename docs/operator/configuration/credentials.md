@@ -42,7 +42,7 @@ Token lifecycle:
 
 ## Package registry credentials
 
-For workloads that need to install dependencies during execution (when `EXECUTOR_NETWORK_POLICY=registry_allowlist`), registry access is handled in two phases:
+Network policy is hardcoded to `deny_all` in v1. For future workloads that need dependencies, registry access will be handled in two phases:
 
 ### Phase 1: Explicit allowlist (current)
 

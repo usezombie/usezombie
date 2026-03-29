@@ -94,7 +94,7 @@ Agent execution requires three credential types, each with distinct injection pa
 
 - Phase 1: executor network policy extended from `deny_all` to allowlist for known registries (npmjs.org, pypi.org, crates.io, pkg.go.dev).
 - Phase 2: internal package mirror replaces allowlist for supply chain security.
-- Controlled by `EXECUTOR_NETWORK_POLICY` env var; default: `deny_all`.
+- Network policy is hardcoded to `deny_all` in v1 (`network.zig`). There is no env var to configure it.
 
 ## Credential detection signals
 
