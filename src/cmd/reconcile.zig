@@ -235,6 +235,59 @@ test "integration: reconciler restart drains remaining rows after partial pre-cr
     try std.testing.expectEqual(@as(i64, 0), try pendingCount(db_ctx.conn));
 }
 
+test "integration: orphan recovery transaction boundary — rollback undoes partial state" {
+    const db_ctx = (try openReconcileTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+
+    // Verify BEGIN/ROLLBACK semantics: a rolled-back UPDATE leaves the row unchanged.
+    // This is the pattern used by recoverOrphanedRuns for per-row atomicity.
+    _ = try db_ctx.conn.exec(
+        \\CREATE TEMP TABLE orphan_txn_test (
+        \\  run_id TEXT PRIMARY KEY,
+        \\  state TEXT NOT NULL
+        \\) ON COMMIT DROP
+    , .{});
+
+    _ = try db_ctx.conn.exec(
+        "INSERT INTO orphan_txn_test (run_id, state) VALUES ('r1', 'RUN_PLANNED')",
+        .{},
+    );
+
+    // Simulate: BEGIN → UPDATE → ROLLBACK (crash mid-row)
+    _ = try db_ctx.conn.exec("BEGIN", .{});
+    _ = try db_ctx.conn.exec(
+        "UPDATE orphan_txn_test SET state = 'BLOCKED' WHERE run_id = 'r1'",
+        .{},
+    );
+    _ = try db_ctx.conn.exec("ROLLBACK", .{});
+
+    // Row should still be RUN_PLANNED after rollback
+    // check-pg-drain: ok — single row, drain after get
+    var q = try db_ctx.conn.query("SELECT state FROM orphan_txn_test WHERE run_id = 'r1'", .{});
+    defer q.deinit();
+    const row = (try q.next()).?;
+    const state = try row.get([]u8, 0);
+    try q.drain();
+    try std.testing.expectEqualStrings("RUN_PLANNED", state);
+
+    // Now simulate: BEGIN → UPDATE → COMMIT (successful recovery)
+    _ = try db_ctx.conn.exec("BEGIN", .{});
+    _ = try db_ctx.conn.exec(
+        "UPDATE orphan_txn_test SET state = 'BLOCKED' WHERE run_id = 'r1'",
+        .{},
+    );
+    _ = try db_ctx.conn.exec("COMMIT", .{});
+
+    // check-pg-drain: ok — single row, drain after get
+    var q2 = try db_ctx.conn.query("SELECT state FROM orphan_txn_test WHERE run_id = 'r1'", .{});
+    defer q2.deinit();
+    const row2 = (try q2.next()).?;
+    const state2 = try row2.get([]u8, 0);
+    try q2.drain();
+    try std.testing.expectEqualStrings("BLOCKED", state2);
+}
+
 test "integration: rollback preserves pending rows for restart recovery" {
     const db_ctx = (try openReconcileTestConn(std.testing.allocator)) orelse return error.SkipZigTest;
     defer db_ctx.pool.deinit();

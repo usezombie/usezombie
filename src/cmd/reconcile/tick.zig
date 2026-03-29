@@ -62,10 +62,14 @@ pub fn reconcileTick(pool: *db.Pool, posthog_client: ?*posthog.PostHogClient) !o
         }
     }
 
-    // M14_001: Orphan run recovery
-    const orphan_config = orphan_recovery.loadConfig(std.heap.page_allocator);
+    // M14_001: Orphan run recovery — uses a per-tick arena to avoid
+    // page_allocator mmap/munmap syscalls on the hot path.
+    var orphan_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer orphan_arena.deinit();
+    const orphan_alloc = orphan_arena.allocator();
+    const orphan_config = orphan_recovery.loadConfig(orphan_alloc);
     const orphan_result = orphan_recovery.recoverOrphanedRuns(
-        std.heap.page_allocator,
+        orphan_alloc,
         conn,
         posthog_client,
         orphan_config,

@@ -1,5 +1,6 @@
 const std = @import("std");
 const posthog = @import("posthog");
+const obs_log = std.log.scoped(.posthog);
 
 pub fn distinctIdOrSystem(raw: []const u8) []const u8 {
     if (raw.len == 0) return "system";
@@ -629,7 +630,11 @@ pub fn trackRunOrphanRecovered(
             .distinct_id = distinct_id,
             .event = "run_orphan_recovered",
             .properties = &props,
-        }) catch {};
+        }) catch |err| {
+            obs_log.warn("posthog.capture_fail event=run_orphan_recovered run_id={s} err={s}", .{
+                run_id, @errorName(err),
+            });
+        };
     }
 }
 
