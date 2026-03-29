@@ -638,6 +638,32 @@ pub fn trackRunOrphanRecovered(
     }
 }
 
+/// Emitted when an orphan run's scoring is skipped because the workspace has no
+/// active agent profile. The run is still transitioned to BLOCKED; only scoring
+/// is skipped. Useful for detecting workspaces that crash before profile creation.
+pub fn trackRunOrphanNoAgentProfile(
+    client: ?*posthog.PostHogClient,
+    distinct_id: []const u8,
+    run_id: []const u8,
+    workspace_id: []const u8,
+) void {
+    if (client) |ph| {
+        const props = [_]posthog.Property{
+            .{ .key = "run_id", .value = .{ .string = run_id } },
+            .{ .key = "workspace_id", .value = .{ .string = workspace_id } },
+        };
+        ph.capture(.{
+            .distinct_id = distinct_id,
+            .event = "run_orphan_no_agent_profile",
+            .properties = &props,
+        }) catch |err| {
+            obs_log.warn("posthog.capture_fail event=run_orphan_no_agent_profile run_id={s} err={s}", .{
+                run_id, @errorName(err),
+            });
+        };
+    }
+}
+
 // Tests live in posthog_events_test.zig
 comptime {
     _ = @import("posthog_events_test.zig");

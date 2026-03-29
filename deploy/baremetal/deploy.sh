@@ -112,6 +112,7 @@ sync_env() {
 # ── Service restart ──────────────────────────────────────────────────────────
 
 drain_worker() {
+  # 120s is safely within zombied-worker.service TimeoutStopSec=300.
   local timeout="${DRAIN_TIMEOUT:-120}"
 
   if ! systemctl is-active --quiet zombied-worker.service; then

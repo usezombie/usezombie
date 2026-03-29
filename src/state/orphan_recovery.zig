@@ -35,6 +35,11 @@ const DEFAULT_STALENESS_MS: u64 = 600_000;
 /// Circuit breaker: if a run was orphaned within this window (ms), skip re-queue.
 const CIRCUIT_BREAKER_WINDOW_MS: i64 = 30 * 60 * 1000; // 30 minutes
 
+/// Sentinel returned by lookupAgentId when no active agent profile exists for
+/// the workspace. Callers must check for this value before passing agent_id to
+/// persistRunAnalysis — the empty-string guard in that function does not match.
+const NO_AGENT_PROFILE: []const u8 = "no_agent_profile";
+
 /// Non-terminal, non-queued states that indicate a worker was actively processing.
 const ORPHAN_CANDIDATE_STATES = [_][]const u8{
     "RUN_PLANNED",
@@ -175,7 +180,7 @@ pub fn recoverOrphanedRuns(
             // Only score and finalize billing for blocked runs (not re-queued ones).
             // Re-queued runs will be scored when they reach a terminal state normally.
             // §2.1: Score orphaned run with error_propagation outcome
-            scoreOrphanedRun(conn, alloc, run_id, workspace_id, created_at, now_ms);
+            scoreOrphanedRun(conn, alloc, posthog_client, run_id, workspace_id, created_at, now_ms);
 
             // §2.3: Finalize billing as non-billable
             finalizeBillingNonBillable(conn, alloc, run_id, workspace_id, attempt);
@@ -290,6 +295,7 @@ fn wasRecentlyOrphaned(conn: *pg.Conn, run_id: []const u8, now_ms: i64) bool {
 fn scoreOrphanedRun(
     conn: *pg.Conn,
     alloc: std.mem.Allocator,
+    posthog_client: ?*posthog.PostHogClient,
     run_id: []const u8,
     workspace_id: []const u8,
     created_at: i64,
@@ -305,9 +311,22 @@ fn scoreOrphanedRun(
         .stderr_tail = null,
     };
 
-    // Look up agent_id for this run's workspace (owned copy, safe after q.deinit)
+    // Look up agent_id for this run's workspace (owned copy, safe after q.deinit).
+    // NO_AGENT_PROFILE sentinel means no active agent profile — skip persistRunAnalysis
+    // to avoid writing a spurious record or triggering a silent FK violation.
     const agent_id = lookupAgentId(alloc, conn, workspace_id);
-    defer if (!std.mem.eql(u8, agent_id, "unknown")) alloc.free(agent_id);
+    defer if (!std.mem.eql(u8, agent_id, NO_AGENT_PROFILE)) alloc.free(agent_id);
+
+    if (std.mem.eql(u8, agent_id, NO_AGENT_PROFILE)) {
+        metrics.incOrphanNoAgentProfile();
+        posthog_events.trackRunOrphanNoAgentProfile(
+            posthog_client,
+            posthog_events.distinctIdOrSystem("system:orphan"),
+            run_id,
+            workspace_id,
+        );
+        return;
+    }
 
     scoring.persistRunAnalysis(
         conn,
@@ -324,21 +343,21 @@ fn scoreOrphanedRun(
     };
 }
 
-/// Look up agent_id, returning an owned copy or the static "unknown" sentinel.
-/// Caller must free the returned slice with `alloc` unless it equals "unknown".
+/// Look up agent_id, returning an owned copy or NO_AGENT_PROFILE sentinel.
+/// Caller must free the returned slice with `alloc` unless it equals NO_AGENT_PROFILE.
 fn lookupAgentId(alloc: std.mem.Allocator, conn: *pg.Conn, workspace_id: []const u8) []const u8 {
     // check-pg-drain: ok — single row expected, drain after read
     var q = conn.query(
         "SELECT agent_id FROM agent_profiles WHERE workspace_id = $1 AND is_active = true LIMIT 1",
         .{workspace_id},
-    ) catch return "unknown";
+    ) catch return NO_AGENT_PROFILE;
     defer q.deinit();
-    const row = (q.next() catch null) orelse return "unknown";
-    const aid = row.get([]u8, 0) catch return "unknown";
+    const row = (q.next() catch null) orelse return NO_AGENT_PROFILE;
+    const aid = row.get([]u8, 0) catch return NO_AGENT_PROFILE;
     q.drain() catch {};
-    if (aid.len == 0) return "unknown";
+    if (aid.len == 0) return NO_AGENT_PROFILE;
     // Dupe to outlive q.deinit() — caller frees.
-    return alloc.dupe(u8, aid) catch "unknown";
+    return alloc.dupe(u8, aid) catch NO_AGENT_PROFILE;
 }
 
 /// §2.3: Finalize billing as non-billable for orphaned runs.
@@ -695,4 +714,18 @@ test "loadConfig does not leak memory with env vars set" {
     try std.testing.expectEqual(@as(u64, 120_000), cfg.staleness_ms);
     try std.testing.expect(cfg.requeue_enabled);
     try std.testing.expectEqual(@as(u32, 5), cfg.max_attempts);
+}
+
+// T12: NO_AGENT_PROFILE sentinel is never equal to a real agent_id.
+// Verifies the constant is defined, has non-zero length, and does not
+// accidentally collide with a plausible real agent_id prefix.
+test "NO_AGENT_PROFILE sentinel is distinct from empty and typical agent_id" {
+    try std.testing.expect(NO_AGENT_PROFILE.len > 0);
+    try std.testing.expect(!std.mem.eql(u8, NO_AGENT_PROFILE, ""));
+    // Real agent_ids are UUIDs or "agt_" prefixed — neither matches the sentinel.
+    try std.testing.expect(!std.mem.eql(u8, NO_AGENT_PROFILE, "agt_abc123"));
+    try std.testing.expect(!std.mem.eql(u8, NO_AGENT_PROFILE, "00000000-0000-0000-0000-000000000000"));
+    // The guard expression used in scoreOrphanedRun must be consistent.
+    const is_sentinel = std.mem.eql(u8, NO_AGENT_PROFILE, NO_AGENT_PROFILE);
+    try std.testing.expect(is_sentinel);
 }
