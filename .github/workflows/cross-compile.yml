@@ -44,7 +44,7 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update && apt-get install -y --no-install-recommends git libssl-dev ca-certificates xz-utils
-          find /usr/lib -name 'libssl.so' -o -name 'libcrypto.so' | xargs rm -f
+          find /usr/lib \( -name 'libssl.so' -o -name 'libcrypto.so' \) -exec rm -f {} +
 
       - uses: actions/checkout@v6
 
