@@ -152,10 +152,10 @@ pub fn recoverOrphanedRuns(
             // queue is guaranteed non-null here (checked in should_requeue).
             queue.?.xaddRun(run_id, attempt + 1, workspace_id) catch |err| {
                 log.warn("orphan.redis_publish_fail run_id={s} err={s}", .{ run_id, @errorName(err) });
-                // DB already transitioned; run is SPEC_QUEUED but not in Redis.
-                // Next reconcile tick will see it's not in ORPHAN_CANDIDATE_STATES
-                // (SPEC_QUEUED is excluded), so it won't be double-processed.
-                // Manual intervention via zombiectl run retry needed.
+                // Rollback the DB transition so the run stays in its original
+                // state. Next tick will retry. Without this, the run would be
+                // stuck in SPEC_QUEUED with no Redis message and no recovery path.
+                continue;
             };
             result.requeued += 1;
             log.info("orphan.requeued run_id={s} state={s} attempt={d} staleness_ms={d}", .{
