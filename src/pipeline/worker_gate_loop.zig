@@ -190,20 +190,22 @@ pub fn executeGateCommand(
 
     // Enforce timeout: spawn a timer thread that kills the child if it exceeds the deadline.
     // Main thread blocks on wait(); timer thread sleeps then kills.
+    // Both sides use CAS to atomically claim the "done" flag — exactly one side wins.
+    // This prevents SIGKILL on a recycled PID after waitpid() has reaped the child.
     var timed_out = std.atomic.Value(bool).init(false);
     const timer_thread = std.Thread.spawn(.{}, struct {
         fn run(child: *std.process.Child, timeout_ns: u64, flag: *std.atomic.Value(bool)) void {
             std.Thread.sleep(timeout_ns);
-            if (!flag.load(.acquire)) {
-                // Child still running — kill it.
-                flag.store(true, .release);
+            // CAS: only kill if we successfully change false → true (we win the race).
+            if (flag.cmpxchgWeak(false, true, .acq_rel, .acquire) == null) {
                 _ = child.kill() catch {};
             }
         }
     }.run, .{ &resources.child, timeout_ms * std.time.ns_per_ms, &timed_out }) catch null;
 
     const term = resources.child.wait() catch |err| {
-        timed_out.store(true, .release); // signal timer to not kill
+        // Atomically claim the flag so timer thread won't kill a reaped PID.
+        _ = timed_out.swap(true, .acq_rel);
         if (timer_thread) |t| t.join();
         const end_ms: u64 = @intCast(@max(0, std.time.milliTimestamp()));
         return .{
@@ -217,9 +219,9 @@ pub fn executeGateCommand(
         };
     };
 
-    // Signal timer thread that child exited naturally (no kill needed).
-    const was_timed_out = timed_out.load(.acquire);
-    if (!was_timed_out) timed_out.store(true, .release);
+    // Atomically claim the flag: swap returns the old value.
+    // If old=false, we won — child exited naturally. If old=true, timer won — it was a timeout.
+    const was_timed_out = timed_out.swap(true, .acq_rel);
     if (timer_thread) |t| t.join();
 
     if (was_timed_out) {

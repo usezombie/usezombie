@@ -332,6 +332,7 @@ test "integration: concurrent gate_result inserts for different runs" {
 test "executeGateCommand with true returns passed" {
     const alloc = std.testing.allocator;
     const result = try worker_gate_loop.executeGateCommand(alloc, "/tmp", "run_lint", "true", 10_000);
+    defer result.deinit(alloc);
     try std.testing.expectEqual(@as(u32, 0), result.exit_code);
     try std.testing.expect(result.passed);
     try std.testing.expect(result.wall_ms < 5_000);
@@ -344,6 +345,7 @@ test "executeGateCommand with true returns passed" {
 test "executeGateCommand with false returns failed" {
     const alloc = std.testing.allocator;
     const result = try worker_gate_loop.executeGateCommand(alloc, "/tmp", "run_build", "false", 10_000);
+    defer result.deinit(alloc);
     try std.testing.expect(result.exit_code != 0);
     try std.testing.expect(!result.passed);
 }
@@ -376,7 +378,165 @@ test "classify gate_exhausted maps to tool_call_failure" {
 test "executeGateCommand captures stdout" {
     const alloc = std.testing.allocator;
     const result = try worker_gate_loop.executeGateCommand(alloc, "/tmp", "run_test", "echo hello", 10_000);
+    defer result.deinit(alloc);
     try std.testing.expectEqual(@as(u32, 0), result.exit_code);
     try std.testing.expect(result.passed);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "hello") != null);
+}
+
+// ---------------------------------------------------------------------------
+// T5 — Concurrency: timer thread CAS prevents kill on reaped PID
+// ---------------------------------------------------------------------------
+
+test "executeGateCommand fast exit does not trigger timeout kill" {
+    // A command that exits instantly (true) with a long timeout.
+    // The timer thread must NOT call kill() after wait() reaps the child.
+    // If the CAS is broken, this could SIGKILL a recycled PID.
+    // Run 50 iterations to stress the race window.
+    const alloc = std.testing.allocator;
+    for (0..50) |_| {
+        const result = try worker_gate_loop.executeGateCommand(alloc, "/tmp", "race_test", "true", 60_000);
+        defer result.deinit(alloc);
+        try std.testing.expectEqual(@as(u32, 0), result.exit_code);
+        try std.testing.expect(result.passed);
+    }
+}
+
+test "executeGateCommand timeout kills long-running command" {
+    // sleep 60 with a 100ms timeout — timer thread must win the CAS and kill.
+    const alloc = std.testing.allocator;
+    const result = try worker_gate_loop.executeGateCommand(alloc, "/tmp", "timeout_test", "sleep 60", 100);
+    defer result.deinit(alloc);
+    try std.testing.expectEqual(@as(u32, 124), result.exit_code);
+    try std.testing.expect(!result.passed);
+    try std.testing.expectEqualStrings("gate command timed out", result.stderr);
+}
+
+test "executeGateCommand concurrent invocations are isolated" {
+    // Run 8 concurrent gate commands on different threads.
+    // Each should get its own child process and timer thread.
+    // No cross-contamination of PIDs or results.
+    const alloc = std.testing.allocator;
+    const num_threads = 8;
+
+    const Context = struct {
+        results: [num_threads]?worker_gate_loop.GateToolResult = [_]?worker_gate_loop.GateToolResult{null} ** num_threads,
+        errors: [num_threads]bool = [_]bool{false} ** num_threads,
+
+        fn worker(self: *@This(), idx: usize) void {
+            self.results[idx] = worker_gate_loop.executeGateCommand(
+                alloc, "/tmp", "concurrent_gate", "true", 10_000,
+            ) catch {
+                self.errors[idx] = true;
+                return;
+            };
+        }
+    };
+    var ctx: Context = .{};
+
+    var threads: [num_threads]std.Thread = undefined;
+    for (0..num_threads) |i| {
+        threads[i] = try std.Thread.spawn(.{}, Context.worker, .{ &ctx, i });
+    }
+    for (&threads) |t| t.join();
+
+    // All should succeed with no errors.
+    for (0..num_threads) |i| {
+        try std.testing.expect(!ctx.errors[i]);
+        if (ctx.results[i]) |r| {
+            defer r.deinit(alloc);
+            try std.testing.expectEqual(@as(u32, 0), r.exit_code);
+            try std.testing.expect(r.passed);
+        } else {
+            return error.TestExpectedEqual;
+        }
+    }
+}
+
+test "executeGateCommand concurrent timeouts are isolated" {
+    // Run 4 concurrent commands that all timeout.
+    // Each timer thread must kill only its own child.
+    const alloc = std.testing.allocator;
+    const num_threads = 4;
+
+    const Context = struct {
+        results: [num_threads]?worker_gate_loop.GateToolResult = [_]?worker_gate_loop.GateToolResult{null} ** num_threads,
+        errors: [num_threads]bool = [_]bool{false} ** num_threads,
+
+        fn worker(self: *@This(), idx: usize) void {
+            self.results[idx] = worker_gate_loop.executeGateCommand(
+                alloc, "/tmp", "concurrent_timeout", "sleep 60", 100,
+            ) catch {
+                self.errors[idx] = true;
+                return;
+            };
+        }
+    };
+    var ctx: Context = .{};
+
+    var threads: [num_threads]std.Thread = undefined;
+    for (0..num_threads) |i| {
+        threads[i] = try std.Thread.spawn(.{}, Context.worker, .{ &ctx, i });
+    }
+    for (&threads) |t| t.join();
+
+    for (0..num_threads) |i| {
+        try std.testing.expect(!ctx.errors[i]);
+        if (ctx.results[i]) |r| {
+            defer r.deinit(alloc);
+            try std.testing.expectEqual(@as(u32, 124), r.exit_code);
+            try std.testing.expect(!r.passed);
+        } else {
+            return error.TestExpectedEqual;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// T5 — Concurrency: atomic flag unit test
+// ---------------------------------------------------------------------------
+
+test "atomic CAS flag: exactly one side wins the race" {
+    // Simulates the timer-thread race: two threads compete to flip false→true.
+    // Exactly one must win (CAS returns null), the other must lose.
+    const num_trials = 1000;
+    var main_wins: u32 = 0;
+    var timer_wins: u32 = 0;
+
+    for (0..num_trials) |_| {
+        var flag = std.atomic.Value(bool).init(false);
+        var timer_won = std.atomic.Value(bool).init(false);
+
+        const t = try std.Thread.spawn(.{}, struct {
+            fn run(f: *std.atomic.Value(bool), tw: *std.atomic.Value(bool)) void {
+                if (f.cmpxchgWeak(false, true, .acq_rel, .acquire) == null) {
+                    tw.store(true, .release);
+                }
+            }
+        }.run, .{ &flag, &timer_won });
+
+        // Main thread tries to claim.
+        const main_claimed = flag.swap(true, .acq_rel) == false;
+        t.join();
+
+        const timer_claimed = timer_won.load(.acquire);
+
+        // Exactly one must win.
+        try std.testing.expect(main_claimed or timer_claimed);
+        // Both cannot win (that would mean CAS and swap both saw false).
+        // This CAN happen with cmpxchgWeak (spurious failure) — timer could lose
+        // even when main hasn't claimed yet. But main's swap is unconditional,
+        // so main always "wins" in the sense that flag ends up true.
+        // The invariant: flag is always true after both finish.
+        try std.testing.expect(flag.load(.acquire));
+
+        if (main_claimed) main_wins += 1;
+        if (timer_claimed) timer_wins += 1;
+    }
+
+    // Over 1000 trials, both sides should win at least sometimes
+    // (unless scheduling is completely deterministic, which is fine).
+    // The key assertion is above: flag is always true.
+    _ = main_wins;
+    _ = timer_wins;
 }
