@@ -50,6 +50,7 @@ build-linux-bookworm:  ## Compile inside bookworm with OpenSSL (mirrors CI)
 		sh -c '\
 			apt-get update -qq && \
 			apt-get install -y -qq --no-install-recommends libssl-dev ca-certificates xz-utils wget >/dev/null 2>&1 && \
+			find /usr/lib -name "libssl.so" -o -name "libcrypto.so" | xargs rm -f && \
 			cp -a /src/. . && \
 			ARCH=$$(uname -m); \
 			case $$ARCH in x86_64) ZIG_ARCH=x86_64;; aarch64) ZIG_ARCH=aarch64;; *) echo "unsupported arch $$ARCH"; exit 1;; esac; \

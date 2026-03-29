@@ -49,7 +49,9 @@ jobs:
       image: mirror.gcr.io/library/debian:bookworm-slim
     steps:
       - name: Install build dependencies
-        run: apt-get update && apt-get install -y --no-install-recommends git libssl-dev ca-certificates xz-utils
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends git libssl-dev ca-certificates xz-utils
+          rm -f /usr/lib/x86_64-linux-gnu/libssl.so /usr/lib/x86_64-linux-gnu/libcrypto.so
 
       - uses: actions/checkout@v6
 
