@@ -94,6 +94,7 @@ pub fn runGateLoop(cfg: GateLoopConfig) !GateLoopOutcome {
             if (cfg.executor) |exec| {
                 if (cfg.execution_id) |exec_id| {
                     const repair_msg = try buildRepairMessage(cfg.alloc, fr);
+                    defer cfg.alloc.free(repair_msg);
                     _ = exec.startStage(exec_id, .{
                         .stage_id = "gate_repair",
                         .role_id = "scout",
@@ -175,43 +176,53 @@ pub fn executeGateCommand(
     };
     defer resources.deinit();
 
-    // Enforce timeout: poll child with wall-clock deadline.
-    const deadline_ns: i128 = @as(i128, std.time.milliTimestamp()) * std.time.ns_per_ms + @as(i128, timeout_ms) * std.time.ns_per_ms;
-    const term = blk: {
-        // Use waitPid with WNOHANG polling instead of blocking wait.
-        while (true) {
-            const now_ns: i128 = @as(i128, std.time.nanoTimestamp());
-            if (now_ns >= deadline_ns) {
-                // Timeout: kill the child process.
-                _ = resources.child.kill() catch {};
-                log.warn("gate_loop.command_timeout error_code={s} gate={s} timeout_ms={d}", .{
-                    codes.ERR_GATE_COMMAND_TIMEOUT, gate_name, timeout_ms,
-                });
-                const end_ms: u64 = @intCast(@max(0, std.time.milliTimestamp()));
-                return .{
-                    .gate_name = gate_name,
-                    .exit_code = 124, // conventional timeout exit code
-                    .stdout = "",
-                    .stderr = "gate command timed out",
-                    .wall_ms = end_ms - start_ms,
-                    .passed = false,
-                };
+    // Enforce timeout: spawn a timer thread that kills the child if it exceeds the deadline.
+    // Main thread blocks on wait(); timer thread sleeps then kills.
+    var timed_out = std.atomic.Value(bool).init(false);
+    const timer_thread = std.Thread.spawn(.{}, struct {
+        fn run(child: *std.process.Child, timeout_ns: u64, flag: *std.atomic.Value(bool)) void {
+            std.Thread.sleep(timeout_ns);
+            if (!flag.load(.acquire)) {
+                // Child still running — kill it.
+                flag.store(true, .release);
+                _ = child.kill() catch {};
             }
-            // Try non-blocking wait.
-            const result = resources.child.wait() catch |err| {
-                const end_ms: u64 = @intCast(@max(0, std.time.milliTimestamp()));
-                return .{
-                    .gate_name = gate_name,
-                    .exit_code = 1,
-                    .stdout = "",
-                    .stderr = @errorName(err),
-                    .wall_ms = end_ms - start_ms,
-                    .passed = false,
-                };
-            };
-            break :blk result;
         }
+    }.run, .{ &resources.child, timeout_ms * std.time.ns_per_ms, &timed_out }) catch null;
+
+    const term = resources.child.wait() catch |err| {
+        timed_out.store(true, .release); // signal timer to not kill
+        if (timer_thread) |t| t.join();
+        const end_ms: u64 = @intCast(@max(0, std.time.milliTimestamp()));
+        return .{
+            .gate_name = gate_name,
+            .exit_code = 1,
+            .stdout = try alloc.dupe(u8, ""),
+            .stderr = try alloc.dupe(u8, @errorName(err)),
+            .wall_ms = end_ms - start_ms,
+            .passed = false,
+        };
     };
+
+    // Signal timer thread that child exited naturally (no kill needed).
+    const was_timed_out = timed_out.load(.acquire);
+    if (!was_timed_out) timed_out.store(true, .release);
+    if (timer_thread) |t| t.join();
+
+    if (was_timed_out) {
+        log.warn("gate_loop.command_timeout error_code={s} gate={s} timeout_ms={d}", .{
+            codes.ERR_GATE_COMMAND_TIMEOUT, gate_name, timeout_ms,
+        });
+        const end_ms: u64 = @intCast(@max(0, std.time.milliTimestamp()));
+        return .{
+            .gate_name = gate_name,
+            .exit_code = 124,
+            .stdout = try alloc.dupe(u8, ""),
+            .stderr = try alloc.dupe(u8, "gate command timed out"),
+            .wall_ms = end_ms - start_ms,
+            .passed = false,
+        };
+    }
 
     resources.readOutput() catch {};
     const end_ms: u64 = @intCast(@max(0, std.time.milliTimestamp()));
@@ -221,11 +232,16 @@ pub fn executeGateCommand(
         else => 128,
     };
 
+    // Dupe stdout/stderr before resources.deinit() fires (defer frees the originals).
+    const stdout_owned = try alloc.dupe(u8, truncateOutput(resources.stdout orelse "", MAX_OUTPUT_BYTES));
+    errdefer alloc.free(stdout_owned);
+    const stderr_owned = try alloc.dupe(u8, truncateOutput(resources.stderr orelse "", MAX_OUTPUT_BYTES));
+
     return .{
         .gate_name = gate_name,
         .exit_code = exit_code,
-        .stdout = truncateOutput(resources.stdout orelse "", MAX_OUTPUT_BYTES),
-        .stderr = truncateOutput(resources.stderr orelse "", MAX_OUTPUT_BYTES),
+        .stdout = stdout_owned,
+        .stderr = stderr_owned,
         .wall_ms = end_ms - start_ms,
         .passed = exit_code == 0,
     };
