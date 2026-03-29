@@ -92,8 +92,12 @@ pub fn handleDoneOutcome(o: DoneOutcomeCtx) !void {
     if (o.gate_results) |results| {
         const scorecard = worker_gate_loop.formatScorecard(o.alloc, results, o.gate_loop_count, o.ctx.run_id) catch null;
         if (scorecard) |card| {
+            defer o.alloc.free(card);
             const token = o.token_cache.getInstallationToken(o.alloc, o.ctx.workspace_id) catch null;
-            if (token) |t| git.postPrComment(o.alloc, o.ctx.repo_url, pr_final, t, card);
+            if (token) |t| {
+                defer o.alloc.free(t);
+                git.postPrComment(o.alloc, o.ctx.repo_url, pr_final, t, card);
+            }
         }
     }
 
