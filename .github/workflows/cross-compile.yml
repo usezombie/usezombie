@@ -147,21 +147,21 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}/dist:/test:ro" \
             debian:bookworm-slim \
-            sh -c 'ldd /test/zombied | grep -q "not a dynamic executable" && echo "✓ bookworm-slim: static binary confirmed" || (echo "FAIL: dynamic deps found in bookworm-slim"; ldd /test/zombied; exit 1)'
+            sh -c 'ldd /test/zombied 2>&1 | grep -q "not a dynamic executable" && echo "✓ bookworm-slim: static binary confirmed" || (echo "FAIL: dynamic deps found in bookworm-slim"; ldd /test/zombied 2>&1; exit 1)'
 
       - name: Verify in alpine:latest (musl-native)
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/dist:/test:ro" \
             alpine:latest \
-            sh -c 'ldd /test/zombied 2>&1 | grep -qiE "not a dynamic|Not a valid dynamic" && echo "✓ alpine: static binary confirmed" || (echo "FAIL: dynamic deps found in alpine"; ldd /test/zombied; exit 1)'
+            sh -c 'ldd /test/zombied 2>&1 | grep -qiE "not a dynamic|Not a valid dynamic" && echo "✓ alpine: static binary confirmed" || (echo "FAIL: dynamic deps found in alpine"; ldd /test/zombied 2>&1; exit 1)'
 
       - name: Verify in debian:trixie-slim (bare-metal worker target)
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/dist:/test:ro" \
             debian:trixie-slim \
-            sh -c 'ldd /test/zombied | grep -q "not a dynamic executable" && echo "✓ trixie-slim: static binary confirmed" || (echo "FAIL: dynamic deps found in trixie-slim"; ldd /test/zombied; exit 1)'
+            sh -c 'ldd /test/zombied 2>&1 | grep -q "not a dynamic executable" && echo "✓ trixie-slim: static binary confirmed" || (echo "FAIL: dynamic deps found in trixie-slim"; ldd /test/zombied 2>&1; exit 1)'
 
   cross-compile-macos:
     runs-on: macos-latest
