@@ -37,28 +37,21 @@ jobs:
             artifact: zombied-linux-amd64
             os: ubuntu-latest
             arch: x86_64
-            container: mirror.gcr.io/library/alpine:3.21
           - target: aarch64-linux
             artifact: zombied-linux-arm64
             os: ubuntu-24.04-arm
             arch: aarch64
-            container: mirror.gcr.io/library/debian:bookworm-slim
     runs-on: ${{ matrix.os }}
     container:
-      image: ${{ matrix.container }}
+      image: mirror.gcr.io/library/alpine:3.21
     steps:
-      - name: Install build dependencies (Alpine)
-        if: contains(matrix.container, 'alpine')
+      - name: Install build dependencies
         run: |
-          apk add --no-cache git openssl-dev openssl-libs-static ca-certificates xz
+          apk add --no-cache git openssl-dev openssl-libs-static ca-certificates xz binutils
           mkdir -p /usr/lib/${{ matrix.arch }}-linux-gnu /usr/include/${{ matrix.arch }}-linux-gnu
           ln -sf /usr/lib/libssl.a /usr/lib/${{ matrix.arch }}-linux-gnu/libssl.a
           ln -sf /usr/lib/libcrypto.a /usr/lib/${{ matrix.arch }}-linux-gnu/libcrypto.a
           ln -sf /usr/include/openssl /usr/include/${{ matrix.arch }}-linux-gnu/openssl
-
-      - name: Install build dependencies (Debian)
-        if: contains(matrix.container, 'debian')
-        run: apt-get update && apt-get install -y --no-install-recommends git libssl-dev ca-certificates xz-utils
 
       - uses: actions/checkout@v6
 
@@ -68,6 +61,22 @@ jobs:
 
       - name: Build
         run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+
+      - name: Verify static ELF — zero NEEDED, no INTERP
+        run: |
+          for bin in zig-out/bin/zombied zig-out/bin/zombied-executor; do
+            test -f "$bin"
+            if readelf -d "$bin" 2>/dev/null | grep -q " (NEEDED)"; then
+              echo "FAIL: $bin has dynamic NEEDED entries"
+              readelf -d "$bin" | grep NEEDED
+              exit 1
+            fi
+            if readelf -l "$bin" 2>/dev/null | grep -q "INTERP"; then
+              echo "FAIL: $bin has INTERP (dynamic linker) section"
+              exit 1
+            fi
+            echo "✓ $bin: fully static (zero NEEDED, no INTERP)"
+          done
 
       - name: Package
         run: |
