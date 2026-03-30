@@ -311,7 +311,7 @@ fn configureGitCredentials(
     );
     defer alloc.free(creds_content);
 
-    const file = try std.fs.createFileAbsolute(creds_path, .{ .truncate = true });
+    const file = try std.fs.createFileAbsolute(creds_path, .{ .truncate = true, .mode = 0o600 });
     defer file.close();
     try file.writeAll(creds_content);
 
@@ -326,9 +326,10 @@ fn configureGitCredentials(
     const git_config_file = std.fs.openFileAbsolute(git_config_path, .{ .mode = .read_write }) catch return;
     defer git_config_file.close();
 
+    // Quote creds_path in the git config value so paths with spaces parse correctly.
     const cred_section = try std.fmt.allocPrint(
         alloc,
-        "\n[credential]\n\thelper = store --file={s}\n",
+        "\n[credential]\n\thelper = store --file=\"{s}\"\n",
         .{creds_path},
     );
     defer alloc.free(cred_section);

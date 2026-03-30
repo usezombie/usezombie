@@ -283,7 +283,8 @@ pub fn executeRun(
     );
 
     // M16_003 §1: Fetch LLM API key from vault.secrets for this workspace.
-    // Key name is "{provider}_api_key" e.g. "anthropic_api_key".
+    // M16_003 supports Anthropic only; vault key is always "anthropic_api_key".
+    // Multi-provider dynamic lookup ({provider}_api_key) is M16_004.
     // Soft failure: if not found, pass empty string — executor falls back to its
     // own env (dev mode). Hard failure (DB error) propagates.
     const llm_api_key: []const u8 = crypto_store.load(run_alloc, conn, ctx.workspace_id, "anthropic_api_key") catch |err| blk: {

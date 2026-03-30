@@ -2,9 +2,11 @@
 //!
 //! Phase 1: bare-metal hosts set EXECUTOR_NETWORK_POLICY=registry_allowlist to
 //! permit agent dependency installs (npm, pip, cargo, go get) against public
-//! package registries. All other egress remains denied via process-level enforcement.
+//! package registries. In Phase 1, --share-net is passed to bwrap and the full
+//! host network is accessible; the REGISTRY_ALLOWLIST entries are logged for
+//! observability only — TCP-layer restriction to these hosts is Phase 2 (nftables).
 //!
-//! Phase 2 (out of scope): internal mirror replaces public registry access.
+//! Phase 2 (out of scope): nftables egress rules restrict traffic to REGISTRY_ALLOWLIST.
 
 /// Public package registries permitted under the `registry_allowlist` policy.
 /// This is a compile-time constant — no per-run override path exists.
