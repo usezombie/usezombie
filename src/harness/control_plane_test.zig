@@ -159,9 +159,12 @@ test "T8 OWASP indirect: prompt injection in markdown text does not propagate to
     var outcome = try cp.compileHarnessMarkdown(alloc, source);
     defer outcome.deinit(alloc);
     try std.testing.expect(!outcome.is_valid);
-    if (outcome.compiled_profile_json) |compiled| {
-        try std.testing.expect(!std.mem.containsAtLeast(u8, compiled, 1, "ignore previous instructions"));
-    }
+    // compileHarnessMarkdown does NOT short-circuit on injection detection; it adds an issue
+    // and continues to extract + compile the fenced JSON block. compiled_profile_json is
+    // therefore non-null here. Assert this explicitly so a future refactor that changes the
+    // return path is caught rather than silently making the propagation check vacuous.
+    const compiled = outcome.compiled_profile_json orelse return error.ExpectedCompiledJson;
+    try std.testing.expect(!std.mem.containsAtLeast(u8, compiled, 1, "ignore previous instructions"));
 }
 
 test "T8 OWASP regression (M20_001): built-in skill names remain accepted after constant removal" {
