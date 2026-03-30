@@ -49,6 +49,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
 
     var response_body: std.ArrayList(u8) = .{};
     defer response_body.deinit(alloc);
+    var aw: std.Io.Writer.Allocating = .fromArrayList(alloc, &response_body);
 
     const uri = std.Uri.parse(url) catch {
         std.debug.print("error: invalid URL: {s}\n", .{url});
@@ -62,7 +63,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
             .{ .name = "Authorization", .value = auth_header },
             .{ .name = "Accept", .value = "application/json" },
         },
-        .response_storage = .{ .dynamic = &response_body },
+        .response_writer = &aw.writer,
     }) catch |err| {
         std.debug.print("error: HTTP request failed: {any}\n", .{err});
         std.process.exit(1);

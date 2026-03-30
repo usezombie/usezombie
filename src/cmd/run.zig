@@ -120,6 +120,7 @@ fn postRunAndGetId(
 
     var response_body: std.ArrayList(u8) = .{};
     defer response_body.deinit(alloc);
+    var aw: std.Io.Writer.Allocating = .fromArrayList(alloc, &response_body);
 
     const uri = try std.Uri.parse(url);
     const result = try client.fetch(.{
@@ -130,7 +131,7 @@ fn postRunAndGetId(
             .{ .name = "Content-Type", .value = "application/json" },
         },
         .payload = body,
-        .response_storage = .{ .dynamic = &response_body },
+        .response_writer = &aw.writer,
     });
 
     if (result.status != .ok and result.status != .created) {
@@ -172,6 +173,7 @@ fn streamRunOutput(
 
     var response_body: std.ArrayList(u8) = .{};
     defer response_body.deinit(alloc);
+    var aw: std.Io.Writer.Allocating = .fromArrayList(alloc, &response_body);
 
     const uri = try std.Uri.parse(url);
     const result = try client.fetch(.{
@@ -181,7 +183,7 @@ fn streamRunOutput(
             .{ .name = "Authorization", .value = auth_header },
             .{ .name = "Accept", .value = "text/event-stream" },
         },
-        .response_storage = .{ .dynamic = &response_body },
+        .response_writer = &aw.writer,
     });
 
     if (result.status != .ok) {
