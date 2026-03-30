@@ -126,13 +126,16 @@ export function matchRefsToFiles(refs, repoFiles) {
 /**
  * Print the predicted impact list.
  */
+const PREVIEW_TITLE = "Predicted file impact";
+
 export function printPreview(stdout, matches, { writeLine, ui }) {
   if (matches.length === 0) {
     writeLine(stdout, ui.info("no file references detected in spec"));
     return;
   }
 
-  writeLine(stdout, ui.head("Predicted file impact"));
+  writeLine(stdout, ui.head(PREVIEW_TITLE));
+  writeLine(stdout, ui.dim("\u2500".repeat(PREVIEW_TITLE.length)));
   writeLine(stdout);
 
   for (const { file, confidence } of matches) {
@@ -140,7 +143,7 @@ export function printPreview(stdout, matches, { writeLine, ui }) {
     writeLine(stdout, `  ${indicator}  ${sanitizeDisplay(file)}`);
   }
   writeLine(stdout);
-  writeLine(stdout, ui.dim(`${matches.length} file(s) matched from spec analysis`));
+  writeLine(stdout, ui.dim(`  ${matches.length} file(s) matched from spec analysis`));
 }
 
 /**

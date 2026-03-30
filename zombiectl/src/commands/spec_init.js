@@ -7,6 +7,7 @@ const LANG_EXTENSIONS = new Map([
   [".ts", "TypeScript"],
   [".tsx", "TypeScript"],
   [".js", "JavaScript"],
+  [".jsx", "JavaScript"],
   [".mjs", "JavaScript"],
   [".cjs", "JavaScript"],
   [".py", "Python"],
@@ -274,20 +275,22 @@ export async function commandSpecInit(args, ctx, deps) {
       },
     });
   } else {
-    writeLine(ctx.stdout, ui.ok(`template written: ${outputPath}`));
+    writeLine(ctx.stdout, ui.ok(`template written → ${outputPath}`));
     writeLine(ctx.stdout);
-    if (scan.languages.length > 0) {
-      writeLine(ctx.stdout, `languages:         ${scan.languages.join(", ")}`);
+    const rows = [];
+    if (scan.languages.length > 0)       rows.push(["languages",       scan.languages.join(", ")]);
+    if (scan.makeTargets.length > 0)     rows.push(["make targets",    scan.makeTargets.join(", ")]);
+    if (scan.testPatterns.length > 0)    rows.push(["test patterns",   scan.testPatterns.join(", ")]);
+    if (scan.projectStructure.length > 0) rows.push(["structure",      scan.projectStructure.join("  ")]);
+    if (rows.length > 0) {
+      const w = Math.max(...rows.map(([k]) => k.length));
+      const sep = ui.dim("  ·  ");
+      for (const [k, v] of rows) {
+        writeLine(ctx.stdout, `  ${ui.dim(k.padEnd(w))}${sep}${v}`);
+      }
+      writeLine(ctx.stdout);
     }
-    if (scan.makeTargets.length > 0) {
-      writeLine(ctx.stdout, `make targets:      ${scan.makeTargets.join(", ")}`);
-    }
-    if (scan.testPatterns.length > 0) {
-      writeLine(ctx.stdout, `test patterns:     ${scan.testPatterns.join(", ")}`);
-    }
-    if (scan.projectStructure.length > 0) {
-      writeLine(ctx.stdout, `project structure: ${scan.projectStructure.join(", ")}`);
-    }
+    writeLine(ctx.stdout, ui.dim(`${scan.fileCount} file(s) scanned`));
   }
 
   return 0;

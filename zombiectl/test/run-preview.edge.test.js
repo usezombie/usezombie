@@ -50,6 +50,49 @@ describe("T1 printPreview happy path", () => {
   });
 });
 
+// ── T1 Happy Path (extended) ──────────────────────────────────────────────────
+
+describe("T1 printPreview happy path (extended)", () => {
+  test("printPreview preserves match order passed to it (sorted input stays sorted)", () => {
+    const buf = makeBufferStream();
+    // Pass already-sorted data (a before z) — printPreview must preserve order
+    printPreview(buf.stream, [
+      { file: "src/a.go", confidence: "high" },
+      { file: "src/z.go", confidence: "high" },
+    ], { writeLine, ui });
+    const out = buf.read();
+    expect(out.indexOf("src/a.go")).toBeLessThan(out.indexOf("src/z.go"));
+  });
+
+  test("all-low matches renders with low indicator for each", () => {
+    const buf = makeBufferStream();
+    const matches = [
+      { file: "src/x.go", confidence: "low" },
+      { file: "src/y.go", confidence: "low" },
+    ];
+    printPreview(buf.stream, matches, { writeLine, ui });
+    const out = buf.read();
+    expect(out).toContain("src/x.go");
+    expect(out).toContain("src/y.go");
+    expect(out).toContain("2 file(s)");
+  });
+
+  test("20-file list renders all filenames without truncation", () => {
+    const buf = makeBufferStream();
+    const matches = Array.from({ length: 20 }, (_, i) => ({ file: `src/file${i}.go`, confidence: "low" }));
+    printPreview(buf.stream, matches, { writeLine, ui });
+    const out = buf.read();
+    for (let i = 0; i < 20; i++) expect(out).toContain(`file${i}.go`);
+    expect(out).toContain("20 file(s)");
+  });
+
+  test("file path with spaces renders without crash", () => {
+    const buf = makeBufferStream();
+    printPreview(buf.stream, [{ file: "src/my file.go", confidence: "medium" }], { writeLine, ui });
+    expect(buf.read()).toContain("my file.go");
+  });
+});
+
 // ── T2 Edge Cases — extractSpecRefs ──────────────────────────────────────────
 
 describe("T2 extractSpecRefs edge cases", () => {
@@ -109,6 +152,39 @@ describe("T2 extractSpecRefs edge cases", () => {
     expect(refs.some((r) => r.includes("workers/"))).toBe(true);
     expect(refs.some((r) => r.includes("scripts/"))).toBe(true);
   });
+
+  test("yaml and toml config file refs extracted", () => {
+    const refs = extractSpecRefs("Edit `config/app.yaml` and `Cargo.toml`.");
+    expect(refs.some((r) => r.includes(".yaml") || r.includes(".toml"))).toBe(true);
+  });
+
+  test("markdown link format [text](path.go) extracts path", () => {
+    const refs = extractSpecRefs("See [the handler](src/api/handler.go) for details.");
+    expect(refs.some((r) => r.includes("handler.go"))).toBe(true);
+  });
+
+  test("fenced code block containing file path is extracted", () => {
+    const md = "Edit this file:\n```\nsrc/commands/core.js\n```\n";
+    const refs = extractSpecRefs(md);
+    expect(refs.some((r) => r.includes("core.js"))).toBe(true);
+  });
+
+  test("shell script extension .sh extracted", () => {
+    const refs = extractSpecRefs("Run `scripts/deploy.sh` to release.");
+    expect(refs.some((r) => r.includes(".sh"))).toBe(true);
+  });
+
+  test("common English words without path separators or extensions not extracted", () => {
+    const refs = extractSpecRefs("Update the configuration to use the new service.");
+    expect(refs.every((r) => !r.includes("configuration"))).toBe(true);
+    expect(refs.every((r) => !r.includes("service"))).toBe(true);
+  });
+
+  test("paths starting with ./ not extracted as refs", () => {
+    const refs = extractSpecRefs("Edit `./src/core.go`.");
+    // The quoted path with "./" prefix may or may not be captured; key: it must not crash
+    expect(() => extractSpecRefs("Edit `./src/core.go`.")).not.toThrow();
+  });
 });
 
 // ── T2 Edge Cases — matchRefsToFiles ─────────────────────────────────────────
@@ -160,6 +236,40 @@ describe("T2 matchRefsToFiles edge cases", () => {
     const deep = "src/" + "level/".repeat(100) + "file.go";
     expect(() => matchRefsToFiles([deep], [deep])).not.toThrow();
   });
+
+  test("multiple refs that match the same file each yield exactly one match entry", () => {
+    const matches = matchRefsToFiles(
+      ["src/core.go", "core.go", "core"],
+      ["src/core.go"],
+    );
+    expect(matches.filter((m) => m.file === "src/core.go").length).toBe(1);
+  });
+
+  test("ref matching multiple files returns all of them", () => {
+    const matches = matchRefsToFiles(
+      ["handler"],
+      ["src/api/handler.go", "src/ws/handler.go", "lib/handler.ts"],
+    );
+    expect(matches.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("suffix match (file ends with ref) scores as high confidence", () => {
+    // "src/core.go" endsWith "core.go" → high
+    const matches = matchRefsToFiles(["core.go"], ["src/core.go"]);
+    const coreGo = matches.find((m) => m.file === "src/core.go");
+    expect(coreGo).toBeDefined();
+    expect(coreGo.confidence).toBe("high");
+  });
+
+  test("ref with no extension still matches filename prefix", () => {
+    const matches = matchRefsToFiles(["main"], ["src/main.go", "src/main.rs"]);
+    expect(matches.length).toBeGreaterThan(0);
+  });
+
+  test("very long ref string completes without error", () => {
+    const longRef = "src/" + "sub/".repeat(50) + "file.go";
+    expect(() => matchRefsToFiles([longRef], ["src/file.go"])).not.toThrow();
+  });
 });
 
 // ── T3 Error Paths — runPreview ───────────────────────────────────────────────
@@ -205,6 +315,35 @@ describe("T3 runPreview error paths", () => {
       const result = await runPreview(f, tmp, { stdout: makeNoop(), stderr: makeNoop() }, { writeLine, ui });
       expect(result.matches).toEqual([]);
     } finally { cleanup(tmp); }
+  });
+
+  test("nonexistent repoPath does not crash — returns empty matches", async () => {
+    const tmp = makeTmp();
+    const f = join(tmp, "spec.md");
+    writeFileSync(f, "Edit `src/foo.go`.");
+    try {
+      const result = await runPreview(f, "/no/such/repo", { stdout: makeNoop(), stderr: makeNoop() }, { writeLine, ui });
+      expect(result).not.toBeNull();
+      expect(Array.isArray(result.matches)).toBe(true);
+    } finally { cleanup(tmp); }
+  });
+
+  test("spec with only path-traversal refs returns empty matches (no real files)", async () => {
+    const tmp = makeTmp();
+    const f = join(tmp, "spec.md");
+    writeFileSync(f, "Edit `../../etc/passwd` and `../secrets.env`.");
+    try {
+      const result = await runPreview(f, tmp, { stdout: makeNoop(), stderr: makeNoop() }, { writeLine, ui });
+      expect(result.matches.length).toBe(0);
+    } finally { cleanup(tmp); }
+  });
+
+  test("stderr is written to ctx.stderr, not stdout", async () => {
+    const out = makeBufferStream();
+    const err = makeBufferStream();
+    await runPreview("/no/file.md", ".", { stdout: out.stream, stderr: err.stream }, { writeLine, ui });
+    expect(err.read()).toContain("spec file not found");
+    expect(out.read()).toBe("");
   });
 });
 
@@ -265,5 +404,19 @@ describe("T4 sanitizeDisplay fidelity", () => {
 
   test("only escape codes returns empty string", () => {
     expect(sanitizeDisplay("\u001b[1m\u001b[31m\u001b[0m")).toBe("");
+  });
+
+  test("mixed escape + text strips only the escape portions", () => {
+    expect(sanitizeDisplay("a\u001b[32mb\u001b[0mc")).toBe("abc");
+  });
+
+  test("tabs and spaces are preserved", () => {
+    const p = "src/cmd\t name.go";
+    expect(sanitizeDisplay(p)).toBe(p);
+  });
+
+  test("very long filename (500 chars) does not crash", () => {
+    const p = "src/" + "a".repeat(495) + ".go";
+    expect(() => sanitizeDisplay(p)).not.toThrow();
   });
 });

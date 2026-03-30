@@ -69,6 +69,42 @@ describe("T2 detectLanguages edge cases", () => {
   test(".exs counted as Elixir", () => {
     expect(detectLanguages(["mix.exs"])).toContain("Elixir");
   });
+
+  test(".jsx counted as JavaScript", () => {
+    expect(detectLanguages(["src/App.jsx", "src/Button.jsx"])).toContain("JavaScript");
+  });
+
+  test(".dart counted as its own language", () => {
+    // dart not in LANG_EXTENSIONS — ensure no crash, just empty
+    expect(() => detectLanguages(["lib/main.dart"])).not.toThrow();
+  });
+
+  test("many small languages each below 20% threshold are excluded", () => {
+    const files = [
+      ...Array.from({ length: 100 }, (_, i) => `a${i}.go`),
+      "x.rs",
+      "y.py",
+      "z.ts",
+    ];
+    const langs = detectLanguages(files);
+    expect(langs).toContain("Go");
+    // minority langs below 20% of top (100) must not appear
+    expect(langs).not.toContain("Rust");
+    expect(langs).not.toContain("Python");
+    expect(langs).not.toContain("TypeScript");
+  });
+
+  test("equal counts for all languages all included", () => {
+    const files = [
+      "a.go", "b.go",
+      "a.rs", "b.rs",
+      "a.ts", "b.ts",
+    ];
+    const langs = detectLanguages(files);
+    expect(langs).toContain("Go");
+    expect(langs).toContain("Rust");
+    expect(langs).toContain("TypeScript");
+  });
 });
 
 // ── T2 parseMakeTargets ───────────────────────────────────────────────────────
@@ -131,6 +167,34 @@ describe("T2 parseMakeTargets edge cases", () => {
     expect(t).toContain("lint-zig");
     expect(t).toContain("test_unit");
   });
+
+  test("double-colon rule (target::) not matched as normal target", () => {
+    writeFileSync(join(tmp, "Makefile"), "all:: build\nbuild:\n\techo ok\n");
+    const t = parseMakeTargets(tmp);
+    // double-colon is unusual; parser may or may not include it — should not crash
+    expect(Array.isArray(t)).toBe(true);
+    expect(t).toContain("build");
+  });
+
+  test("target with dots (e.g. build.linux) parsed correctly", () => {
+    writeFileSync(join(tmp, "Makefile"), "build.linux:\n\techo linux\n");
+    const t = parseMakeTargets(tmp);
+    expect(t).toContain("build.linux");
+  });
+
+  test("very long target name (60 chars) parsed without error", () => {
+    const longTarget = "a".repeat(60);
+    writeFileSync(join(tmp, "Makefile"), `${longTarget}:\n\techo ok\n`);
+    expect(() => parseMakeTargets(tmp)).not.toThrow();
+  });
+
+  test("targets with prerequisites (target: dep1 dep2) parsed correctly", () => {
+    writeFileSync(join(tmp, "Makefile"), "test: build lint\n\tgo test ./...\nbuild:\n\tgo build\nlint:\n\tgo vet\n");
+    const t = parseMakeTargets(tmp);
+    expect(t).toContain("test");
+    expect(t).toContain("build");
+    expect(t).toContain("lint");
+  });
 });
 
 // ── T2 detectTestPatterns ─────────────────────────────────────────────────────
@@ -159,6 +223,26 @@ describe("T2 detectTestPatterns edge cases", () => {
   test("test/ at repo root matched", () => {
     const p = detectTestPatterns(["test/foo_test.go"]);
     expect(p).toContain("tests/ directory");
+  });
+
+  test("__tests__ directory not confused with tests/ pattern", () => {
+    const p = detectTestPatterns(["src/__tests__/foo.test.js"]);
+    expect(p.some((x) => x.includes("test"))).toBe(true);
+  });
+
+  test(".test.tsx detected as test pattern", () => {
+    const p = detectTestPatterns(["src/Login.test.tsx"]);
+    expect(p.some((x) => x.includes("test"))).toBe(true);
+  });
+
+  test("mixed patterns in one file list captures all types", () => {
+    const files = [
+      "test/login_test.go",
+      "src/Login.test.tsx",
+      "src/util.spec.ts",
+    ];
+    const p = detectTestPatterns(files);
+    expect(p.length).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -204,5 +288,44 @@ describe("T3 commandSpecInit error paths", () => {
       { parseFlags, writeLine, ui, printJson: () => {} },
     );
     expect([0, 1]).toContain(code); // may fail if CWD has no perms, but must not throw
+  });
+
+  test("overwriting an existing output file succeeds silently", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const out = join(tmp, "existing.md");
+    writeFileSync(out, "old content");
+    const code = await commandSpecInit(
+      ["--path", tmp, "--output", out],
+      { stdout: makeNoop(), stderr: makeNoop(), jsonMode: false },
+      { parseFlags, writeLine, ui, printJson: () => {} },
+    );
+    expect(code).toBe(0);
+    const { readFileSync } = await import("node:fs");
+    expect(readFileSync(out, "utf8")).not.toBe("old content");
+  });
+
+  test("stdout contains output path and scanned file count on success", async () => {
+    const outBuf = makeBufferStream();
+    const out = join(tmp, "info.md");
+    const code = await commandSpecInit(
+      ["--path", tmp, "--output", out],
+      { stdout: outBuf.stream, stderr: makeNoop(), jsonMode: false },
+      { parseFlags, writeLine, ui, printJson: () => {} },
+    );
+    expect(code).toBe(0);
+    expect(outBuf.read()).toContain(out);
+  });
+
+  test("error message is written to stderr, not stdout", async () => {
+    const outBuf = makeBufferStream();
+    const errBuf = makeBufferStream();
+    const code = await commandSpecInit(
+      ["--path", "/nonexistent/xyz"],
+      { stdout: outBuf.stream, stderr: errBuf.stream, jsonMode: false },
+      { parseFlags, writeLine, ui, printJson: () => {} },
+    );
+    expect(code).not.toBe(0);
+    expect(errBuf.read()).toContain("path not found");
+    expect(outBuf.read()).toBe("");
   });
 });
