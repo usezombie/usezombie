@@ -157,9 +157,26 @@ fn executeInner(
     defer cfg.deinit();
     cfg.workspace_dir = workspace_path;
 
-    // Apply agent_config overrides (model, temperature, max_tokens).
+    // Apply agent_config overrides (model, temperature, max_tokens, api_key).
     if (agent_config) |ac| {
         applyAgentConfig(&cfg, ac);
+        // M16_003 §1.4: inject api_key from RPC payload into NullClaw Config.
+        // This ensures the executor never reads ANTHROPIC_API_KEY (or any other
+        // provider key) from the process environment.
+        if (json.getStr(ac, "api_key")) |key| {
+            injectProviderApiKey(&cfg, key) catch {
+                log.err("executor.runner.api_key_inject_failed error_code={s}", .{ERR_EXEC_RUNNER_INVALID_CONFIG});
+                return RunnerError.InvalidConfig;
+            };
+        }
+        // M16_003 §2: configure git credentials in workspace for github_token.
+        if (json.getStr(ac, "github_token")) |token| {
+            configureGitCredentials(alloc, workspace_path, token) catch |err| {
+                log.warn("executor.runner.git_cred_configure_failed err={s}", .{@errorName(err)});
+                // Non-fatal: git operations will fail at push time if token is needed
+                // but missing. The worker re-requests before PR creation (§2.3).
+            };
+        }
     }
 
     // 2. Build provider.
@@ -230,6 +247,96 @@ fn applyAgentConfig(cfg: *Config, ac: std.json.Value) void {
     if (json.getInt(ac, "max_tokens")) |mt| cfg.max_tokens = @intCast(mt);
     // system_prompt is not a Config field — it's passed via the message.
     // The agent receives it as part of the composed message from composeMessage().
+}
+
+/// Inject an LLM API key into NullClaw Config for cfg.default_provider (M16_003 §1.4).
+///
+/// Strategy:
+/// 1. Scan cfg.providers for an entry matching cfg.default_provider.
+///    If found, overwrite its api_key using cfg.allocator (arena-backed).
+///    The old pointer remains in the arena and is freed with it on cfg.deinit().
+/// 2. If no matching entry exists, prepend a new ProviderEntry to cfg.providers.
+///    Both the new entry slice and its api_key string are allocated from cfg.allocator,
+///    so cfg.deinit() (arena.deinit) frees them automatically.
+///
+/// After this call, RuntimeProviderBundle.init() finds the injected key via
+/// resolveApiKeyFromConfig() and never falls through to the process environment.
+fn injectProviderApiKey(cfg: *Config, api_key: []const u8) !void {
+    const owned_key = try cfg.allocator.dupe(u8, api_key);
+
+    // Try to update an existing provider entry.
+    for (@constCast(cfg.providers)) |*entry| {
+        if (std.mem.eql(u8, entry.name, cfg.default_provider)) {
+            // Old api_key lives in the arena — overwriting the pointer is safe.
+            entry.api_key = owned_key;
+            return;
+        }
+    }
+
+    // No existing entry for default_provider — prepend one to the slice.
+    // cfg.allocator is the arena so all allocations are freed by cfg.deinit().
+    const nullclaw_config = @import("nullclaw").config;
+    const new_providers = try cfg.allocator.alloc(nullclaw_config.ProviderEntry, cfg.providers.len + 1);
+    new_providers[0] = .{
+        .name = cfg.default_provider,
+        .api_key = owned_key,
+    };
+    @memcpy(new_providers[1..], cfg.providers);
+    // Replace the slice pointer. The old slice is still in the arena and
+    // will be freed when the arena deinits — no double-free, no leak.
+    cfg.providers = new_providers;
+}
+
+/// Write a git credential config inside the workspace so that git push and
+/// GitHub API calls can authenticate using the installation token (M16_003 §2).
+///
+/// Writes `.git/config` credential helper pointing to a per-workspace credential
+/// script, and the credential value itself. The workspace is a temporary worktree
+/// that is deleted after the run, so these credentials have run-scoped lifetime.
+fn configureGitCredentials(
+    alloc: std.mem.Allocator,
+    workspace_path: []const u8,
+    github_token: []const u8,
+) !void {
+    // Write the credentials file inside .git/ so it is never exposed to the
+    // working tree (agent diffs, file listings, LLM context).
+    // Format: https://x-access-token:{token}@github.com
+    const creds_path = try std.fs.path.join(alloc, &.{ workspace_path, ".git", "credentials" });
+    defer alloc.free(creds_path);
+
+    const creds_content = try std.fmt.allocPrint(
+        alloc,
+        "https://x-access-token:{s}@github.com\n",
+        .{github_token},
+    );
+    defer alloc.free(creds_content);
+
+    const file = try std.fs.createFileAbsolute(creds_path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(creds_content);
+
+    // Configure git to use the credentials file.
+    // We write into .git/config (local to the workspace) so it does not leak
+    // to the system git config.
+    const git_config_path = try std.fs.path.join(alloc, &.{ workspace_path, ".git", "config" });
+    defer alloc.free(git_config_path);
+
+    // Append the credential store config if the file exists; otherwise skip.
+    // The worktree .git/config is managed by libgit2 — we append our section.
+    const git_config_file = std.fs.openFileAbsolute(git_config_path, .{ .mode = .read_write }) catch return;
+    defer git_config_file.close();
+
+    const cred_section = try std.fmt.allocPrint(
+        alloc,
+        "\n[credential]\n\thelper = store --file={s}\n",
+        .{creds_path},
+    );
+    defer alloc.free(cred_section);
+
+    try git_config_file.seekFromEnd(0);
+    try git_config_file.writeAll(cred_section);
+
+    log.debug("executor.runner.git_cred_configured workspace={s}", .{workspace_path});
 }
 
 /// Build tools from the RPC tools array, or fall back to allTools.
