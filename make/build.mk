@@ -62,7 +62,7 @@ build-linux-alpine:  ## Compile inside Alpine with musl-native OpenSSL; asserts 
 			echo "  compiling zombied (aarch64-linux, static OpenSSL)..." && \
 			zig build -Doptimize=ReleaseSafe -Dtarget=aarch64-linux && \
 			for bin in zig-out/bin/zombied zig-out/bin/zombied-executor; do \
-				test -f "$$bin" || (echo "FAIL: $$bin not found"; exit 1); \
+				test -f "$$bin" || { echo "FAIL: $$bin not found"; exit 1; }; \
 				if readelf -d "$$bin" 2>/dev/null | grep -q " (NEEDED)"; then \
 					echo "FAIL: $$bin has dynamic NEEDED entries"; \
 					readelf -d "$$bin" | grep NEEDED; \
