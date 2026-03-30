@@ -4,7 +4,8 @@
 **Milestone:** M18
 **Workstream:** 002
 **Date:** Mar 28, 2026
-**Status:** PENDING
+**Status:** IN_PROGRESS
+**Branch:** m18-002-spec-templates-diff-preview
 **Priority:** P2 — Lowers friction of creating specs and provides impact visibility before running agents
 **Batch:** B4
 **Depends on:** M16_001 (Gate Loop)
