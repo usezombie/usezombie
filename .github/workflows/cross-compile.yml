@@ -25,31 +25,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Linux targets build inside Alpine (musl-native) so static OpenSSL archives
-  # are musl-compatible.  Produces fully static binaries (zero dynamic deps)
-  # that run on any Linux: bookworm containers (Fly.io) and Trixie bare-metal.
-  cross-compile-linux:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-linux
-            os: ubuntu-latest
-            arch: x86_64
-          - target: aarch64-linux
-            os: ubuntu-24.04-arm
-            arch: aarch64
-    runs-on: ${{ matrix.os }}
+  # x86_64: build inside Alpine container — musl-native OpenSSL, fully static output.
+  # JS actions work inside Alpine on x86_64 runners.
+  cross-compile-linux-x86:
+    runs-on: ubuntu-latest
     container:
       image: mirror.gcr.io/library/alpine:3.21
     steps:
       - name: Install build dependencies
         run: |
           apk add --no-cache git openssl-dev openssl-libs-static ca-certificates xz binutils file
-          mkdir -p /usr/lib/${{ matrix.arch }}-linux-gnu /usr/include/${{ matrix.arch }}-linux-gnu
-          ln -sf /usr/lib/libssl.a /usr/lib/${{ matrix.arch }}-linux-gnu/libssl.a
-          ln -sf /usr/lib/libcrypto.a /usr/lib/${{ matrix.arch }}-linux-gnu/libcrypto.a
-          ln -sf /usr/include/openssl /usr/include/${{ matrix.arch }}-linux-gnu/openssl
+          mkdir -p /usr/lib/x86_64-linux-gnu /usr/include/x86_64-linux-gnu
+          ln -sf /usr/lib/libssl.a    /usr/lib/x86_64-linux-gnu/libssl.a
+          ln -sf /usr/lib/libcrypto.a /usr/lib/x86_64-linux-gnu/libcrypto.a
+          ln -sf /usr/include/openssl /usr/include/x86_64-linux-gnu/openssl
 
       - uses: actions/checkout@v6
 
@@ -57,10 +46,10 @@ jobs:
         with:
           version: 0.15.2
 
-      - name: Compile zombied + zombied-executor (${{ matrix.target }})
-        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+      - name: Compile zombied + zombied-executor (x86_64-linux)
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux
 
-      - name: Verify static ELF — zero NEEDED, no INTERP (${{ matrix.target }})
+      - name: Verify static ELF — zero NEEDED, no INTERP (x86_64-linux)
         run: |
           for bin in zig-out/bin/zombied zig-out/bin/zombied-executor; do
             test -f "$bin"
@@ -77,18 +66,73 @@ jobs:
           done
 
       - name: Upload x86_64 binary for runtime compat check
-        if: matrix.arch == 'x86_64'
         uses: actions/upload-artifact@v4
         with:
           name: zombied-linux-amd64-ci
           path: zig-out/bin/zombied
           retention-days: 1
 
-  # Verify the static x86_64 binary executes (ldd = "not a dynamic executable")
-  # across bookworm, alpine, and trixie — proving it runs on any Linux.
+  # aarch64: JS actions cannot run inside Alpine on ARM64 runners.
+  # Solution: use the bare ubuntu-24.04-arm runner (JS actions work fine),
+  # then invoke `docker run alpine:3.21` for the Zig build step to get
+  # musl-native static OpenSSL — the same pattern as `make build-linux-alpine`.
+  cross-compile-linux-aarch64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build aarch64-linux inside Alpine (musl-native static OpenSSL)
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/zig-out/bin"
+          docker run --rm \
+            --platform linux/arm64 \
+            -v "$GITHUB_WORKSPACE:/src:ro" \
+            -v "$GITHUB_WORKSPACE/zig-out:/zig-out" \
+            mirror.gcr.io/library/alpine:3.21 \
+            sh -c '
+              set -e
+              apk add --no-cache openssl-dev openssl-libs-static ca-certificates xz wget binutils >/dev/null 2>&1
+              mkdir -p /usr/lib/aarch64-linux-gnu /usr/include/aarch64-linux-gnu
+              ln -sf /usr/lib/libssl.a    /usr/lib/aarch64-linux-gnu/libssl.a
+              ln -sf /usr/lib/libcrypto.a /usr/lib/aarch64-linux-gnu/libcrypto.a
+              ln -sf /usr/include/openssl /usr/include/aarch64-linux-gnu/openssl
+              cp -a /src/. /build
+              cd /build
+              echo "  fetching zig 0.15.2 for aarch64..."
+              wget -q https://ziglang.org/download/0.15.2/zig-aarch64-linux-0.15.2.tar.xz -O /tmp/zig.tar.xz
+              (cd /tmp && tar xf zig.tar.xz)
+              export PATH="/tmp/zig-aarch64-linux-0.15.2:$PATH"
+              echo "  compiling zombied + zombied-executor (aarch64-linux)..."
+              zig build -Doptimize=ReleaseSafe -Dtarget=aarch64-linux
+              for bin in zig-out/bin/zombied zig-out/bin/zombied-executor; do
+                test -f "$bin"
+                if readelf -d "$bin" 2>/dev/null | grep -q " (NEEDED)"; then
+                  echo "FAIL: $bin has dynamic NEEDED entries"
+                  readelf -d "$bin" | grep NEEDED
+                  exit 1
+                fi
+                if readelf -l "$bin" 2>/dev/null | grep -q "INTERP"; then
+                  echo "FAIL: $bin has INTERP (dynamic linker) section"
+                  exit 1
+                fi
+                echo "  ✓ $bin: fully static (zero NEEDED, no INTERP)"
+              done
+              cp zig-out/bin/zombied          /zig-out/bin/zombied
+              cp zig-out/bin/zombied-executor /zig-out/bin/zombied-executor
+            '
+
+      - name: Verify output artifacts (aarch64-linux)
+        run: |
+          test -f zig-out/bin/zombied
+          test -f zig-out/bin/zombied-executor
+          echo "✓ aarch64-linux artifacts present"
+
+  # Verify the static x86_64 binary runs on all target Linux environments
+  # (bookworm = Fly.io, alpine = musl-native, trixie = bare-metal worker).
+  # ldd "not a dynamic executable" proves no dynamic linker dependency.
   verify-runtime-compat:
     runs-on: ubuntu-latest
-    needs: cross-compile-linux
+    needs: cross-compile-linux-x86
     steps:
       - uses: actions/download-artifact@v4
         with:
