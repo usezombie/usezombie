@@ -25,7 +25,7 @@ pub const Subscriber = struct {
     transport: redis_transport.Transport,
 
     pub fn connectFromEnv(alloc: std.mem.Allocator) !Subscriber {
-        const url_owned = try redis_config.resolveRedisUrl(alloc, .queue);
+        const url_owned = try redis_config.resolveRedisUrl(alloc, .worker);
         defer alloc.free(url_owned);
         return connectFromUrl(alloc, url_owned);
     }

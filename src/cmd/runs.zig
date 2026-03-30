@@ -47,8 +47,8 @@ pub fn run(alloc: std.mem.Allocator) !void {
     const auth_header = try std.fmt.allocPrint(alloc, "Bearer {s}", .{api_key});
     defer alloc.free(auth_header);
 
-    var response_body = std.ArrayList(u8).init(alloc);
-    defer response_body.deinit();
+    var response_body: std.ArrayList(u8) = .{};
+    defer response_body.deinit(alloc);
 
     const uri = std.Uri.parse(url) catch {
         std.debug.print("error: invalid URL: {s}\n", .{url});
@@ -64,7 +64,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
         },
         .response_storage = .{ .dynamic = &response_body },
     }) catch |err| {
-        std.debug.print("error: HTTP request failed: {}\n", .{err});
+        std.debug.print("error: HTTP request failed: {any}\n", .{err});
         std.process.exit(1);
     };
 

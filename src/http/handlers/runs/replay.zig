@@ -75,7 +75,7 @@ pub fn handleGetRunReplay(ctx: *common.Context, req: *httpz.Request, res: *httpz
 
     run_result.drain() catch |err| obs_log.logWarnErr(.http, err, "run.replay_drain_fail run_id={s}", .{run_id});
 
-    var gate_results_list = std.ArrayList(GateResultEntry).init(alloc);
+    var gate_results_list: std.ArrayList(GateResultEntry) = .{};
 
     var gr_result = conn.query(
         \\SELECT gate_name, attempt, exit_code, stdout_tail, stderr_tail, wall_ms, created_at

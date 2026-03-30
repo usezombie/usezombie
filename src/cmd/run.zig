@@ -30,13 +30,13 @@ pub fn run(alloc: std.mem.Allocator) !void {
     log.info("run.start spec_path={s} watch={}", .{ path, watch_flag });
 
     const spec_content = std.fs.cwd().readFileAlloc(alloc, path, 512 * 1024) catch |err| {
-        std.debug.print("error reading spec: {}\n", .{err});
+        std.debug.print("error reading spec: {any}\n", .{err});
         std.process.exit(1);
     };
     defer alloc.free(spec_content);
 
     const pool = db.initFromEnvForRole(alloc, .worker) catch |err| {
-        std.debug.print("fatal: database init failed: {}\n", .{err});
+        std.debug.print("fatal: database init failed: {any}\n", .{err});
         std.process.exit(1);
     };
     defer pool.deinit();
@@ -81,7 +81,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
     defer alloc.free(workspace_id);
 
     const run_id = postRunAndGetId(alloc, base_url, api_key, workspace_id, spec_content) catch |err| {
-        std.debug.print("error: failed to start run: {}\n", .{err});
+        std.debug.print("error: failed to start run: {any}\n", .{err});
         std.process.exit(1);
     };
     defer alloc.free(run_id);
@@ -90,7 +90,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
     std.debug.print("watch: connecting to SSE stream for run {s}...\n", .{run_id});
 
     streamRunOutput(alloc, base_url, api_key, run_id) catch |err| {
-        std.debug.print("error: stream failed: {}\n", .{err});
+        std.debug.print("error: stream failed: {any}\n", .{err});
         std.process.exit(1);
     };
 }
@@ -108,16 +108,18 @@ fn postRunAndGetId(
     const auth_header = try std.fmt.allocPrint(alloc, "Bearer {s}", .{api_key});
     defer alloc.free(auth_header);
 
-    const body = try std.fmt.allocPrint(alloc,
-        \\{{"workspace_id":"{s}","spec":{}}}
-    , .{ workspace_id, std.json.fmt(spec_content, .{}) });
+    const RunRequest = struct { workspace_id: []const u8, spec: []const u8 };
+    const body = try std.json.stringifyAlloc(alloc, RunRequest{
+        .workspace_id = workspace_id,
+        .spec = spec_content,
+    }, .{});
     defer alloc.free(body);
 
     var client = std.http.Client{ .allocator = alloc };
     defer client.deinit();
 
-    var response_body = std.ArrayList(u8).init(alloc);
-    defer response_body.deinit();
+    var response_body: std.ArrayList(u8) = .{};
+    defer response_body.deinit(alloc);
 
     const uri = try std.Uri.parse(url);
     const result = try client.fetch(.{
@@ -168,8 +170,8 @@ fn streamRunOutput(
     var client = std.http.Client{ .allocator = alloc };
     defer client.deinit();
 
-    var response_body = std.ArrayList(u8).init(alloc);
-    defer response_body.deinit();
+    var response_body: std.ArrayList(u8) = .{};
+    defer response_body.deinit(alloc);
 
     const uri = try std.Uri.parse(url);
     const result = try client.fetch(.{
