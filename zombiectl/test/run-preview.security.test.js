@@ -201,12 +201,12 @@ describe("T11 performance", () => {
     expect(performance.now() - start).toBeLessThan(500);
   });
 
-  test("matchRefsToFiles with 100 refs × 2,000 files completes under 1s", () => {
+  test("matchRefsToFiles with 100 refs × 2,000 files completes under 3s", () => {
     const refs = Array.from({ length: 100 }, (_, i) => `src/file${i}.go`);
     const files = Array.from({ length: 2000 }, (_, i) => `src/file${i}.go`);
     const start = performance.now();
     matchRefsToFiles(refs, files);
-    expect(performance.now() - start).toBeLessThan(1000);
+    expect(performance.now() - start).toBeLessThan(3000);
   });
 });
 

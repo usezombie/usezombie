@@ -1,7 +1,5 @@
-const useColor =
-  process.env.NO_COLOR !== "1" &&
-  process.env.NO_COLOR !== "true" &&
-  process.stdout.isTTY === true;
+// NO_COLOR spec: any non-empty value disables color
+const useColor = !process.env.NO_COLOR && process.stdout.isTTY === true;
 
 function color(code, text) {
   return useColor ? `\u001b[${code}m${text}\u001b[0m` : text;

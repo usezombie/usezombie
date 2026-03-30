@@ -16,10 +16,8 @@ const CONF_DISPLAY = {
  */
 export function confIndicator(confidence, stream) {
   const d = CONF_DISPLAY[confidence] ?? CONF_DISPLAY.low;
-  const noColor =
-    process.env.NO_COLOR === "1" ||
-    process.env.NO_COLOR === "true" ||
-    !stream?.isTTY;
+  // NO_COLOR spec: any non-empty value disables color
+  const noColor = Boolean(process.env.NO_COLOR) || !stream?.isTTY;
   if (noColor) return d.label;
   return `\u001b[${d.ansi}m${d.icon}\u001b[0m`;
 }

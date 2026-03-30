@@ -1,40 +1,6 @@
-import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
-
-const IGNORED_DIRS = new Set(["node_modules", ".git", "vendor", "target", "zig-cache", "zig-out", ".worktrees"]);
-
-/**
- * Walk a directory (non-recursive breadth-limited) and collect file paths.
- * Stops at maxDepth to avoid scanning huge trees.
- */
-function walkDir(rootPath, maxDepth = 4) {
-  const results = [];
-  const queue = [{ path: rootPath, depth: 0 }];
-
-  while (queue.length > 0) {
-    const { path: current, depth } = queue.shift();
-    if (depth > maxDepth) continue;
-
-    let entries;
-    try {
-      entries = readdirSync(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
-      if (IGNORED_DIRS.has(entry.name)) continue;
-      const fullPath = join(current, entry.name);
-      if (entry.isDirectory()) {
-        queue.push({ path: fullPath, depth: depth + 1 });
-      } else if (entry.isFile()) {
-        results.push(fullPath);
-      }
-    }
-  }
-
-  return results;
-}
+import { walkDir } from "../lib/walk-dir.js";
 
 /**
  * Parse Makefile and return list of target names.
@@ -197,6 +163,10 @@ export async function commandSpecInit(args, ctx, deps) {
 
   if (!existsSync(repoPath)) {
     writeLine(ctx.stderr, ui.err(`path not found: ${repoPath}`));
+    return 2;
+  }
+  if (!statSync(repoPath).isDirectory()) {
+    writeLine(ctx.stderr, ui.err(`path is not a directory: ${repoPath}`));
     return 2;
   }
 
