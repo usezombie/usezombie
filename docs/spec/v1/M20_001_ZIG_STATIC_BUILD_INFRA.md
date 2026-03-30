@@ -5,6 +5,7 @@
 **Workstream:** 001
 **Date:** Mar 29, 2026
 **Status:** IN_PROGRESS
+**Branch:** feat/m20-001-zig-static-build
 **Priority:** P2 — Low priority, quality-of-life and community contribution
 **Batch:** B1
 **Depends on:** None (standalone)
