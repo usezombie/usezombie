@@ -272,3 +272,8 @@ test "3.1.4: spec with ./ prefix to existing file passes" {
     defer result.deinit(std.testing.allocator);
     try std.testing.expect(result.failure == null);
 }
+
+// ── Extended tests (T1-T11) live in spec_validator_test.zig ──────────────────
+comptime {
+    _ = @import("spec_validator_test.zig");
+}
