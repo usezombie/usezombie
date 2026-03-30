@@ -113,7 +113,6 @@ fn dispatchMatchedRoute(ctx: *handler.Context, req: *httpz.Request, res: *httpz.
             .PUT => handler.handlePutAdminPlatformKey(ctx, req, res),
             else => respondMethodNotAllowed(res),
         },
-        .put_admin_platform_key => if (req.method == .PUT) handler.handlePutAdminPlatformKey(ctx, req, res) else respondMethodNotAllowed(res),
         .delete_admin_platform_key => |provider| if (req.method == .DELETE) handler.handleDeleteAdminPlatformKey(ctx, req, res, provider) else respondMethodNotAllowed(res),
         // M16_004: workspace BYOK LLM credentials
         .workspace_llm_credential => |workspace_id| switch (req.method) {
@@ -218,4 +217,5 @@ pub fn stop() void {
 
 test {
     _ = @import("rbac_http_integration_test.zig");
+    _ = @import("m16_004_http_integration_test.zig");
 }

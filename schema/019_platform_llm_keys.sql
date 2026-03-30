@@ -4,7 +4,7 @@
 -- Key resolution order (worker_stage_executor.zig):
 --   1. workspace vault.secrets {provider}_api_key  → BYOK
 --   2. platform_llm_keys active row → admin workspace vault.secrets  → platform default
---   3. executor env fallback (dev mode only, APP_ENV != production)
+--   3. WorkerError.CredentialDenied — no env fallback in any mode
 
 CREATE TABLE core.platform_llm_keys (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),

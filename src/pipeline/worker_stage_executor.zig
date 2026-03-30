@@ -706,3 +706,130 @@ pub fn executeRun(
         .scoring_state = &scoring_state,
     });
 }
+
+// ── M16_004 integration tests — resolveLlmApiKey ─────────────────────────────
+// Three tests covering the complete key resolution chain:
+//   1. Workspace BYOK key found → return it.
+//   2. No workspace key, platform_llm_keys row exists → return admin workspace key.
+//   3. No key anywhere → CredentialDenied.
+//
+// Require DATABASE_URL (with full schema applied). Skipped when not available.
+// ENCRYPTION_MASTER_KEY is set to a deterministic test value by setupTestKek().
+//
+// All DB writes are wrapped in BEGIN/ROLLBACK so nothing is committed.
+// vault.secrets FK (→ core.workspaces) is satisfied by insertTestFixtures().
+// platform_llm_keys is a TEMP TABLE that shadows the permanent table for the
+// duration of the test connection (unqualified name, pg_temp is first in path).
+
+const _test_tenant_id = "00000000-0000-4000-8000-000000000001";
+const _test_ws_id = "00000000-0000-4000-8000-000000000002";
+const _test_admin_ws_id = "00000000-0000-4000-8000-000000000003";
+
+fn testOpenConn(alloc: std.mem.Allocator) !?struct { pool: *pg.Pool, conn: *pg.Conn } {
+    const db = @import("../db/pool.zig");
+    const url = std.process.getEnvVarOwned(alloc, "DATABASE_URL") catch return null;
+    defer alloc.free(url);
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const opts = db.parseUrl(arena.allocator(), url) catch return null;
+    const pool = pg.Pool.init(alloc, opts) catch return null;
+    errdefer pool.deinit();
+    const conn = pool.acquire() catch {
+        pool.deinit();
+        return null;
+    };
+    return .{ .pool = pool, .conn = conn };
+}
+
+fn testSetKek() void {
+    const c = @cImport(@cInclude("stdlib.h"));
+    _ = c.setenv("ENCRYPTION_MASTER_KEY", "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", 1);
+}
+
+fn testInsertFixtures(conn: *pg.Conn) !void {
+    _ = try conn.exec(
+        "INSERT INTO core.tenants (tenant_id, name, api_key_hash, created_at) VALUES ($1, 'test-tenant', 'x', 0) ON CONFLICT (tenant_id) DO NOTHING",
+        .{_test_tenant_id},
+    );
+    _ = try conn.exec(
+        \\INSERT INTO core.workspaces (workspace_id, tenant_id, repo_url, default_branch, created_at, updated_at)
+        \\VALUES ($1, $2, 'https://example.com/test', 'main', 0, 0) ON CONFLICT (workspace_id) DO NOTHING
+    , .{ _test_ws_id, _test_tenant_id });
+    _ = try conn.exec(
+        \\INSERT INTO core.workspaces (workspace_id, tenant_id, repo_url, default_branch, created_at, updated_at)
+        \\VALUES ($1, $2, 'https://example.com/admin', 'main', 0, 0) ON CONFLICT (workspace_id) DO NOTHING
+    , .{ _test_admin_ws_id, _test_tenant_id });
+}
+
+fn testCreatePlatformKeysTable(conn: *pg.Conn) !void {
+    // Temp table shadows core.platform_llm_keys for unqualified queries in this session.
+    _ = try conn.exec(
+        \\CREATE TEMP TABLE IF NOT EXISTS platform_llm_keys (
+        \\    provider TEXT NOT NULL,
+        \\    source_workspace_id TEXT NOT NULL,
+        \\    active BOOLEAN NOT NULL
+        \\) ON COMMIT DELETE ROWS
+    , .{});
+}
+
+test "M16_004: resolveLlmApiKey returns workspace BYOK key" {
+    const alloc = std.testing.allocator;
+    const db_ctx = (try testOpenConn(alloc)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+    testSetKek();
+
+    const conn = db_ctx.conn;
+    _ = try conn.exec("BEGIN", .{});
+    defer _ = conn.exec("ROLLBACK", .{}) catch {};
+
+    try testInsertFixtures(conn);
+    try testCreatePlatformKeysTable(conn);
+    try crypto_store.store(alloc, conn, _test_ws_id, "anthropic_api_key", "sk-byok-test", 1);
+
+    const key = try resolveLlmApiKey(alloc, conn, _test_ws_id);
+    try std.testing.expectEqualStrings("sk-byok-test", key);
+}
+
+test "M16_004: resolveLlmApiKey falls through to platform default" {
+    const alloc = std.testing.allocator;
+    const db_ctx = (try testOpenConn(alloc)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+    testSetKek();
+
+    const conn = db_ctx.conn;
+    _ = try conn.exec("BEGIN", .{});
+    defer _ = conn.exec("ROLLBACK", .{}) catch {};
+
+    try testInsertFixtures(conn);
+    try testCreatePlatformKeysTable(conn);
+    // No workspace key; platform row points to admin workspace.
+    _ = try conn.exec(
+        "INSERT INTO platform_llm_keys (provider, source_workspace_id, active) VALUES ('anthropic', $1, true)",
+        .{_test_admin_ws_id},
+    );
+    try crypto_store.store(alloc, conn, _test_admin_ws_id, "anthropic_api_key", "sk-platform-test", 1);
+
+    const key = try resolveLlmApiKey(alloc, conn, _test_ws_id);
+    try std.testing.expectEqualStrings("sk-platform-test", key);
+}
+
+test "M16_004: resolveLlmApiKey returns CredentialDenied with no key" {
+    const alloc = std.testing.allocator;
+    const db_ctx = (try testOpenConn(alloc)) orelse return error.SkipZigTest;
+    defer db_ctx.pool.deinit();
+    defer db_ctx.pool.release(db_ctx.conn);
+    testSetKek();
+
+    const conn = db_ctx.conn;
+    _ = try conn.exec("BEGIN", .{});
+    defer _ = conn.exec("ROLLBACK", .{}) catch {};
+
+    try testCreatePlatformKeysTable(conn);
+    // No fixtures, no vault entry, no platform row.
+    try std.testing.expectError(
+        worker_runtime.WorkerError.CredentialDenied,
+        resolveLlmApiKey(alloc, conn, _test_ws_id),
+    );
+}

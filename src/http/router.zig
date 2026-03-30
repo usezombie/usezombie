@@ -42,8 +42,7 @@ pub const Route = union(enum) {
     veto_agent_proposal: AgentProposalRoute,
     revert_agent_harness_change: AgentHarnessChangeRoute,
     // M16_004: admin platform key management
-    admin_platform_keys, // GET /v1/admin/platform-keys
-    put_admin_platform_key, // PUT /v1/admin/platform-keys
+    admin_platform_keys, // GET + PUT /v1/admin/platform-keys (method-dispatched in server.zig)
     delete_admin_platform_key: []const u8, // DELETE /v1/admin/platform-keys/{provider}
     // M16_004: workspace BYOK LLM credentials
     workspace_llm_credential: []const u8, // PUT|DELETE|GET /v1/workspaces/{id}/credentials/llm

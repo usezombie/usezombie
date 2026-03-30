@@ -167,7 +167,12 @@ pub fn handleGetAdminPlatformKeys(
         active: bool,
     }).init(alloc);
 
-    while (q.next() catch null) |row| {
+    while (true) {
+        const maybe_row = q.next() catch |e| {
+            log.err("admin.platform_keys_row_error err={s}", .{@errorName(e)});
+            break;
+        };
+        const row = maybe_row orelse break;
         const prov = alloc.dupe(u8, row.get([]u8, 0) catch continue) catch continue;
         const src_ws = alloc.dupe(u8, row.get([]u8, 1) catch continue) catch continue;
         const active = row.get(bool, 2) catch continue;

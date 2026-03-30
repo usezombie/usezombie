@@ -116,24 +116,41 @@ pub fn handleDeleteWorkspaceLlmCredential(
         .minimum_role = .operator,
     }) orelse return;
 
-    // Read provider preference so we know which key_name to delete.
+    // Begin transaction: read provider preference and delete both vault rows atomically
+    // to prevent a TOCTOU race where a concurrent PUT swaps the preference between
+    // the read and the deletes.
+    _ = conn.exec("BEGIN", .{}) catch {
+        common.internalOperationError(res, "Failed to begin transaction", req_id);
+        return;
+    };
+
     const provider: []const u8 = crypto_store.load(alloc, conn, workspace_id, "llm_provider_preference") catch |e| p: {
         if (e != error.NotFound) {
+            _ = conn.exec("ROLLBACK", .{}) catch {};
             common.internalOperationError(res, "Failed to read provider preference", req_id);
             return;
         }
         break :p "anthropic";
     };
     const key_name = std.fmt.allocPrint(alloc, "{s}_api_key", .{provider}) catch {
+        _ = conn.exec("ROLLBACK", .{}) catch {};
         common.internalOperationError(res, "Allocation failed", req_id);
         return;
     };
 
     _ = conn.exec("DELETE FROM vault.secrets WHERE workspace_id = $1 AND key_name = $2", .{ workspace_id, key_name }) catch {
+        _ = conn.exec("ROLLBACK", .{}) catch {};
         common.internalOperationError(res, "Failed to delete LLM API key", req_id);
         return;
     };
-    _ = conn.exec("DELETE FROM vault.secrets WHERE workspace_id = $1 AND key_name = 'llm_provider_preference'", .{workspace_id}) catch {};
+    _ = conn.exec("DELETE FROM vault.secrets WHERE workspace_id = $1 AND key_name = 'llm_provider_preference'", .{workspace_id}) catch |e|
+        log.err("workspace.llm_pref_delete_failed workspace_id={s} err={s}", .{ workspace_id, @errorName(e) });
+
+    _ = conn.exec("COMMIT", .{}) catch {
+        _ = conn.exec("ROLLBACK", .{}) catch {};
+        common.internalOperationError(res, "Transaction commit failed", req_id);
+        return;
+    };
 
     log.info("workspace.llm_credential_deleted workspace_id={s} provider={s}", .{ workspace_id, provider });
     res.status = 204;
