@@ -109,7 +109,7 @@ fn postRunAndGetId(
     defer alloc.free(auth_header);
 
     const RunRequest = struct { workspace_id: []const u8, spec: []const u8 };
-    const body = try std.json.stringifyAlloc(alloc, RunRequest{
+    const body = try std.json.Stringify.valueAlloc(alloc, RunRequest{
         .workspace_id = workspace_id,
         .spec = spec_content,
     }, .{});

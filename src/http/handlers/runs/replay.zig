@@ -96,7 +96,7 @@ pub fn handleGetRunReplay(ctx: *common.Context, req: *httpz.Request, res: *httpz
         const wall_ms = gr_row.get(i64, 5) catch 0;
         const created_at = gr_row.get(i64, 6) catch 0;
 
-        gate_results_list.append(.{
+        gate_results_list.append(alloc, .{
             .gate_name = gate_name,
             .attempt = attempt,
             .exit_code = exit_code,
