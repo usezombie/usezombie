@@ -3,7 +3,7 @@
  * constants, performance, and contract tests — T4, T5, T7, T8, T10, T11, T12
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { detectLanguages, parseMakeTargets, generateTemplate, scanRepo, commandSpecInit } from "../src/commands/spec_init.js";
+import { parseMakeTargets, generateTemplate, scanRepo, commandSpecInit } from "../src/commands/spec_init.js";
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeNoop, makeBufferStream, ui } from "./helpers.js";
@@ -25,7 +25,7 @@ describe("T4 commandSpecInit output fidelity", () => {
     });
     expect(captured.length).toBe(1);
     expect(typeof captured[0].output).toBe("string");
-    expect(Array.isArray(captured[0].detected.languages)).toBe(true);
+    expect(Array.isArray(captured[0].detected.make_targets)).toBe(true);
     expect(typeof captured[0].detected.file_count).toBe("number");
   });
 
@@ -92,14 +92,13 @@ describe("T5 concurrency", () => {
     try {
       const results = await Promise.all(Array.from({ length: 10 }, () => Promise.resolve(scanRepo(tmp))));
       for (const r of results) {
-        expect(r.languages).toEqual(results[0].languages);
         expect(r.makeTargets.sort()).toEqual(results[0].makeTargets.sort());
       }
     } finally { cleanup(tmp); }
   });
 
   test("10 concurrent generateTemplate calls produce identical output", () => {
-    const scan = { languages: ["Go"], makeTargets: ["lint", "test"], testPatterns: [], projectStructure: [] };
+    const scan = { makeTargets: ["lint", "test"], testPatterns: [], projectStructure: [] };
     const strip = (s) => s.replace(/\*\*Date:\*\*.*/m, "");
     const results = Array.from({ length: 10 }, () => generateTemplate(scan));
     for (const r of results) expect(strip(r)).toBe(strip(results[0]));
@@ -125,7 +124,7 @@ describe("T5 concurrency", () => {
 
 describe("T7 regression safety", () => {
   test("generateTemplate always has valid frontmatter keys", () => {
-    const scan = { languages: [], makeTargets: [], testPatterns: [], projectStructure: [] };
+    const scan = { makeTargets: [], testPatterns: [], projectStructure: [] };
     const tpl = generateTemplate(scan);
     for (const key of ["**Prototype:**", "**Milestone:**", "**Status:** PENDING", "**Priority:**", "**Batch:**"]) {
       expect(tpl).toContain(key);
@@ -133,13 +132,13 @@ describe("T7 regression safety", () => {
   });
 
   test("generateTemplate always has ≥4 H2 sections", () => {
-    const tpl = generateTemplate({ languages: ["Go"], makeTargets: ["lint"], testPatterns: [], projectStructure: [] });
+    const tpl = generateTemplate({ makeTargets: ["lint"], testPatterns: [], projectStructure: [] });
     expect((tpl.match(/^## /mg) || []).length).toBeGreaterThanOrEqual(4);
   });
 
   test("template structure stable across different scan inputs", () => {
-    const a = generateTemplate({ languages: ["Go"], makeTargets: ["lint"], testPatterns: ["*_test.*"], projectStructure: ["src/"] });
-    const b = generateTemplate({ languages: ["Rust"], makeTargets: [], testPatterns: [], projectStructure: [] });
+    const a = generateTemplate({ makeTargets: ["lint"], testPatterns: ["*_test.*"], projectStructure: ["src/"] });
+    const b = generateTemplate({ makeTargets: [], testPatterns: [], projectStructure: [] });
     // Both should share structural markers regardless of content
     for (const marker of ["Acceptance Criteria", "Out of Scope", "PENDING"]) {
       expect(a).toContain(marker);
@@ -203,8 +202,7 @@ describe("T8 security — OWASP for agents", () => {
   test("ANSI filename in repo is scanned without crash", () => {
     try {
       writeFileSync(join(tmp, "normal.go"), "");
-      const scan = scanRepo(tmp);
-      expect(scan.languages).toContain("Go");
+      scanRepo(tmp); // should not crash on unusual filenames
     } catch { /* FS may reject unusual names */ }
   });
 });
@@ -244,15 +242,8 @@ describe("T11 performance", () => {
     } finally { cleanup(tmp); }
   });
 
-  test("detectLanguages on 10,000 files completes under 500ms", () => {
-    const files = Array.from({ length: 10000 }, (_, i) => `src/f${i}.go`);
-    const start = performance.now();
-    detectLanguages(files);
-    expect(performance.now() - start).toBeLessThan(500);
-  });
-
   test("generateTemplate with 50 targets completes under 50ms", () => {
-    const scan = { languages: ["Go"], makeTargets: Array.from({ length: 50 }, (_, i) => `t${i}`), testPatterns: [], projectStructure: [] };
+    const scan = { makeTargets: Array.from({ length: 50 }, (_, i) => `t${i}`), testPatterns: [], projectStructure: [] };
     const start = performance.now();
     generateTemplate(scan);
     expect(performance.now() - start).toBeLessThan(50);
@@ -270,7 +261,6 @@ describe("T12 API contract", () => {
         { stdout: makeNoop(), stderr: makeNoop(), jsonMode: true },
         { parseFlags, writeLine, ui, printJson: (_s, v) => captured.push(v) });
       const d = captured[0].detected;
-      expect(Array.isArray(d.languages)).toBe(true);
       expect(Array.isArray(d.make_targets)).toBe(true);
       expect(Array.isArray(d.test_patterns)).toBe(true);
       expect(Array.isArray(d.project_structure)).toBe(true);

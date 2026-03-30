@@ -1,46 +1,8 @@
 import { describe, test, expect } from "bun:test";
-import { detectLanguages, parseMakeTargets, detectTestPatterns, detectProjectStructure, generateTemplate } from "../src/commands/spec_init.js";
+import { parseMakeTargets, detectTestPatterns, detectProjectStructure, generateTemplate } from "../src/commands/spec_init.js";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
-
-// ── detectLanguages ───────────────────────────────────────────────────────────
-
-describe("detectLanguages", () => {
-  test("returns empty array for no matching files", () => {
-    expect(detectLanguages(["README.md", "LICENSE", "Dockerfile"])).toEqual([]);
-  });
-
-  test("detects single language", () => {
-    const files = ["src/main.go", "src/util.go", "cmd/root.go"];
-    expect(detectLanguages(files)).toEqual(["Go"]);
-  });
-
-  test("detects dominant language in monorepo", () => {
-    const files = [
-      "backend/main.go", "backend/server.go", "backend/handler.go",
-      "website/index.ts",
-    ];
-    const langs = detectLanguages(files);
-    expect(langs[0]).toBe("Go");
-  });
-
-  test("includes co-dominant languages (monorepo)", () => {
-    const files = [
-      "backend/main.go", "backend/server.go",
-      "website/index.ts", "website/app.tsx",
-    ];
-    const langs = detectLanguages(files);
-    expect(langs).toContain("Go");
-    expect(langs).toContain("TypeScript");
-  });
-
-  test("TypeScript and JavaScript are tracked separately", () => {
-    const files = ["a.ts", "b.ts", "c.js"];
-    const langs = detectLanguages(files);
-    expect(langs).toContain("TypeScript");
-  });
-});
 
 // ── parseMakeTargets ──────────────────────────────────────────────────────────
 
@@ -175,35 +137,22 @@ describe("detectProjectStructure", () => {
 
 describe("generateTemplate", () => {
   test("includes detected make targets in gates section", () => {
-    const scan = { languages: ["Go"], makeTargets: ["lint", "test", "build"], testPatterns: [], projectStructure: ["src/"] };
+    const scan = { makeTargets: ["lint", "test", "build"], testPatterns: [], projectStructure: ["src/"] };
     const tpl = generateTemplate(scan);
     expect(tpl).toContain("make lint");
     expect(tpl).toContain("make test");
   });
 
   test("produces valid template with empty gates section when no Makefile", () => {
-    const scan = { languages: [], makeTargets: [], testPatterns: [], projectStructure: [] };
+    const scan = { makeTargets: [], testPatterns: [], projectStructure: [] };
     const tpl = generateTemplate(scan);
     expect(tpl).toContain("no Makefile gates detected");
-    // should not throw and should contain minimal required sections
     expect(tpl).toContain("Acceptance Criteria");
     expect(tpl).toContain("PENDING");
   });
 
-  test("notes monorepo when multiple languages detected", () => {
-    const scan = { languages: ["Go", "TypeScript"], makeTargets: [], testPatterns: [], projectStructure: [] };
-    const tpl = generateTemplate(scan);
-    expect(tpl).toContain("Monorepo detected");
-  });
-
-  test("includes single-language note for single language", () => {
-    const scan = { languages: ["Rust"], makeTargets: [], testPatterns: [], projectStructure: [] };
-    const tpl = generateTemplate(scan);
-    expect(tpl).toContain("Rust project");
-  });
-
   test("includes detected project structure", () => {
-    const scan = { languages: [], makeTargets: [], testPatterns: [], projectStructure: ["src/", "docs/"] };
+    const scan = { makeTargets: [], testPatterns: [], projectStructure: ["src/", "docs/"] };
     const tpl = generateTemplate(scan);
     expect(tpl).toContain("`src/`");
     expect(tpl).toContain("`docs/`");

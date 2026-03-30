@@ -2,110 +2,11 @@
  * spec-init edge cases and error paths — T2, T3
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { detectLanguages, parseMakeTargets, detectTestPatterns, commandSpecInit } from "../src/commands/spec_init.js";
+import { parseMakeTargets, detectTestPatterns, commandSpecInit } from "../src/commands/spec_init.js";
 import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { makeNoop, makeBufferStream, ui } from "./helpers.js";
 import { makeTmp, cleanup, parseFlags, writeLine } from "./helpers-fs.js";
-
-// ── T2 detectLanguages ────────────────────────────────────────────────────────
-
-describe("T2 detectLanguages edge cases", () => {
-  test("empty file list returns empty array", () => {
-    expect(detectLanguages([])).toEqual([]);
-  });
-
-  test("only binary/media files returns empty", () => {
-    expect(detectLanguages(["img.png", "data.bin", "font.woff2"])).toEqual([]);
-  });
-
-  test("files with no extension returns empty", () => {
-    expect(detectLanguages(["Makefile", "Dockerfile", "LICENSE"])).toEqual([]);
-  });
-
-  test("case-insensitive extension matching (.GO, .Go)", () => {
-    expect(detectLanguages(["main.GO", "lib.Go"])).toEqual(["Go"]);
-  });
-
-  test("50/50 language split includes both", () => {
-    const files = [
-      ...Array.from({ length: 10 }, (_, i) => `a${i}.rs`),
-      ...Array.from({ length: 10 }, (_, i) => `b${i}.go`),
-    ];
-    const langs = detectLanguages(files);
-    expect(langs).toContain("Rust");
-    expect(langs).toContain("Go");
-  });
-
-  test("single language at 80% dominance excludes minority below 20% threshold", () => {
-    const files = [
-      ...Array.from({ length: 100 }, (_, i) => `a${i}.py`),
-      ...Array.from({ length: 5 }, (_, i) => `b${i}.ts`),
-    ];
-    const langs = detectLanguages(files);
-    expect(langs).toContain("Python");
-    expect(langs).not.toContain("TypeScript");
-  });
-
-  test("unicode filenames do not crash language detection", () => {
-    const files = ["src/日本語.go", "lib/café.py", "tests/αβγ.js"];
-    expect(() => detectLanguages(files)).not.toThrow();
-  });
-
-  test("10,000-file list is deterministic", () => {
-    const files = Array.from({ length: 5000 }, (_, i) => `src/f${i}.go`)
-      .concat(Array.from({ length: 5000 }, (_, i) => `web/c${i}.ts`));
-    const langs = detectLanguages(files);
-    expect(langs).toContain("Go");
-    expect(langs).toContain("TypeScript");
-    // second call is identical
-    expect(detectLanguages(files)).toEqual(langs);
-  });
-
-  test(".mjs and .cjs counted as JavaScript", () => {
-    expect(detectLanguages(["a.mjs", "b.cjs"])).toContain("JavaScript");
-  });
-
-  test(".exs counted as Elixir", () => {
-    expect(detectLanguages(["mix.exs"])).toContain("Elixir");
-  });
-
-  test(".jsx counted as JavaScript", () => {
-    expect(detectLanguages(["src/App.jsx", "src/Button.jsx"])).toContain("JavaScript");
-  });
-
-  test(".dart counted as its own language", () => {
-    // dart not in LANG_EXTENSIONS — ensure no crash, just empty
-    expect(() => detectLanguages(["lib/main.dart"])).not.toThrow();
-  });
-
-  test("many small languages each below 20% threshold are excluded", () => {
-    const files = [
-      ...Array.from({ length: 100 }, (_, i) => `a${i}.go`),
-      "x.rs",
-      "y.py",
-      "z.ts",
-    ];
-    const langs = detectLanguages(files);
-    expect(langs).toContain("Go");
-    // minority langs below 20% of top (100) must not appear
-    expect(langs).not.toContain("Rust");
-    expect(langs).not.toContain("Python");
-    expect(langs).not.toContain("TypeScript");
-  });
-
-  test("equal counts for all languages all included", () => {
-    const files = [
-      "a.go", "b.go",
-      "a.rs", "b.rs",
-      "a.ts", "b.ts",
-    ];
-    const langs = detectLanguages(files);
-    expect(langs).toContain("Go");
-    expect(langs).toContain("Rust");
-    expect(langs).toContain("TypeScript");
-  });
-});
 
 // ── T2 parseMakeTargets ───────────────────────────────────────────────────────
 

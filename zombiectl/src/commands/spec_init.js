@@ -1,34 +1,7 @@
-import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, extname, dirname } from "node:path";
-
-const LANG_EXTENSIONS = new Map([
-  [".go", "Go"],
-  [".rs", "Rust"],
-  [".ts", "TypeScript"],
-  [".tsx", "TypeScript"],
-  [".js", "JavaScript"],
-  [".jsx", "JavaScript"],
-  [".mjs", "JavaScript"],
-  [".cjs", "JavaScript"],
-  [".py", "Python"],
-  [".zig", "Zig"],
-  [".rb", "Ruby"],
-  [".java", "Java"],
-  [".kt", "Kotlin"],
-  [".c", "C"],
-  [".cc", "C++"],
-  [".cpp", "C++"],
-  [".cs", "C#"],
-  [".php", "PHP"],
-  [".swift", "Swift"],
-  [".scala", "Scala"],
-  [".ex", "Elixir"],
-  [".exs", "Elixir"],
-]);
+import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
 
 const IGNORED_DIRS = new Set(["node_modules", ".git", "vendor", "target", "zig-cache", "zig-out", ".worktrees"]);
-
-const MAKEFILE_TARGET_RE = /^([a-zA-Z][a-zA-Z0-9_-]*)\s*:/m;
 
 /**
  * Walk a directory (non-recursive breadth-limited) and collect file paths.
@@ -61,23 +34,6 @@ function walkDir(rootPath, maxDepth = 4) {
   }
 
   return results;
-}
-
-/**
- * Detect primary language(s) by file extension frequency.
- * Returns array of language names sorted by count, descending.
- */
-export function detectLanguages(files) {
-  const counts = new Map();
-  for (const f of files) {
-    const lang = LANG_EXTENSIONS.get(extname(f).toLowerCase());
-    if (lang) counts.set(lang, (counts.get(lang) || 0) + 1);
-  }
-  if (counts.size === 0) return [];
-  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  const top = sorted[0][1];
-  // include all languages within 20% of the top count (monorepo)
-  return sorted.filter(([, c]) => c >= top * 0.2).map(([lang]) => lang);
 }
 
 /**
@@ -130,11 +86,13 @@ export function detectProjectStructure(repoPath) {
 
 /**
  * Scan a repo and return detected context.
+ * Language detection is intentionally omitted — an agent reads manifest files
+ * (go.mod, Cargo.toml, package.json, pyproject.toml) and knows instantly.
+ * Deferred to a future milestone.
  */
 export function scanRepo(repoPath) {
   const files = walkDir(repoPath);
   return {
-    languages: detectLanguages(files),
     makeTargets: parseMakeTargets(repoPath),
     testPatterns: detectTestPatterns(files),
     projectStructure: detectProjectStructure(repoPath),
@@ -152,12 +110,8 @@ function currentDateStr() {
  * Generate a spec template markdown string from scan results.
  */
 export function generateTemplate(scan) {
-  const { languages, makeTargets, testPatterns, projectStructure } = scan;
+  const { makeTargets, testPatterns, projectStructure } = scan;
 
-  const langStr = languages.length > 0 ? languages.join(", ") : "Unknown";
-  const isMonorepo = languages.length > 1;
-
-  // Gates section — only include targets that are relevant lint/test/build targets
   const GATE_TARGETS = new Set(["lint","test","build","check","fmt","format","verify","qa","qa-smoke"]);
   const detectedGates = makeTargets.filter((t) => GATE_TARGETS.has(t));
 
@@ -168,10 +122,6 @@ export function generateTemplate(scan) {
   const structureBlock = projectStructure.length > 0
     ? projectStructure.map((d) => `- \`${d}\``).join("\n")
     : "- _(empty or minimal repo)_";
-
-  const langNote = isMonorepo
-    ? `Monorepo detected (${langStr}). Scope implementation to the relevant component.`
-    : `${langStr} project. Implement the feature below.`;
 
   return `# M{N}_001: {Feature Title}
 
@@ -190,7 +140,7 @@ export function generateTemplate(scan) {
 
 **Status:** PENDING
 
-${langNote}
+Implement the feature below.
 
 **Detected project structure:**
 ${structureBlock}
@@ -253,7 +203,6 @@ export async function commandSpecInit(args, ctx, deps) {
   const scan = scanRepo(repoPath);
   const template = generateTemplate(scan);
 
-  // Ensure output directory exists
   const outDir = dirname(outputPath);
   try {
     mkdirSync(outDir, { recursive: true });
@@ -267,7 +216,6 @@ export async function commandSpecInit(args, ctx, deps) {
     printJson(ctx.stdout, {
       output: outputPath,
       detected: {
-        languages: scan.languages,
         make_targets: scan.makeTargets,
         test_patterns: scan.testPatterns,
         project_structure: scan.projectStructure,
@@ -278,10 +226,9 @@ export async function commandSpecInit(args, ctx, deps) {
     writeLine(ctx.stdout, ui.ok(`template written → ${outputPath}`));
     writeLine(ctx.stdout);
     const rows = [];
-    if (scan.languages.length > 0)       rows.push(["languages",       scan.languages.join(", ")]);
-    if (scan.makeTargets.length > 0)     rows.push(["make targets",    scan.makeTargets.join(", ")]);
-    if (scan.testPatterns.length > 0)    rows.push(["test patterns",   scan.testPatterns.join(", ")]);
-    if (scan.projectStructure.length > 0) rows.push(["structure",      scan.projectStructure.join("  ")]);
+    if (scan.makeTargets.length > 0)      rows.push(["make targets", scan.makeTargets.join(", ")]);
+    if (scan.testPatterns.length > 0)     rows.push(["test patterns", scan.testPatterns.join(", ")]);
+    if (scan.projectStructure.length > 0) rows.push(["structure",     scan.projectStructure.join("  ")]);
     if (rows.length > 0) {
       const w = Math.max(...rows.map(([k]) => k.length));
       const sep = ui.dim("  ·  ");
