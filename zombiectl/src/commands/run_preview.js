@@ -2,6 +2,37 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { walkDirForPreview } from "./run_preview_walk.js";
 
+// Confidence display config: icon (TTY) + bracket label (no-TTY) + ANSI code
+const CONF_DISPLAY = {
+  high:   { ansi: "32", icon: "●", label: "[HIGH]" },  // green
+  medium: { ansi: "33", icon: "◆", label: "[MED] " },  // yellow
+  low:    { ansi:  "2", icon: "○", label: "[LOW] " },  // dim
+};
+
+/**
+ * Returns the confidence indicator string appropriate for the output stream.
+ * TTY → colored Unicode icon. Non-TTY / NO_COLOR → plain text label.
+ * Exported for testing.
+ */
+export function confIndicator(confidence, stream) {
+  const d = CONF_DISPLAY[confidence] ?? CONF_DISPLAY.low;
+  const noColor =
+    process.env.NO_COLOR === "1" ||
+    process.env.NO_COLOR === "true" ||
+    !stream?.isTTY;
+  if (noColor) return d.label;
+  return `\u001b[${d.ansi}m${d.icon}\u001b[0m`;
+}
+
+/**
+ * Strip ANSI escape sequences from a string.
+ * Prevents ANSI injection when filenames contain escape codes.
+ */
+export function sanitizeDisplay(str) {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1b\[[0-9;]*m/g, "").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+}
+
 /**
  * Extract candidate file path references from spec markdown.
  * Looks for:
@@ -104,9 +135,9 @@ export function printPreview(stdout, matches, { writeLine, ui }) {
   writeLine(stdout, ui.head("Predicted file impact"));
   writeLine(stdout);
 
-  const CONF_LABEL = { high: "[HIGH]  ", medium: "[MED]   ", low: "[LOW]   " };
   for (const { file, confidence } of matches) {
-    writeLine(stdout, `  ${CONF_LABEL[confidence]}${file}`);
+    const indicator = confIndicator(confidence, stdout);
+    writeLine(stdout, `  ${indicator}  ${sanitizeDisplay(file)}`);
   }
   writeLine(stdout);
   writeLine(stdout, ui.dim(`${matches.length} file(s) matched from spec analysis`));
