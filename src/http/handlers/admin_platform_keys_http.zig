@@ -1,0 +1,186 @@
+const std = @import("std");
+const httpz = @import("httpz");
+const pg = @import("pg");
+const common = @import("common.zig");
+const error_codes = @import("../../errors/codes.zig");
+
+const log = std.log.scoped(.http);
+
+pub const Context = common.Context;
+
+// ── PUT /v1/admin/platform-keys ─────────────────────────────────────────────
+// Upsert the platform default LLM key source for a provider.
+// Body: {"provider": "kimi", "source_workspace_id": "..."}
+// Response: 200 with the upserted row (provider, source_workspace_id, active).
+
+const PutInput = struct {
+    provider: []const u8,
+    source_workspace_id: []const u8,
+};
+
+pub fn handlePutAdminPlatformKey(
+    ctx: *Context,
+    req: *httpz.Request,
+    res: *httpz.Response,
+) void {
+    var arena = std.heap.ArenaAllocator.init(ctx.alloc);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const req_id = common.requestId(alloc);
+
+    const principal = common.authenticate(alloc, req, ctx) catch |err| {
+        common.writeAuthError(res, req_id, err);
+        return;
+    };
+    if (!common.requireRole(res, req_id, principal, .admin)) return;
+
+    const body = req.body() orelse {
+        common.errorResponse(res, .bad_request, error_codes.ERR_INVALID_REQUEST, "Request body required", req_id);
+        return;
+    };
+    const parsed = std.json.parseFromSlice(PutInput, alloc, body, .{}) catch {
+        common.errorResponse(res, .bad_request, error_codes.ERR_INVALID_REQUEST, "Malformed JSON", req_id);
+        return;
+    };
+    defer parsed.deinit();
+    const input = parsed.value;
+
+    if (input.provider.len == 0 or input.provider.len > 32) {
+        common.errorResponse(res, .bad_request, error_codes.ERR_INVALID_REQUEST, "provider must be 1–32 chars", req_id);
+        return;
+    }
+    if (!common.requireUuidV7Id(res, req_id, input.source_workspace_id, "source_workspace_id")) return;
+
+    const conn = ctx.pool.acquire() catch {
+        common.internalDbUnavailable(res, req_id);
+        return;
+    };
+    defer ctx.pool.release(conn);
+
+    _ = conn.exec(
+        \\INSERT INTO platform_llm_keys (provider, source_workspace_id, active, updated_at)
+        \\VALUES ($1, $2, true, now())
+        \\ON CONFLICT (provider) DO UPDATE
+        \\SET source_workspace_id = EXCLUDED.source_workspace_id,
+        \\    active = true,
+        \\    updated_at = now()
+    , .{ input.provider, input.source_workspace_id }) catch {
+        common.internalOperationError(res, "Failed to upsert platform key", req_id);
+        return;
+    };
+
+    log.info("admin.platform_key_upserted provider={s} source_workspace_id={s}", .{ input.provider, input.source_workspace_id });
+
+    common.writeJson(res, .ok, .{
+        .provider = input.provider,
+        .source_workspace_id = input.source_workspace_id,
+        .active = true,
+        .request_id = req_id,
+    });
+}
+
+// ── DELETE /v1/admin/platform-keys/{provider} ────────────────────────────────
+// Deactivate the platform default for a provider (sets active = false).
+
+pub fn handleDeleteAdminPlatformKey(
+    ctx: *Context,
+    req: *httpz.Request,
+    res: *httpz.Response,
+    provider: []const u8,
+) void {
+    var arena = std.heap.ArenaAllocator.init(ctx.alloc);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const req_id = common.requestId(alloc);
+
+    const principal = common.authenticate(alloc, req, ctx) catch |err| {
+        common.writeAuthError(res, req_id, err);
+        return;
+    };
+    if (!common.requireRole(res, req_id, principal, .admin)) return;
+
+    if (provider.len == 0 or provider.len > 32) {
+        common.errorResponse(res, .bad_request, error_codes.ERR_INVALID_REQUEST, "provider must be 1–32 chars", req_id);
+        return;
+    }
+
+    const conn = ctx.pool.acquire() catch {
+        common.internalDbUnavailable(res, req_id);
+        return;
+    };
+    defer ctx.pool.release(conn);
+
+    _ = conn.exec(
+        "UPDATE platform_llm_keys SET active = false, updated_at = now() WHERE provider = $1",
+        .{provider},
+    ) catch {
+        common.internalOperationError(res, "Failed to deactivate platform key", req_id);
+        return;
+    };
+
+    log.info("admin.platform_key_deactivated provider={s}", .{provider});
+
+    common.writeJson(res, .ok, .{
+        .provider = provider,
+        .active = false,
+        .request_id = req_id,
+    });
+}
+
+// ── GET /v1/admin/platform-keys ──────────────────────────────────────────────
+// List all platform key rows (active and inactive). Never returns key material.
+
+pub fn handleGetAdminPlatformKeys(
+    ctx: *Context,
+    req: *httpz.Request,
+    res: *httpz.Response,
+) void {
+    var arena = std.heap.ArenaAllocator.init(ctx.alloc);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const req_id = common.requestId(alloc);
+
+    const principal = common.authenticate(alloc, req, ctx) catch |err| {
+        common.writeAuthError(res, req_id, err);
+        return;
+    };
+    if (!common.requireRole(res, req_id, principal, .admin)) return;
+
+    const conn = ctx.pool.acquire() catch {
+        common.internalDbUnavailable(res, req_id);
+        return;
+    };
+    defer ctx.pool.release(conn);
+
+    var q = conn.query(
+        "SELECT provider, source_workspace_id, active, updated_at FROM platform_llm_keys ORDER BY provider",
+        .{},
+    ) catch {
+        common.internalOperationError(res, "Failed to query platform keys", req_id);
+        return;
+    };
+    defer q.deinit();
+
+    var rows = std.ArrayList(struct {
+        provider: []const u8,
+        source_workspace_id: []const u8,
+        active: bool,
+    }).init(alloc);
+
+    while (q.next() catch null) |row| {
+        const prov = alloc.dupe(u8, row.get([]u8, 0) catch continue) catch continue;
+        const src_ws = alloc.dupe(u8, row.get([]u8, 1) catch continue) catch continue;
+        const active = row.get(bool, 2) catch continue;
+        rows.append(.{
+            .provider = prov,
+            .source_workspace_id = src_ws,
+            .active = active,
+        }) catch continue;
+    }
+    q.drain() catch {};
+
+    common.writeJson(res, .ok, .{
+        .keys = rows.items,
+        .request_id = req_id,
+    });
+}

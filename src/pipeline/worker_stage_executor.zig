@@ -32,6 +32,60 @@ const log = std.log.scoped(.worker);
 pub const ExecuteConfig = worker_stage_types.ExecuteConfig;
 pub const RunContext = worker_stage_types.RunContext;
 
+/// Resolve the LLM API key for a run (M16_004).
+/// Resolution order:
+///   1. Workspace BYOK: {provider}_api_key from vault.secrets.
+///   2. Platform default: platform_llm_keys → admin workspace vault.secrets.
+///   3. CredentialDenied — no env fallback.
+fn resolveLlmApiKey(alloc: std.mem.Allocator, conn: *pg.Conn, workspace_id: []const u8) ![]const u8 {
+    const provider: []const u8 = crypto_store.load(alloc, conn, workspace_id, "llm_provider_preference") catch |e| p: {
+        if (e != error.NotFound) return e;
+        break :p "anthropic";
+    };
+    const key_name = try std.fmt.allocPrint(alloc, "{s}_api_key", .{provider});
+
+    // Step 1: workspace BYOK
+    if (crypto_store.load(alloc, conn, workspace_id, key_name)) |ws_key| {
+        log.info("worker.llm_key_resolved api_key_source=workspace provider={s} workspace_id={s}", .{ provider, workspace_id });
+        return ws_key;
+    } else |ws_err| if (ws_err != error.NotFound) return ws_err;
+
+    // Step 2: platform default
+    const maybe_src: ?[]u8 = plat: {
+        var pq = conn.query(
+            "SELECT source_workspace_id FROM platform_llm_keys WHERE provider = $1 AND active = true LIMIT 1",
+            .{provider},
+        ) catch |qe| {
+            log.warn("worker.platform_key_query_failed provider={s} err={s}", .{ provider, @errorName(qe) });
+            break :plat null;
+        };
+        defer pq.deinit();
+        const prow = (pq.next() catch null) orelse {
+            pq.drain() catch {};
+            break :plat null;
+        };
+        const raw = prow.get([]u8, 0) catch {
+            pq.drain() catch {};
+            break :plat null;
+        };
+        const dup = alloc.dupe(u8, raw) catch {
+            pq.drain() catch {};
+            break :plat null;
+        };
+        pq.drain() catch {};
+        break :plat dup;
+    };
+    if (maybe_src) |src_ws| {
+        if (crypto_store.load(alloc, conn, src_ws, key_name)) |platform_key| {
+            log.info("worker.llm_key_resolved api_key_source=platform provider={s} source_workspace_id={s}", .{ provider, src_ws });
+            return platform_key;
+        } else |pe| if (pe != error.NotFound) return pe;
+    }
+
+    log.err("worker.llm_key_missing workspace_id={s} provider={s} error_code={s}", .{ workspace_id, provider, error_codes.ERR_CRED_PLATFORM_KEY_MISSING });
+    return worker_runtime.WorkerError.CredentialDenied;
+}
+
 const BareCloneRetryCtx = struct {
     alloc: std.mem.Allocator,
     cache_root: []const u8,
@@ -282,21 +336,8 @@ pub fn executeRun(
         },
     );
 
-    // M16_003 §1: Fetch LLM API key from vault.secrets for this workspace.
-    // M16_003 supports Anthropic only; vault key is always "anthropic_api_key".
-    // Multi-provider dynamic lookup ({provider}_api_key) is M16_004.
-    // Soft failure: if not found, pass empty string — executor falls back to its
-    // own env (dev mode). Hard failure (DB error) propagates.
-    const llm_api_key: []const u8 = crypto_store.load(run_alloc, conn, ctx.workspace_id, "anthropic_api_key") catch |err| blk: {
-        if (err == error.NotFound) {
-            log.warn(
-                "worker.llm_key_not_found workspace_id={s} api_key_source=env error_code={s}",
-                .{ ctx.workspace_id, error_codes.ERR_CRED_ANTHROPIC_KEY_MISSING },
-            );
-            break :blk "";
-        }
-        return err;
-    };
+    // M16_004: Multi-step LLM API key resolution (workspace BYOK → platform default → CredentialDenied).
+    const llm_api_key = try resolveLlmApiKey(run_alloc, conn, ctx.workspace_id);
 
     // M16_003 §2: Fetch GitHub installation token before stages that need git access.
     // Token is per-run, held in memory, never written to Postgres.
@@ -555,10 +596,14 @@ pub fn executeRun(
                     }
                     if (!gate_outcome.all_passed) {
                         try worker_stage_outcomes.handleGateExhaustedOutcome(.{
-                            .alloc = run_alloc, .conn = conn, .ctx = ctx, .cfg = cfg,
+                            .alloc = run_alloc,
+                            .conn = conn,
+                            .ctx = ctx,
+                            .cfg = cfg,
                             .gate_results = gate_outcome.results.items,
                             .total_repair_loops = gate_outcome.total_repair_loops,
-                            .attempt = attempt, .total_wall_seconds = total_wall_seconds,
+                            .attempt = attempt,
+                            .total_wall_seconds = total_wall_seconds,
                             .scoring_state = &scoring_state,
                         });
                         return;
@@ -566,13 +611,20 @@ pub fn executeRun(
                     // Call handleDoneOutcome inside the if block so gate results
                     // are accessed before defer frees the ArrayList backing.
                     try worker_stage_outcomes.handleDoneOutcome(.{
-                        .alloc = run_alloc, .conn = conn, .ctx = ctx, .cfg = cfg,
-                        .wt = &wt, .branch = branch, .running = running,
-                        .deadline_ms = deadline_ms, .token_cache = token_cache,
+                        .alloc = run_alloc,
+                        .conn = conn,
+                        .ctx = ctx,
+                        .cfg = cfg,
+                        .wt = &wt,
+                        .branch = branch,
+                        .running = running,
+                        .deadline_ms = deadline_ms,
+                        .token_cache = token_cache,
                         .tenant_limiter = tenant_limiter,
                         .final_stage_output = final_stage_output,
                         .final_stage_actor = final_stage_actor,
-                        .attempt = attempt, .total_tokens = total_tokens,
+                        .attempt = attempt,
+                        .total_tokens = total_tokens,
                         .total_wall_seconds = total_wall_seconds,
                         .scoring_state = &scoring_state,
                         .gate_results = gate_outcome.results.items,
@@ -581,13 +633,20 @@ pub fn executeRun(
                     return;
                 }
                 try worker_stage_outcomes.handleDoneOutcome(.{
-                    .alloc = run_alloc, .conn = conn, .ctx = ctx, .cfg = cfg,
-                    .wt = &wt, .branch = branch, .running = running,
-                    .deadline_ms = deadline_ms, .token_cache = token_cache,
+                    .alloc = run_alloc,
+                    .conn = conn,
+                    .ctx = ctx,
+                    .cfg = cfg,
+                    .wt = &wt,
+                    .branch = branch,
+                    .running = running,
+                    .deadline_ms = deadline_ms,
+                    .token_cache = token_cache,
                     .tenant_limiter = tenant_limiter,
                     .final_stage_output = final_stage_output,
                     .final_stage_actor = final_stage_actor,
-                    .attempt = attempt, .total_tokens = total_tokens,
+                    .attempt = attempt,
+                    .total_tokens = total_tokens,
                     .total_wall_seconds = total_wall_seconds,
                     .scoring_state = &scoring_state,
                 });
