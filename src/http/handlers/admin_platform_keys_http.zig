@@ -8,6 +8,15 @@ const log = std.log.scoped(.http);
 
 pub const Context = common.Context;
 
+// Row shape for GET /v1/admin/platform-keys response.
+// Defined at module level so std.ArrayList(PlatformKeyRow) compiles in all build modes.
+const PlatformKeyRow = struct {
+    provider: []const u8,
+    source_workspace_id: []const u8,
+    active: bool,
+    updated_at: []const u8,
+};
+
 // ── PUT /v1/admin/platform-keys ─────────────────────────────────────────────
 // Upsert the platform default LLM key source for a provider.
 // Body: {"provider": "kimi", "source_workspace_id": "..."}
@@ -56,6 +65,23 @@ pub fn handlePutAdminPlatformKey(
         return;
     };
     defer ctx.pool.release(conn);
+
+    // Validate source_workspace_id references an existing workspace.
+    // FK violation returns a generic 500; this gives callers a clear 400.
+    var ws_q = conn.query(
+        "SELECT 1 FROM core.workspaces WHERE workspace_id = $1 LIMIT 1",
+        .{input.source_workspace_id},
+    ) catch {
+        common.internalOperationError(res, "Failed to check workspace existence", req_id);
+        return;
+    };
+    const ws_exists = (ws_q.next() catch null) != null;
+    ws_q.drain() catch {};
+    ws_q.deinit();
+    if (!ws_exists) {
+        common.errorResponse(res, .bad_request, error_codes.ERR_INVALID_REQUEST, "source_workspace_id does not reference an existing workspace", req_id);
+        return;
+    }
 
     _ = conn.exec(
         \\INSERT INTO platform_llm_keys (provider, source_workspace_id, active, updated_at)
@@ -161,11 +187,7 @@ pub fn handleGetAdminPlatformKeys(
     };
     defer q.deinit();
 
-    var rows = std.ArrayList(struct {
-        provider: []const u8,
-        source_workspace_id: []const u8,
-        active: bool,
-    }).init(alloc);
+    var rows: std.ArrayList(PlatformKeyRow) = .{};
 
     while (true) {
         const maybe_row = q.next() catch |e| {
@@ -176,10 +198,12 @@ pub fn handleGetAdminPlatformKeys(
         const prov = alloc.dupe(u8, row.get([]u8, 0) catch continue) catch continue;
         const src_ws = alloc.dupe(u8, row.get([]u8, 1) catch continue) catch continue;
         const active = row.get(bool, 2) catch continue;
-        rows.append(.{
+        const updated_at = alloc.dupe(u8, row.get([]u8, 3) catch continue) catch continue;
+        rows.append(alloc, .{
             .provider = prov,
             .source_workspace_id = src_ws,
             .active = active,
+            .updated_at = updated_at,
         }) catch continue;
     }
     q.drain() catch {};

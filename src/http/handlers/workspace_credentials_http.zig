@@ -116,13 +116,27 @@ pub fn handleDeleteWorkspaceLlmCredential(
         .minimum_role = .operator,
     }) orelse return;
 
-    // Begin transaction: read provider preference and delete both vault rows atomically
-    // to prevent a TOCTOU race where a concurrent PUT swaps the preference between
-    // the read and the deletes.
+    // Begin transaction: lock the preference row with FOR UPDATE, then read + delete
+    // atomically. The lock prevents a concurrent PUT from swapping llm_provider_preference
+    // between our SELECT and our DELETE statements (READ COMMITTED alone does not protect
+    // against this because crypto_store.load issues a plain SELECT without a row lock).
     _ = conn.exec("BEGIN", .{}) catch {
         common.internalOperationError(res, "Failed to begin transaction", req_id);
         return;
     };
+
+    // Lock the preference row so concurrent PUTs block until we commit.
+    // If no preference row exists the lock is a no-op; we fall back to "anthropic".
+    var pref_lock = conn.query(
+        "SELECT 1 FROM vault.secrets WHERE workspace_id = $1 AND key_name = 'llm_provider_preference' FOR UPDATE",
+        .{workspace_id},
+    ) catch {
+        _ = conn.exec("ROLLBACK", .{}) catch {};
+        common.internalOperationError(res, "Failed to lock provider preference", req_id);
+        return;
+    };
+    pref_lock.drain() catch {};
+    pref_lock.deinit();
 
     const provider: []const u8 = crypto_store.load(alloc, conn, workspace_id, "llm_provider_preference") catch |e| p: {
         if (e != error.NotFound) {
@@ -204,9 +218,9 @@ pub fn handleGetWorkspaceLlmCredential(
         .{ workspace_id, key_name },
     ) catch null;
     if (ck) |*q| {
-        defer q.deinit();
-        has_key = (q.next() catch null) != null;
-        q.drain() catch {};
+        defer q.*.deinit();
+        has_key = (q.*.next() catch null) != null;
+        q.*.drain() catch {};
     }
 
     common.writeJson(res, .ok, .{

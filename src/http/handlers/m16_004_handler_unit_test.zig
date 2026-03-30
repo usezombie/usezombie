@@ -146,12 +146,13 @@ test "M16_004: admin PUT response shape parses correctly" {
 
 test "M16_004: admin GET response shape parses correctly" {
     const json =
-        \\{"keys":[{"provider":"kimi","source_workspace_id":"00000000-0000-4000-8000-000000000001","active":true}],"request_id":"r2"}
+        \\{"keys":[{"provider":"kimi","source_workspace_id":"00000000-0000-4000-8000-000000000001","active":true,"updated_at":"2026-03-30 00:00:00+00"}],"request_id":"r2"}
     ;
     const Row = struct {
         provider: []const u8,
         source_workspace_id: []const u8,
         active: bool,
+        updated_at: []const u8,
     };
     const Shape = struct {
         keys: []Row,
