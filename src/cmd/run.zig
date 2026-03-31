@@ -230,25 +230,46 @@ fn postRunAndGetId(
     };
 }
 
+/// Walk up from CWD (or use $GIT_DIR env) to open the git metadata directory.
+/// Returns an open Dir; caller must close it. Returns null if no .git found.
+fn openGitDir(alloc: std.mem.Allocator) ?std.fs.Dir {
+    // $GIT_DIR overrides the default .git search.
+    if (std.process.getEnvVarOwned(alloc, "GIT_DIR") catch null) |path| {
+        defer alloc.free(path);
+        return std.fs.openDirAbsolute(path, .{}) catch null;
+    }
+    // Walk up from CWD looking for a .git subdirectory.
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd_path = std.fs.cwd().realpath(".", &buf) catch return null;
+    var current: []const u8 = cwd_path;
+    while (true) {
+        var dir = std.fs.openDirAbsolute(current, .{}) catch return null;
+        defer dir.close();
+        if (dir.openDir(".git", .{}) catch null) |git_dir| return git_dir;
+        const parent = std.fs.path.dirname(current) orelse return null;
+        if (std.mem.eql(u8, parent, current)) return null; // reached filesystem root
+        current = parent;
+    }
+}
+
 /// M16_002: Read git HEAD SHA via native file I/O (no subprocess).
+/// Walks up the directory tree to find .git/; respects $GIT_DIR.
 /// Returns an owned slice or null on any error.
 fn readGitHeadSha(alloc: std.mem.Allocator) ?[]u8 {
-    const head_content = std.fs.cwd().readFileAlloc(alloc, ".git/HEAD", 256) catch return null;
+    var git_dir = openGitDir(alloc) orelse return null;
+    defer git_dir.close();
+
+    const head_content = git_dir.readFileAlloc(alloc, "HEAD", 256) catch return null;
     defer alloc.free(head_content);
 
     const trimmed = std.mem.trimRight(u8, head_content, "\r\n ");
 
-    // If it is a symbolic ref: "ref: refs/heads/<branch>"
+    // Symbolic ref: "ref: refs/heads/<branch>"
     const ref_prefix = "ref: ";
     if (std.mem.startsWith(u8, trimmed, ref_prefix)) {
         const ref_path = trimmed[ref_prefix.len..];
-        // Build path: .git/<ref_path>
-        const full_path = std.fmt.allocPrint(alloc, ".git/{s}", .{ref_path}) catch return null;
-        defer alloc.free(full_path);
-
-        const sha_content = std.fs.cwd().readFileAlloc(alloc, full_path, 128) catch {
-            // Might be a packed ref — try .git/packed-refs.
-            return readPackedRef(alloc, ref_path);
+        const sha_content = git_dir.readFileAlloc(alloc, ref_path, 128) catch {
+            return readPackedRef(alloc, git_dir, ref_path);
         };
         defer alloc.free(sha_content);
         const sha = std.mem.trimRight(u8, sha_content, "\r\n ");
@@ -261,9 +282,9 @@ fn readGitHeadSha(alloc: std.mem.Allocator) ?[]u8 {
     return null;
 }
 
-/// Scan .git/packed-refs for the given ref and return its SHA.
-fn readPackedRef(alloc: std.mem.Allocator, ref_name: []const u8) ?[]u8 {
-    const packed_content = std.fs.cwd().readFileAlloc(alloc, ".git/packed-refs", 64 * 1024) catch return null;
+/// Scan packed-refs for the given ref and return its SHA.
+fn readPackedRef(alloc: std.mem.Allocator, git_dir: std.fs.Dir, ref_name: []const u8) ?[]u8 {
+    const packed_content = git_dir.readFileAlloc(alloc, "packed-refs", 64 * 1024) catch return null;
     defer alloc.free(packed_content);
 
     var lines = std.mem.splitScalar(u8, packed_content, '\n');
