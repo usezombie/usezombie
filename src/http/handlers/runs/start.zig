@@ -22,9 +22,13 @@ const uc4 = @import("../../../db/test_fixtures_uc4.zig");
 const DEFAULT_RUN_MAX_TOKENS: i64 = 100_000;
 
 /// M17_001 §2.3-2.4: transactional workspace monthly token budget check.
-/// Returns null when budget is within limits, a non-null sentinel when exceeded.
-fn enforceWorkspaceMonthlyBudget(conn: *pg.Conn, workspace_id: []const u8, now_ms: i64) !?bool {
-    _ = now_ms; // passed for testability; Postgres computes month boundary
+/// Both queries run inside an explicit BEGIN…COMMIT so the FOR UPDATE row lock
+/// is held across the usage SUM, closing the concurrent double-spend window.
+/// Returns null when budget is within limits, non-null when exceeded.
+fn enforceWorkspaceMonthlyBudget(conn: *pg.Conn, workspace_id: []const u8) !?bool {
+    _ = try conn.exec("BEGIN", .{});
+    errdefer _ = conn.exec("ROLLBACK", .{}) catch {};
+
     var lock_q = try conn.query(
         \\SELECT monthly_token_budget FROM workspaces WHERE workspace_id = $1 FOR UPDATE
     , .{workspace_id});
@@ -214,7 +218,7 @@ pub fn handleStartRun(ctx: *common.Context, req: *httpz.Request, res: *httpz.Res
     defer alloc.free(credit.currency);
 
     // M17_001 §2.3-2.4: workspace monthly token budget gate (transactional).
-    const budget_violated = enforceWorkspaceMonthlyBudget(conn, rval.workspace_id, std.time.milliTimestamp()) catch {
+    const budget_violated = enforceWorkspaceMonthlyBudget(conn, rval.workspace_id) catch {
         common.internalOperationError(res, "Failed to check workspace budget", req_id);
         return;
     };

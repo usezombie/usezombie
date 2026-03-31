@@ -11,7 +11,7 @@
 //   T8 — security: run_id URL-encoded; no token in stdout
 
 import { describe, test, expect } from "bun:test";
-import { makeNoop, makeBufferStream, ApiError, ui, WS_ID, RUN_ID_1 } from "./helpers.js";
+import { makeNoop, makeBufferStream, ApiError, ui, RUN_ID_1 } from "./helpers.js";
 import { commandRuns } from "../src/commands/runs.js";
 import { findRoute } from "../src/program/routes.js";
 

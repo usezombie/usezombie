@@ -67,10 +67,11 @@ pub fn handleCancelRun(ctx: *common.Context, req: *httpz.Request, res: *httpz.Re
         return;
     };
 
-    // M17_001 §3.4: reject cancel if already terminal.
-    if (current.isTerminal()) {
-        common.errorResponse(res, .conflict, error_codes.ERR_RUN_ALREADY_TERMINAL,
-            "Run is already in a terminal state", req_id);
+    // M17_001 §3.4: reject cancel if already terminal or BLOCKED.
+    // BLOCKED runs have no active gate loop — the Redis signal would expire
+    // without any consumer. Return 409 so callers know the signal cannot apply.
+    if (current.isTerminal() or current == .BLOCKED) {
+        common.errorResponse(res, .conflict, error_codes.ERR_RUN_ALREADY_TERMINAL, "Run is already in a terminal state", req_id);
         return;
     }
 
@@ -82,8 +83,7 @@ pub fn handleCancelRun(ctx: *common.Context, req: *httpz.Request, res: *httpz.Re
     };
     redis.setEx(key, "1", CANCEL_TTL_SECONDS) catch |err| {
         obs_log.logWarnErr(.http, err, "cancel.redis_setex_fail run_id={s} error_code={s}", .{ run_id, error_codes.ERR_RUN_CANCEL_SIGNAL_FAILED });
-        common.errorResponse(res, .service_unavailable, error_codes.ERR_RUN_CANCEL_SIGNAL_FAILED,
-            "Failed to publish cancel signal", req_id);
+        common.errorResponse(res, .service_unavailable, error_codes.ERR_RUN_CANCEL_SIGNAL_FAILED, "Failed to publish cancel signal", req_id);
         return;
     };
 
