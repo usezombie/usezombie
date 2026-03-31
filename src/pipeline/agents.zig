@@ -1,4 +1,4 @@
-//! NullClaw agent runner for Echo → Scout → Warden pipeline.
+//! Agent skill runner and registry. Dispatches profile-loaded skill_ids to execution backends.
 
 const std = @import("std");
 const types = @import("../types.zig");

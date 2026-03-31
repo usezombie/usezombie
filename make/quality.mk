@@ -114,6 +114,11 @@ _hardcoded_role_check:
 		grep -rn 'eqlIgnoreCase.*"echo"\|eqlIgnoreCase.*"scout"\|eqlIgnoreCase.*"warden"' src/ --include='*.zig' | grep -v '_test\.zig'; \
 		FAIL=1; \
 	fi; \
+	if grep -rn 'mem\.eql.*"echo"\|mem\.eql.*"scout"\|mem\.eql.*"warden"' src/ --include='*.zig' | grep -v '_test\.zig' | grep -q .; then \
+		echo "✗ Hardcoded role string comparison (mem.eql) found. Use the active profile skill list instead."; \
+		grep -rn 'mem\.eql.*"echo"\|mem\.eql.*"scout"\|mem\.eql.*"warden"' src/ --include='*.zig' | grep -v '_test\.zig'; \
+		FAIL=1; \
+	fi; \
 	if [ "$$FAIL" = "1" ]; then exit 1; fi; \
 	echo "✓ [zombied] No hardcoded role constants found"
 

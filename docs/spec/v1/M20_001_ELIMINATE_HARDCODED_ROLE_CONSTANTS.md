@@ -4,7 +4,7 @@
 **Milestone:** M20
 **Workstream:** 001
 **Date:** Mar 29, 2026
-**Status:** DONE
+**Status:** IN_PROGRESS
 **Branch:** feat/m20-001-eliminate-hardcoded-role-constants
 **Priority:** P0 — Hardcoded scout/echo/warden roles prevent custom agent profiles from working end-to-end; blocks workspace-level agent customization
 **Batch:** B3
@@ -28,16 +28,23 @@ The constants `ROLE_SCOUT`, `ROLE_ECHO`, `ROLE_WARDEN` in `topology.zig` and all
 
 ---
 
-## 2.0 Update Agent Skill Registry
+## 2.0 Complete SkillRegistry as the Single Resolution Path
 
-**Status:** DONE
+**Status:** IN_PROGRESS
 
-The `BUILTIN_SKILLS` array in `agents.zig` hardcodes echo/scout/warden as the only known skills. This must become a dynamic registry loaded from config, with the three defaults registered at startup from the default profile — not from constants.
+The `BUILTIN_SKILLS` array in `agents.zig` must be eliminated — not just made private. Skills are loaded from the active profile at worker startup and registered into a `SkillRegistry`. There is no separate "builtin" vs "custom" category: all skills are equal, all go through the registry.
 
-**Dimensions:**
-- 2.1 ✅ `BUILTIN_SKILLS` is an internal data bridge (not a public constant); `SkillRegistry` handles all runtime skill resolution; built-ins resolve via `resolveRole()` which propagates `custom_runner` from BUILTIN_SKILLS
-- 2.2 ✅ `resolveRole()` returns null for unregistered skill_ids (custom skills registered separately via `SkillRegistry.registerCustomSkill`); `resolveRoleWithRegistry()` falls through to BUILTIN_SKILLS before registry
-- 2.3 ✅ `SkillKind` enum collapsed to single `.custom` variant; `worker_stage_executor.zig` dispatches via `binding.actor` (Actor enum is out of scope for removal); all BUILTIN_SKILLS use `.kind = .custom` with runner wrappers
+**Design:** echo/scout/warden runners become default skills preloaded into the registry at startup from `config/pipeline-default.json`. A custom workspace profile with `planner`/`coder`/`reviewer` skill_ids registers its own runners the same way. `resolveBinding()` in `worker_stage_executor.zig` uses only the registry — no BUILTIN_SKILLS fallback.
+
+**Safe implementation sequence:** Write tests first (2.5), then wire registry (2.2), then remove the BUILTIN_SKILLS fallback (2.1), then harden the null guard (2.4). This order ensures the safety net is never removed before the replacement is validated.
+
+**Dimensions (in implementation order):**
+- 2.3 ✅ `SkillKind` enum collapsed to single `.custom` variant; all skills use `.kind = .custom`
+- 2.5 PENDING Add `prompt_path: ?[]const u8` to `SkillBinding`; update `resolveSystemPrompt()` in `worker_stage_executor.zig` to read from `binding.prompt_path` if set, fall back to `binding.actor` switch for default skills; add tests covering: default skill uses actor dispatch, custom skill with prompt_path uses the path, custom skill without prompt_path gets empty prompt
+- 2.6 PENDING Write registry population tests in `agents_test.zig`: populate registry from a profile doc (echo/scout/warden as defaults, planner/coder/reviewer as custom), verify end-to-end binding resolution for both categories; tests must pass before 2.2 lands
+- 2.2 PENDING Populate `SkillRegistry` at worker startup (`serve.zig` and `cmd/worker.zig`) from the active profile: register echo/scout/warden runners for default skill_ids with their prompt paths; `cfg.skill_registry` is non-null in all production paths; pass the loaded profile through to `validateSkillPolicies` and `validateProposedChanges` to eliminate repeated `defaultProfile()` disk reads; both `serve.zig` and `cmd/worker.zig` entry points must populate the registry (not just one)
+- 2.1 PENDING After 2.6 tests are green and 2.2 is deployed: remove `BUILTIN_SKILLS` private array and `resolveRole()` bypass from `agents.zig`; registry is the only resolution path; this is an atomic deploy with 2.2 — do not land 2.1 without 2.2
+- 2.4 PENDING After 2.1: change `WorkerConfig.skill_registry` from `?*const agents.SkillRegistry` to `*const agents.SkillRegistry` (non-optional); update all call sites including test fixtures; `resolveBinding()` no longer has a null guard
 
 ---
 
@@ -70,21 +77,23 @@ All docs must stop referring to scout/echo/warden as built-in or special roles. 
 
 ## 5.0 Acceptance Criteria
 
-**Status:** DONE
+**Status:** IN_PROGRESS
 
 - [x] 5.1 `grep -rn 'ROLE_SCOUT\|ROLE_ECHO\|ROLE_WARDEN' src/ --include='*.zig' | grep -v '_test.zig'` returns zero matches ✅
 - [x] 5.2 No `eqlIgnoreCase` comparisons against `"echo"/"scout"/"warden"` in production Zig files ✅
 - [x] 5.3 `make lint-zig` passes with `_hardcoded_role_check` ✅
 - [x] 5.4 `make test` passes — all Zig tests green (exit 0) ✅
-- [x] 5.5 Custom profile with role_ids `planner`/`coder`/`reviewer` compiles, validates, and executes correctly ✅ (covered by topology_test.zig M20_001 AC-5.5 test)
+- [ ] 5.5 Custom profile with role_ids `planner`/`coder`/`reviewer` and matching skill_ids resolves bindings and executes all stages at runtime — requires 2.1–2.4 (registry wire-up) to be complete
 - [x] 5.6 `grep -rni 'scout stage\|warden stage\|echo stage' docs/` returns zero matches ✅
+- [ ] 5.7 `cfg.skill_registry` is non-null in all production `WorkerConfig` paths (`serve.zig`, `cmd/worker.zig`) — requires 2.2
 
 ---
 
 ## 6.0 Out of Scope
 
 - Renaming the default profile's stage names (plan/implement/verify are stage_ids, not roles — they stay)
-- Removing the Actor enum (.echo, .scout, .warden, .orchestrator) from types.zig — this is the internal execution backend dispatch, not user-facing role identity; separate refactor if needed
+- Removing the Actor enum (.echo, .scout, .warden, .orchestrator) from types.zig — this is the internal execution backend dispatch; separate refactor if needed
+- Prompt resolution for custom skill backends (requires Actor enum removal or prompt_path field on SkillBinding — deferred)
 - Multi-profile support per workspace (one active profile is the current model)
 - Skill marketplace or clawhub registry integration (future milestone)
 - Scrubbing role-neutral language in completed/pending spec docs (4.3, 4.4 — deferred)
