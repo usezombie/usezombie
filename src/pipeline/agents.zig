@@ -44,9 +44,6 @@ pub const PromptFiles = struct {
 };
 
 pub const SkillKind = enum {
-    echo,
-    scout,
-    warden,
     custom,
 };
 
@@ -78,10 +75,47 @@ pub const RoleBinding = struct {
     custom_runner: ?CustomSkillFn = null,
 };
 
+// Execution backend wrappers — bridge between profile-loaded skill_ids and compiled runners.
+// These strings come from config/pipeline-default.json; this table is a data bridge,
+// not dispatch logic — it maps profile skill_ids to execution backends.
+fn echoRunner(alloc: std.mem.Allocator, _: []const u8, _: []const u8, input: RoleInput) anyerror!AgentResult {
+    return runEcho(
+        alloc,
+        input.workspace_path,
+        input.prompts.echo,
+        input.spec_content orelse return RoleError.MissingRoleInput,
+        input.memory_context orelse return RoleError.MissingRoleInput,
+        input.execution_context orelse .{},
+    );
+}
+
+fn scoutRunner(alloc: std.mem.Allocator, _: []const u8, _: []const u8, input: RoleInput) anyerror!AgentResult {
+    return runScout(
+        alloc,
+        input.workspace_path,
+        input.prompts.scout,
+        input.plan_content orelse return RoleError.MissingRoleInput,
+        input.defects_content,
+        input.execution_context orelse .{},
+    );
+}
+
+fn wardenRunner(alloc: std.mem.Allocator, _: []const u8, _: []const u8, input: RoleInput) anyerror!AgentResult {
+    return runWarden(
+        alloc,
+        input.workspace_path,
+        input.prompts.warden,
+        input.spec_content orelse return RoleError.MissingRoleInput,
+        input.plan_content orelse return RoleError.MissingRoleInput,
+        input.implementation_summary orelse return RoleError.MissingRoleInput,
+        input.execution_context orelse .{},
+    );
+}
+
 const BUILTIN_SKILLS = [_]SkillBinding{
-    .{ .skill_id = "echo", .actor = .echo, .kind = .echo },
-    .{ .skill_id = "scout", .actor = .scout, .kind = .scout },
-    .{ .skill_id = "warden", .actor = .warden, .kind = .warden },
+    .{ .skill_id = "echo", .actor = .echo, .kind = .custom, .custom_runner = echoRunner },
+    .{ .skill_id = "scout", .actor = .scout, .kind = .custom, .custom_runner = scoutRunner },
+    .{ .skill_id = "warden", .actor = .warden, .kind = .custom, .custom_runner = wardenRunner },
 };
 
 pub const RoleError = error{
@@ -102,7 +136,7 @@ pub fn resolveRole(role_id: []const u8, skill_id: []const u8) ?RoleBinding {
             .skill_id = skill.skill_id,
             .actor = skill.actor,
             .kind = skill.kind,
-            .custom_runner = null,
+            .custom_runner = skill.custom_runner,
         };
     }
     return null;
@@ -174,31 +208,6 @@ fn resolveBuiltInSkill(skill_id: []const u8) ?SkillBinding {
 
 pub fn runByRole(alloc: std.mem.Allocator, binding: RoleBinding, input: RoleInput) !AgentResult {
     return switch (binding.kind) {
-        .echo => runEcho(
-            alloc,
-            input.workspace_path,
-            input.prompts.echo,
-            input.spec_content orelse return RoleError.MissingRoleInput,
-            input.memory_context orelse return RoleError.MissingRoleInput,
-            input.execution_context orelse .{},
-        ),
-        .scout => runScout(
-            alloc,
-            input.workspace_path,
-            input.prompts.scout,
-            input.plan_content orelse return RoleError.MissingRoleInput,
-            input.defects_content,
-            input.execution_context orelse .{},
-        ),
-        .warden => runWarden(
-            alloc,
-            input.workspace_path,
-            input.prompts.warden,
-            input.spec_content orelse return RoleError.MissingRoleInput,
-            input.plan_content orelse return RoleError.MissingRoleInput,
-            input.implementation_summary orelse return RoleError.MissingRoleInput,
-            input.execution_context orelse .{},
-        ),
         .custom => {
             const runner = binding.custom_runner orelse return RoleError.MissingCustomRunner;
             return runner(alloc, binding.role_id, binding.skill_id, input);

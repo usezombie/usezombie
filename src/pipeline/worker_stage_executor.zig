@@ -235,13 +235,14 @@ fn recordScoringFailure(scoring_state: *scoring.ScoringState, err: anyerror) any
 }
 
 /// Resolve the system prompt for a binding from the prompt files.
-/// For custom skills, the prompt is empty — the custom runner provides it.
+/// Uses actor identity (echo/scout/warden/orchestrator) — the execution backend,
+/// not the profile-level skill_id string.
 fn resolveSystemPrompt(binding: agents.RoleBinding, prompts: *const agents.PromptFiles) []const u8 {
-    return switch (binding.kind) {
+    return switch (binding.actor) {
         .echo => prompts.echo,
         .scout => prompts.scout,
         .warden => prompts.warden,
-        .custom => "",
+        .orchestrator => "",
     };
 }
 

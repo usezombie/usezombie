@@ -25,11 +25,11 @@ test "parseObserverBackend supports known values" {
 test "lookupRole resolves built-in role ids" {
     const echo = agents.lookupRole("echo") orelse return error.TestExpectedRole;
     try std.testing.expectEqual(types.Actor.echo, echo.actor);
-    try std.testing.expectEqual(agents.SkillKind.echo, echo.kind);
+    try std.testing.expectEqual(agents.SkillKind.custom, echo.kind);
 
     const scout = agents.lookupRole("SCOUT") orelse return error.TestExpectedRole;
     try std.testing.expectEqual(types.Actor.scout, scout.actor);
-    try std.testing.expectEqual(agents.SkillKind.scout, scout.kind);
+    try std.testing.expectEqual(agents.SkillKind.custom, scout.kind);
 
     try std.testing.expectEqual(@as(?agents.RoleBinding, null), agents.lookupRole("security"));
 }
@@ -176,7 +176,7 @@ test "T6 integration: resolveRoleWithRegistry falls through to built-in when ski
     defer registry.deinit();
     // Built-ins resolve without registration — registry miss → BUILTIN_SKILLS lookup
     const binding = agents.resolveRoleWithRegistry(&registry, "plan-role", "echo") orelse return error.TestExpectedRole;
-    try std.testing.expectEqual(agents.SkillKind.echo, binding.kind);
+    try std.testing.expectEqual(agents.SkillKind.custom, binding.kind);
     try std.testing.expectEqualStrings("plan-role", binding.role_id);
 }
 
@@ -211,6 +211,125 @@ test "T8 OWASP: registerCustomSkill rejects duplicate custom skill_id (no re-reg
     defer registry.deinit();
     try registry.registerCustomSkill("my-skill", .orchestrator, testCustomSkill);
     try std.testing.expectError(agents.SkillRegistryError.DuplicateSkillId, registry.registerCustomSkill("my-skill", .orchestrator, testCustomSkill));
+}
+
+// --- M20_001 T1: SkillKind collapsed to single .custom variant ---
+
+test "M20_001 T1: SkillKind has exactly one variant (.custom) — no echo/scout/warden variants" {
+    // AC M20_001: SkillKind.echo/.scout/.warden must not exist. This comptime check fails
+    // to compile if any variant is re-introduced.
+    comptime {
+        if (@hasField(agents.SkillKind, "echo")) @compileError("SkillKind.echo must not exist after M20_001");
+        if (@hasField(agents.SkillKind, "scout")) @compileError("SkillKind.scout must not exist after M20_001");
+        if (@hasField(agents.SkillKind, "warden")) @compileError("SkillKind.warden must not exist after M20_001");
+        const info = @typeInfo(agents.SkillKind);
+        if (info.@"enum".fields.len != 1) @compileError("SkillKind must have exactly 1 variant");
+    }
+}
+
+test "M20_001 T1: all built-in resolveRole results have kind=.custom and non-null custom_runner" {
+    // Regression: if kind reverts to .echo/.scout/.warden, runByRole silently returns
+    // MissingCustomRunner for every built-in because the switch only handles .custom.
+    inline for (.{ "echo", "scout", "warden" }) |name| {
+        const binding = agents.resolveRole(name, name) orelse return error.TestExpectedBuiltIn;
+        try std.testing.expectEqual(agents.SkillKind.custom, binding.kind);
+        try std.testing.expect(binding.custom_runner != null);
+    }
+}
+
+test "M20_001 T1: BUILTIN_SKILLS covers exactly echo, scout, warden (3 entries)" {
+    // Regression guard: adding a 4th built-in without updating this test is a contract break.
+    const expected = [_][]const u8{ "echo", "scout", "warden" };
+    for (expected) |name| {
+        const b = agents.resolveRole(name, name);
+        try std.testing.expect(b != null);
+    }
+    // Non-built-in returns null.
+    try std.testing.expectEqual(@as(?agents.RoleBinding, null), agents.resolveRole("custom", "custom"));
+    try std.testing.expectEqual(@as(?agents.RoleBinding, null), agents.resolveRole("orchestrator", "orchestrator"));
+}
+
+test "M20_001 T3: runByRole returns MissingCustomRunner when binding.custom_runner is null" {
+    const fake_prompts = agents.PromptFiles{ .echo = "", .scout = "", .warden = "" };
+    const binding = agents.RoleBinding{
+        .role_id = "test-role",
+        .skill_id = "test-skill",
+        .actor = .orchestrator,
+        .kind = .custom,
+        .custom_runner = null, // explicitly null
+    };
+    try std.testing.expectError(
+        agents.RoleError.MissingCustomRunner,
+        agents.runByRole(std.testing.allocator, binding, .{ .workspace_path = "/tmp", .prompts = &fake_prompts }),
+    );
+}
+
+test "M20_001 T2: case-insensitive lookup resolves ECHO → echo binding" {
+    const binding = agents.resolveRole("plan-stage", "ECHO") orelse return error.TestExpectedBuiltIn;
+    try std.testing.expectEqual(types.Actor.echo, binding.actor);
+    try std.testing.expectEqual(agents.SkillKind.custom, binding.kind);
+    try std.testing.expect(binding.custom_runner != null);
+    // role_id preserves the caller's identifier, not the normalised skill string.
+    try std.testing.expectEqualStrings("plan-stage", binding.role_id);
+}
+
+// --- M20_001 T6 Integration: resolveRole + runByRole pipeline ---
+
+test "M20_001 T6 integration: echo lookup + runByRole with missing spec_content → MissingRoleInput" {
+    const binding = agents.lookupRole("echo") orelse return error.TestExpectedBuiltIn;
+    const fake_prompts = agents.PromptFiles{ .echo = "sys", .scout = "sys", .warden = "sys" };
+    // spec_content and memory_context are null → echoRunner returns MissingRoleInput.
+    try std.testing.expectError(
+        agents.RoleError.MissingRoleInput,
+        agents.runByRole(std.testing.allocator, binding, .{
+            .workspace_path = "/tmp",
+            .prompts = &fake_prompts,
+            // spec_content omitted
+        }),
+    );
+}
+
+test "M20_001 T6 integration: warden lookup + runByRole with missing implementation_summary → MissingRoleInput" {
+    const binding = agents.lookupRole("warden") orelse return error.TestExpectedBuiltIn;
+    const fake_prompts = agents.PromptFiles{ .echo = "sys", .scout = "sys", .warden = "sys" };
+    // implementation_summary is null → wardenRunner returns MissingRoleInput.
+    try std.testing.expectError(
+        agents.RoleError.MissingRoleInput,
+        agents.runByRole(std.testing.allocator, binding, .{
+            .workspace_path = "/tmp",
+            .prompts = &fake_prompts,
+            .spec_content = "spec",
+            .plan_content = "plan",
+            // implementation_summary omitted
+        }),
+    );
+}
+
+test "M20_001 T6 integration: scout lookup + runByRole with missing plan_content → MissingRoleInput" {
+    const binding = agents.lookupRole("scout") orelse return error.TestExpectedBuiltIn;
+    const fake_prompts = agents.PromptFiles{ .echo = "sys", .scout = "sys", .warden = "sys" };
+    try std.testing.expectError(
+        agents.RoleError.MissingRoleInput,
+        agents.runByRole(std.testing.allocator, binding, .{
+            .workspace_path = "/tmp",
+            .prompts = &fake_prompts,
+            // plan_content omitted
+        }),
+    );
+}
+
+// --- M20_001 T7: Regression — custom_runner propagated through resolveRoleWithRegistry ---
+
+test "M20_001 T7 regression: resolveRoleWithRegistry propagates custom_runner for built-ins" {
+    // Regression: if resolveRole forgot to copy custom_runner, runByRole would return
+    // MissingCustomRunner for every built-in even when called via resolveRoleWithRegistry.
+    var registry = agents.SkillRegistry.init(std.testing.allocator);
+    defer registry.deinit();
+    inline for (.{ "echo", "scout", "warden" }) |name| {
+        const binding = agents.resolveRoleWithRegistry(&registry, "role", name) orelse return error.TestExpectedBuiltIn;
+        try std.testing.expect(binding.custom_runner != null);
+        try std.testing.expectEqual(agents.SkillKind.custom, binding.kind);
+    }
 }
 
 test "T8 OWASP: skill_id with injection payload stored as opaque data — control_plane is the security boundary" {
