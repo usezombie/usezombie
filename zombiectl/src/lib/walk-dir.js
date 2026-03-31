@@ -1,9 +1,9 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
-const IGNORED_DIRS = new Set([
-  "node_modules", ".git", "vendor", "target", "zig-cache", "zig-out", ".worktrees",
-]);
+// Only universally safe ignores — language-specific build dirs (.zig-cache,
+// target, node_modules, vendor, etc.) are deferred to the agent walk milestone.
+const IGNORED_DIRS = new Set([".git", ".worktrees"]);
 
 /**
  * Walk a directory (BFS, depth-limited) and collect file paths.
