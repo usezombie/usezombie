@@ -447,7 +447,6 @@ test "T3: match rejects runs action path with extra path segment" {
 
 // ── M17_001 router tests ──────────────────────────────────────────────────
 
-// T1: canonical cancel path extracts run_id correctly.
 test "M17: match resolves cancel_run route and extracts run_id" {
     const run_id = "0195b4ba-8d3a-7f13-8abc-cc0000000001";
     const route = match("/v1/runs/0195b4ba-8d3a-7f13-8abc-cc0000000001:cancel") orelse
@@ -458,7 +457,6 @@ test "M17: match resolves cancel_run route and extracts run_id" {
     });
 }
 
-// T1: short run_id still matched (no length restriction in router).
 test "M17: match cancel_run accepts short run_id" {
     const route = match("/v1/runs/run-42:cancel") orelse return error.TestExpectedMatch;
     try std.testing.expectEqualStrings("run-42", switch (route) {
@@ -467,20 +465,16 @@ test "M17: match cancel_run accepts short run_id" {
     });
 }
 
-// T2: :cancel suffix without a run_id segment is rejected (empty inner).
 test "M17: match rejects cancel_run with empty run_id" {
-    try std.testing.expect(match("/v1/runs/:cancel") == null);
     try std.testing.expect(match("/v1/runs/:cancel") == null);
 }
 
-// T3: paths with wrong suffix do NOT match cancel_run.
 test "M17: wrong suffix does not match cancel_run" {
     try std.testing.expect(match("/v1/runs/run-1:cancelX") == null);
     try std.testing.expect(match("/v1/runs/run-1:CANCEL") == null);
     try std.testing.expect(match("/v1/runs/run-1/cancel") == null);
 }
 
-// T3: :cancel suffix must not shadow :retry or :replay routes.
 test "M17: cancel route does not interfere with retry and replay" {
     const retry_route = match("/v1/runs/run-1:retry") orelse return error.TestExpectedMatch;
     switch (retry_route) {
@@ -494,7 +488,6 @@ test "M17: cancel route does not interfere with retry and replay" {
     }
 }
 
-// T4: bare /v1/runs/{id} still resolves as get_run, not cancel_run.
 test "M17: bare run path resolves to get_run not cancel_run" {
     const route = match("/v1/runs/run-99") orelse return error.TestExpectedMatch;
     switch (route) {
