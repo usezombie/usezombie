@@ -20,8 +20,11 @@
 set -euo pipefail
 
 # Force line-buffered stdout so log output streams through SSH in real time.
+# Uses stdbuf wrapper on the whole script; safe under sudo because env vars are
+# passed via sudo's command line (sudo VAR=val ./deploy.sh), not sourced.
 if [ -z "${_DEPLOY_UNBUFFERED:-}" ] && command -v stdbuf >/dev/null 2>&1; then
-  _DEPLOY_UNBUFFERED=1 exec stdbuf -oL "$0" "$@"
+  export _DEPLOY_UNBUFFERED=1
+  exec stdbuf -oL -eL "$0" "$@"
 fi
 
 readonly REPO="usezombie/usezombie"
