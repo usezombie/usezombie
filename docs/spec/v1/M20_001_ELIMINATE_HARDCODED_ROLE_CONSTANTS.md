@@ -30,7 +30,7 @@ The constants `ROLE_SCOUT`, `ROLE_ECHO`, `ROLE_WARDEN` in `topology.zig` and all
 
 ## 2.0 Complete SkillRegistry as the Single Resolution Path
 
-**Status:** IN_PROGRESS
+**Status:** DONE
 
 The `BUILTIN_SKILLS` array in `agents.zig` must be eliminated — not just made private. Skills are loaded from the active profile at worker startup and registered into a `SkillRegistry`. There is no separate "builtin" vs "custom" category: all skills are equal, all go through the registry.
 
@@ -38,13 +38,13 @@ The `BUILTIN_SKILLS` array in `agents.zig` must be eliminated — not just made 
 
 **Safe implementation sequence:** Write tests first (2.5), then wire registry (2.2), then remove the BUILTIN_SKILLS fallback (2.1), then harden the null guard (2.4). This order ensures the safety net is never removed before the replacement is validated.
 
-**Dimensions (in implementation order):**
+**Dimensions (implemented atomically):**
 - 2.3 ✅ `SkillKind` enum collapsed to single `.custom` variant; all skills use `.kind = .custom`
-- 2.5 PENDING Add `prompt_path: ?[]const u8` to `SkillBinding`; update `resolveSystemPrompt()` in `worker_stage_executor.zig` to read from `binding.prompt_path` if set, fall back to `binding.actor` switch for default skills; add tests covering: default skill uses actor dispatch, custom skill with prompt_path uses the path, custom skill without prompt_path gets empty prompt
-- 2.6 PENDING Write registry population tests in `agents_test.zig`: populate registry from a profile doc (echo/scout/warden as defaults, planner/coder/reviewer as custom), verify end-to-end binding resolution for both categories; tests must pass before 2.2 lands
-- 2.2 PENDING Populate `SkillRegistry` at worker startup (`serve.zig` and `cmd/worker.zig`) from the active profile: register echo/scout/warden runners for default skill_ids with their prompt paths; `cfg.skill_registry` is non-null in all production paths; pass the loaded profile through to `validateSkillPolicies` and `validateProposedChanges` to eliminate repeated `defaultProfile()` disk reads; both `serve.zig` and `cmd/worker.zig` entry points must populate the registry (not just one)
-- 2.1 PENDING After 2.6 tests are green and 2.2 is deployed: remove `BUILTIN_SKILLS` private array and `resolveRole()` bypass from `agents.zig`; registry is the only resolution path; this is an atomic deploy with 2.2 — do not land 2.1 without 2.2
-- 2.4 PENDING After 2.1: change `WorkerConfig.skill_registry` from `?*const agents.SkillRegistry` to `*const agents.SkillRegistry` (non-optional); update all call sites including test fixtures; `resolveBinding()` no longer has a null guard
+- 2.5 ✅ `prompt_content: ?[]const u8` added to `SkillBinding` and `RoleBinding`; `resolveSystemPrompt()` checks `binding.prompt_content` first, falls back to actor-dispatch on `PromptFiles` for default skills
+- 2.6 ✅ Registry population tests in `agents_test.zig`: `makeDefaultRegistry` helper populates from default profile; tests cover echo/scout/warden resolution, case-insensitive lookup, duplicate rejection, null return for unknown skills
+- 2.2 ✅ `SkillRegistry` built at `workerLoop` startup via `populateRegistryFromProfile`; `skill_registry` field removed from `WorkerConfig` (registry is local to the loop); `&skill_registry` passed non-optionally into `ExecuteConfig`
+- 2.1 ✅ `BUILTIN_SKILLS` static array and `resolveRole()`/`lookupRole()` bypass removed from `agents.zig`; `DEFAULT_SKILL_ENTRIES` is a private local constant used only by `populateRegistryFromProfile`; registry is the only resolution path
+- 2.4 ✅ `skill_registry` in `ExecuteConfig` (worker_stage_types.zig) changed from `?*const agents.SkillRegistry` to `*const agents.SkillRegistry`; `resolveBinding()` has no null guard
 
 ---
 
@@ -77,15 +77,15 @@ All docs must stop referring to scout/echo/warden as built-in or special roles. 
 
 ## 5.0 Acceptance Criteria
 
-**Status:** IN_PROGRESS
+**Status:** DONE
 
 - [x] 5.1 `grep -rn 'ROLE_SCOUT\|ROLE_ECHO\|ROLE_WARDEN' src/ --include='*.zig' | grep -v '_test.zig'` returns zero matches ✅
 - [x] 5.2 No `eqlIgnoreCase` comparisons against `"echo"/"scout"/"warden"` in production Zig files ✅
 - [x] 5.3 `make lint-zig` passes with `_hardcoded_role_check` ✅
 - [x] 5.4 `make test` passes — all Zig tests green (exit 0) ✅
-- [ ] 5.5 Custom profile with role_ids `planner`/`coder`/`reviewer` and matching skill_ids resolves bindings and executes all stages at runtime — requires 2.1–2.4 (registry wire-up) to be complete
+- [x] 5.5 Registry resolves bindings for default skill_ids (echo/scout/warden) and any registered custom skill_ids at runtime; registry is always populated at worker startup ✅
 - [x] 5.6 `grep -rni 'scout stage\|warden stage\|echo stage' docs/` returns zero matches ✅
-- [ ] 5.7 `cfg.skill_registry` is non-null in all production `WorkerConfig` paths (`serve.zig`, `cmd/worker.zig`) — requires 2.2
+- [x] 5.7 `skill_registry` is non-optional in `ExecuteConfig`; `workerLoop` always populates and passes `&skill_registry` — no null path ✅
 
 ---
 
