@@ -9,10 +9,10 @@ const state_machine = @import("../../../state/machine.zig");
 const types = @import("../../../types.zig");
 const error_codes = @import("../../../errors/codes.zig");
 const obs_log = @import("../../../observability/logging.zig");
+const queue_consts = @import("../../../queue/constants.zig");
 
 const log = std.log.scoped(.http);
 
-const CANCEL_KEY_PREFIX = "run:cancel:";
 const CANCEL_TTL_SECONDS: u32 = 3600;
 
 pub fn handleCancelRun(ctx: *common.Context, req: *httpz.Request, res: *httpz.Response, run_id: []const u8) void {
@@ -67,17 +67,17 @@ pub fn handleCancelRun(ctx: *common.Context, req: *httpz.Request, res: *httpz.Re
         return;
     };
 
-    // M17_001 §3.4: reject cancel if already terminal or BLOCKED.
-    // BLOCKED runs have no active gate loop — the Redis signal would expire
-    // without any consumer. Return 409 so callers know the signal cannot apply.
-    if (current.isTerminal() or current == .BLOCKED) {
+    // M17_001 §3.4: reject cancel if already terminal or in a state where the
+    // gate loop consumer is no longer running (BLOCKED, PR_OPENED, NOTIFIED).
+    // In those states the Redis signal would expire without any consumer.
+    if (current.isTerminal() or current == .BLOCKED or current == .PR_OPENED or current == .NOTIFIED) {
         common.errorResponse(res, .conflict, error_codes.ERR_RUN_ALREADY_TERMINAL, "Run is already in a terminal state", req_id);
         return;
     }
 
     // M17_001 §3.1: publish cancel signal to Redis with 1h TTL.
     const redis = ctx.queue;
-    const key = std.fmt.allocPrint(alloc, "{s}{s}", .{ CANCEL_KEY_PREFIX, run_id }) catch {
+    const key = std.fmt.allocPrint(alloc, "{s}{s}", .{ queue_consts.cancel_key_prefix, run_id }) catch {
         common.internalOperationError(res, "Key allocation failed", req_id);
         return;
     };

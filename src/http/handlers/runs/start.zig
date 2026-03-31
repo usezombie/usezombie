@@ -21,37 +21,35 @@ const uc4 = @import("../../../db/test_fixtures_uc4.zig");
 // M17_001 §2: default per-run token ceiling used for workspace budget projection.
 const DEFAULT_RUN_MAX_TOKENS: i64 = 100_000;
 
-/// M17_001 §2.3-2.4: transactional workspace monthly token budget check.
-/// Both queries run inside an explicit BEGIN…COMMIT so the FOR UPDATE row lock
-/// is held across the usage SUM, closing the concurrent double-spend window.
-/// Returns null when budget is within limits, non-null when exceeded.
-fn enforceWorkspaceMonthlyBudget(conn: *pg.Conn, workspace_id: []const u8) !?bool {
-    _ = try conn.exec("BEGIN", .{});
-    errdefer _ = conn.exec("ROLLBACK", .{}) catch {};
-
+/// Check workspace monthly token budget. Caller must hold an open transaction.
+/// Returns true if the budget would be exceeded (run should be rejected).
+/// Returns false if budget is unlimited (0) or within limit.
+/// M17_001 §2.3-2.4: called within the same tx as the run INSERT to close
+/// the TOCTOU window — FOR UPDATE lock held until INSERT commits.
+fn enforceWorkspaceMonthlyBudget(conn: *pg.Conn, workspace_id: []const u8) !bool {
     var lock_q = try conn.query(
         \\SELECT monthly_token_budget FROM workspaces WHERE workspace_id = $1 FOR UPDATE
     , .{workspace_id});
     defer lock_q.deinit();
-    const lock_row = (try lock_q.next()) orelse return null;
+    const lock_row = (try lock_q.next()) orelse return false;
     const budget: i64 = lock_row.get(i64, 0) catch 0;
     try lock_q.drain();
-    if (budget <= 0) return null; // 0 = unlimited
+    if (budget <= 0) return false; // 0 = unlimited
 
     var usage_q = try conn.query(
         \\SELECT COALESCE(SUM(ul.token_count), 0)
         \\FROM billing.usage_ledger ul
-        \\JOIN core.runs r ON r.run_id = ul.run_id
-        \\WHERE r.workspace_id = $1
-        \\  AND to_timestamp(r.created_at / 1000.0) >= date_trunc('month', now() AT TIME ZONE 'UTC')
+        \\WHERE ul.workspace_id = $1
+        \\  AND ul.created_at >= (
+        \\      EXTRACT(EPOCH FROM date_trunc('month', now() AT TIME ZONE 'UTC')) * 1000
+        \\  )::bigint
     , .{workspace_id});
     defer usage_q.deinit();
-    const usage_row = (try usage_q.next()) orelse return null;
+    const usage_row = (try usage_q.next()) orelse return false;
     const used: i64 = usage_row.get(i64, 0) catch 0;
     try usage_q.drain();
 
-    if (used + DEFAULT_RUN_MAX_TOKENS > budget) return true;
-    return null;
+    return used + DEFAULT_RUN_MAX_TOKENS > budget;
 }
 
 const queue_unavailable_code = error_codes.ERR_QUEUE_UNAVAILABLE;
@@ -217,12 +215,14 @@ pub fn handleStartRun(ctx: *common.Context, req: *httpz.Request, res: *httpz.Res
     };
     defer alloc.free(credit.currency);
 
-    // M17_001 §2.3-2.4: workspace monthly token budget gate (transactional).
-    const budget_violated = enforceWorkspaceMonthlyBudget(conn, rval.workspace_id) catch {
+    // M17_001 §2.3-2.4: early budget check (unlocked) before expensive guards.
+    // Rejects obviously overbudget workspaces without paying lock costs.
+    // The definitive locked check runs inside the INSERT transaction below.
+    const budget_early = enforceWorkspaceMonthlyBudget(conn, rval.workspace_id) catch {
         common.internalOperationError(res, "Failed to check workspace budget", req_id);
         return;
     };
-    if (budget_violated != null) {
+    if (budget_early) {
         common.errorResponse(res, .payment_required, error_codes.ERR_WORKSPACE_MONTHLY_BUDGET_EXCEEDED, "Workspace monthly token budget exceeded", req_id);
         return;
     }
@@ -355,6 +355,24 @@ pub fn handleStartRun(ctx: *common.Context, req: *httpz.Request, res: *httpz.Res
 
     const branch = std.fmt.allocPrint(alloc, "zombie/run-{s}", .{run_id}) catch "zombie/run-unknown";
 
+    // M17_001 §2.4: Definitive budget check + INSERT in one transaction.
+    // FOR UPDATE lock on workspaces is held until COMMIT, closing the TOCTOU window
+    // where two concurrent requests both pass the pre-check and both INSERT.
+    _ = conn.exec("BEGIN", .{}) catch {
+        common.internalDbError(res, req_id);
+        return;
+    };
+    const budget_final = enforceWorkspaceMonthlyBudget(conn, rval.workspace_id) catch {
+        _ = conn.exec("ROLLBACK", .{}) catch {};
+        common.internalOperationError(res, "Failed to check workspace budget", req_id);
+        return;
+    };
+    if (budget_final) {
+        _ = conn.exec("ROLLBACK", .{}) catch {};
+        common.errorResponse(res, .payment_required, error_codes.ERR_WORKSPACE_MONTHLY_BUDGET_EXCEEDED, "Workspace monthly token budget exceeded", req_id);
+        return;
+    }
+
     var insert = conn.query(
         \\INSERT INTO runs
         \\  (run_id, workspace_id, spec_id, tenant_id, state, attempt, mode,
@@ -368,12 +386,14 @@ pub fn handleStartRun(ctx: *common.Context, req: *httpz.Request, res: *httpz.Res
         \\SET updated_at = runs.updated_at
         \\RETURNING run_id, state, attempt, run_snapshot_version, tenant_id, (xmax = 0) AS inserted
     , .{ run_id, rval.workspace_id, resolved_spec_id, rval.mode, rval.requested_by, rval.idempotency_key, req_id, trace_id, branch, dedup_key, now_ms }) catch {
+        _ = conn.exec("ROLLBACK", .{}) catch {};
         common.internalOperationError(res, "Failed to create run", req_id);
         return;
     };
     defer insert.deinit();
 
     const inserted_row = insert.next() catch null orelse {
+        _ = conn.exec("ROLLBACK", .{}) catch {};
         common.internalOperationError(res, "Failed to upsert run", req_id);
         return;
     };
@@ -386,6 +406,11 @@ pub fn handleStartRun(ctx: *common.Context, req: *httpz.Request, res: *httpz.Res
     const tenant_id = alloc.dupe(u8, inserted_row.get([]u8, 4) catch "") catch "";
     const was_inserted = inserted_row.get(bool, 5) catch false;
     insert.drain() catch {};
+
+    _ = conn.exec("COMMIT", .{}) catch {
+        common.internalDbError(res, req_id);
+        return;
+    };
 
     if (!id_format.isSupportedRunId(final_run_id)) {
         common.errorResponse(res, .internal_server_error, error_codes.ERR_UUIDV7_CANONICAL_FORMAT, "Non-canonical run_id persisted", req_id);

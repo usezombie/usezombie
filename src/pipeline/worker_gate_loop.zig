@@ -15,6 +15,7 @@ const id_format = @import("../types/id_format.zig");
 const codes = @import("../errors/codes.zig");
 const worker_runtime = @import("worker_runtime.zig");
 const queue_redis = @import("../queue/redis.zig");
+const queue_consts = @import("../queue/constants.zig");
 const state_machine = @import("../state/machine.zig");
 const types = @import("../types.zig");
 
@@ -118,7 +119,7 @@ fn checkWallTime(cfg: GateLoopConfig) !bool {
 /// Check Redis cancellation signal. Returns true if signal found (transition written).
 fn checkCancelSignal(cfg: GateLoopConfig) !bool {
     const redis = cfg.redis orelse return false;
-    const key = try std.fmt.allocPrint(cfg.alloc, "run:cancel:{s}", .{cfg.run_id});
+    const key = try std.fmt.allocPrint(cfg.alloc, queue_consts.cancel_key_prefix ++ "{s}", .{cfg.run_id});
     defer cfg.alloc.free(key);
     const found = redis.exists(key) catch false;
     if (!found) return false;

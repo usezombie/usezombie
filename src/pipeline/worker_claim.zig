@@ -61,7 +61,8 @@ pub fn processNextRun(
     var result = try conn.query(
         \\SELECT r.run_id, r.workspace_id, r.spec_id, r.tenant_id, r.attempt, r.request_id,
         \\       r.trace_id, r.requested_by, w.repo_url, w.default_branch,
-        \\       s.file_path, r.max_tokens, r.max_wall_time_seconds, r.created_at
+        \\       s.file_path, r.max_tokens, r.max_wall_time_seconds, r.created_at,
+        \\       r.max_repair_loops
         \\FROM runs r
         \\JOIN workspaces w ON w.workspace_id = r.workspace_id
         \\JOIN specs s ON s.spec_id = r.spec_id
@@ -94,6 +95,8 @@ pub fn processNextRun(
     const max_tokens = @as(u64, @intCast(@max(0, row.get(i64, 11) catch 100_000)));
     const max_wall_time_seconds = @as(u64, @intCast(@max(0, row.get(i64, 12) catch 600)));
     const run_created_at_ms = row.get(i64, 13) catch 0;
+    // M17_001 §1.2: repair loop cap from DB (default 3 matches INSERT default).
+    const max_repair_loops = @as(u32, @intCast(@max(1, row.get(i32, 14) catch 3)));
     _ = http_common.setTenantSessionContext(conn, tenant_id);
 
     result.drain() catch |err| {
@@ -179,6 +182,7 @@ pub fn processNextRun(
             .max_tokens = max_tokens,
             .max_wall_time_seconds = max_wall_time_seconds,
             .run_created_at_ms = run_created_at_ms,
+            .max_repair_loops = max_repair_loops,
         },
         tenant_limiter,
     ) catch |err| {
