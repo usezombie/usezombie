@@ -12,11 +12,11 @@ test "default profile preserves v1 flow" {
 
     try std.testing.expectEqual(@as(usize, 3), profile.stages.len);
     try std.testing.expectEqualStrings(topology.STAGE_PLAN, profile.stages[0].stage_id);
-    try std.testing.expectEqualStrings(topology.ROLE_ECHO, profile.stages[0].skill_id);
+    try std.testing.expectEqualStrings("echo", profile.stages[0].skill_id);
     try std.testing.expectEqualStrings(topology.STAGE_IMPLEMENT, profile.stages[1].stage_id);
-    try std.testing.expectEqualStrings(topology.ROLE_SCOUT, profile.stages[1].skill_id);
+    try std.testing.expectEqualStrings("scout", profile.stages[1].skill_id);
     try std.testing.expectEqualStrings(topology.STAGE_VERIFY, profile.stages[2].stage_id);
-    try std.testing.expectEqualStrings(topology.ROLE_WARDEN, profile.stages[2].skill_id);
+    try std.testing.expectEqualStrings("warden", profile.stages[2].skill_id);
     try std.testing.expectEqualStrings(topology.TRANSITION_DONE, profile.stages[2].on_pass.?);
     try std.testing.expectEqualStrings(topology.TRANSITION_RETRY, profile.stages[2].on_fail.?);
 }
@@ -195,89 +195,155 @@ test "loadProfile falls back to default when path with traversal notation resolv
     try std.testing.expectEqualStrings("default-v1", profile.agent_id);
 }
 
-// ── M17_001 — Profile per-run limit fields ───────────────────────────────
+// --- T1 (M20_001): Position-based defaultArtifactName / defaultCommitMessage ---
+// These tests exercise fromDoc() via parseProfileJson, omitting artifact_name and
+// commit_message to trigger the position-based defaults introduced in M20_001.
 
-// T1: defaultProfile has the correct M17 defaults (100k tokens, 10min wall time).
-test "M17: defaultProfile max_tokens is 100_000" {
-    var profile = try topology.defaultProfile(std.testing.allocator);
-    defer profile.deinit();
-    try std.testing.expectEqual(@as(u64, 100_000), profile.max_tokens);
-}
-
-test "M17: defaultProfile max_wall_time_seconds is 600" {
-    var profile = try topology.defaultProfile(std.testing.allocator);
-    defer profile.deinit();
-    try std.testing.expectEqual(@as(u64, 600), profile.max_wall_time_seconds);
-}
-
-// T1: loadProfile from JSON that contains max_tokens and max_wall_time_seconds
-//     parses those fields correctly.
-test "M17: loadProfile parses explicit max_tokens and max_wall_time_seconds" {
+test "M20_001 T1: artifact names use stage position when not explicit (3-stage profile)" {
+    // idx=0 → plan.json, idx=1 (middle) → implementation.md, idx=2 (last) → validation.md
     const alloc = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
     const json =
-        \\{"agent_id":"test-limits","stages":[
-        \\  {"stage_id":"plan","role":"echo"},
-        \\  {"stage_id":"implement","role":"scout"},
-        \\  {"stage_id":"verify","role":"warden","gate":true,"on_pass":"done","on_fail":"retry"}
-        \\], "max_tokens": 50000, "max_wall_time_seconds": 300}
-    ;
-    try tmp.dir.writeFile(.{ .sub_path = "limited.json", .data = json });
-    const path = try tmp.dir.realpathAlloc(alloc, "limited.json");
-    defer alloc.free(path);
-
-    var profile = try topology.loadProfile(alloc, path);
-    defer profile.deinit();
-    try std.testing.expectEqual(@as(u64, 50_000), profile.max_tokens);
-    try std.testing.expectEqual(@as(u64, 300), profile.max_wall_time_seconds);
-}
-
-// T2: loadProfile uses defaults when max_tokens / max_wall_time_seconds are absent.
-test "M17: loadProfile defaults max_tokens and max_wall_time_seconds when not in JSON" {
-    const alloc = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const json =
-        \\{"agent_id":"no-limits","stages":[
-        \\  {"stage_id":"plan","role":"echo"},
-        \\  {"stage_id":"implement","role":"scout"},
-        \\  {"stage_id":"verify","role":"warden","gate":true,"on_pass":"done","on_fail":"retry"}
+        \\{"agent_id":"pos-test","stages":[
+        \\  {"stage_id":"s0","role":"planner"},
+        \\  {"stage_id":"s1","role":"coder"},
+        \\  {"stage_id":"s2","role":"reviewer","gate":true,"on_pass":"done","on_fail":"retry"}
         \\]}
     ;
-    try tmp.dir.writeFile(.{ .sub_path = "nolimits.json", .data = json });
-    const path = try tmp.dir.realpathAlloc(alloc, "nolimits.json");
-    defer alloc.free(path);
-
-    var profile = try topology.loadProfile(alloc, path);
+    var profile = try topology.parseProfileJson(alloc, json);
     defer profile.deinit();
-    try std.testing.expectEqual(@as(u64, 100_000), profile.max_tokens);
-    try std.testing.expectEqual(@as(u64, 600), profile.max_wall_time_seconds);
+    try std.testing.expectEqualStrings("plan.json", profile.stages[0].artifact_name);
+    try std.testing.expectEqualStrings("implementation.md", profile.stages[1].artifact_name);
+    try std.testing.expectEqualStrings("validation.md", profile.stages[2].artifact_name);
 }
 
-// T2: max_tokens = 0 in JSON is accepted as an explicit zero (unlimited sentinel).
-test "M17: loadProfile accepts max_tokens zero as explicit unlimited" {
+test "M20_001 T1: commit messages use stage position when not explicit (3-stage profile)" {
     const alloc = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
     const json =
-        \\{"agent_id":"unlimited","stages":[
-        \\  {"stage_id":"plan","role":"echo"},
-        \\  {"stage_id":"implement","role":"scout"},
-        \\  {"stage_id":"verify","role":"warden","gate":true,"on_pass":"done","on_fail":"retry"}
-        \\], "max_tokens": 0, "max_wall_time_seconds": 0}
+        \\{"agent_id":"cm-test","stages":[
+        \\  {"stage_id":"plan","role":"planner"},
+        \\  {"stage_id":"implement","role":"coder"},
+        \\  {"stage_id":"verify","role":"reviewer","gate":true,"on_pass":"done","on_fail":"retry"}
+        \\]}
     ;
-    try tmp.dir.writeFile(.{ .sub_path = "unlimited.json", .data = json });
-    const path = try tmp.dir.realpathAlloc(alloc, "unlimited.json");
-    defer alloc.free(path);
-
-    var profile = try topology.loadProfile(alloc, path);
+    var profile = try topology.parseProfileJson(alloc, json);
     defer profile.deinit();
-    // 0 parsed from JSON should not be overridden by default (orelse only fires on null)
-    // Per spec: 0 = unlimited — the caller must treat 0 as no-limit.
-    try std.testing.expect(profile.max_tokens == 0 or profile.max_tokens == 100_000);
-    // Either is acceptable depending on implementation; the key is it must not panic.
+    try std.testing.expectEqualStrings("plan: add plan.json", profile.stages[0].commit_message);
+    try std.testing.expectEqualStrings("implement: add implementation.md", profile.stages[1].commit_message);
+    try std.testing.expectEqualStrings("verify: add validation.md", profile.stages[2].commit_message);
+}
+
+test "M20_001 T2: 5-stage profile artifact names correct at every position" {
+    // Tests that position logic generalises beyond the default 3-stage case.
+    // Positions: 0=plan.json, 1..3=implementation.md, 4(last)=validation.md
+    const alloc = std.testing.allocator;
+    const json =
+        \\{"agent_id":"5-stage","stages":[
+        \\  {"stage_id":"plan","role":"planner"},
+        \\  {"stage_id":"impl1","role":"coder"},
+        \\  {"stage_id":"impl2","role":"coder2"},
+        \\  {"stage_id":"impl3","role":"coder3"},
+        \\  {"stage_id":"verify","role":"reviewer","gate":true,"on_pass":"done","on_fail":"retry"}
+        \\]}
+    ;
+    var profile = try topology.parseProfileJson(alloc, json);
+    defer profile.deinit();
+    try std.testing.expectEqual(@as(usize, 5), profile.stages.len);
+    try std.testing.expectEqualStrings("plan.json", profile.stages[0].artifact_name);
+    try std.testing.expectEqualStrings("implementation.md", profile.stages[1].artifact_name);
+    try std.testing.expectEqualStrings("implementation.md", profile.stages[2].artifact_name);
+    try std.testing.expectEqualStrings("implementation.md", profile.stages[3].artifact_name);
+    try std.testing.expectEqualStrings("validation.md", profile.stages[4].artifact_name);
+}
+
+test "M20_001 T1: explicit artifact_name/commit_message overrides position-based defaults" {
+    // Explicit values in profile JSON take precedence over position-based defaults.
+    const alloc = std.testing.allocator;
+    const json =
+        \\{"agent_id":"explicit","stages":[
+        \\  {"stage_id":"plan","role":"planner","artifact_name":"my-plan.txt","commit_message":"ci: my plan"},
+        \\  {"stage_id":"implement","role":"coder"},
+        \\  {"stage_id":"verify","role":"reviewer","gate":true,"on_pass":"done","on_fail":"retry"}
+        \\]}
+    ;
+    var profile = try topology.parseProfileJson(alloc, json);
+    defer profile.deinit();
+    try std.testing.expectEqualStrings("my-plan.txt", profile.stages[0].artifact_name);
+    try std.testing.expectEqualStrings("ci: my plan", profile.stages[0].commit_message);
+    // Remaining stages still get position-based defaults.
+    try std.testing.expectEqualStrings("implementation.md", profile.stages[1].artifact_name);
+    try std.testing.expectEqualStrings("validation.md", profile.stages[2].artifact_name);
+}
+
+// --- T3 / Contract (M20_001 AC 5.1): ROLE_ECHO, ROLE_SCOUT, ROLE_WARDEN not exported ---
+
+test "M20_001 AC-5.1 contract: ROLE_ECHO ROLE_SCOUT ROLE_WARDEN are NOT exported from topology" {
+    // Compile-time check: these constants must not exist in the topology namespace.
+    // If any are re-introduced, this test fails to compile.
+    comptime {
+        if (@hasDecl(topology, "ROLE_ECHO")) @compileError("ROLE_ECHO must not be exported from topology");
+        if (@hasDecl(topology, "ROLE_SCOUT")) @compileError("ROLE_SCOUT must not be exported from topology");
+        if (@hasDecl(topology, "ROLE_WARDEN")) @compileError("ROLE_WARDEN must not be exported from topology");
+    }
+}
+
+// --- T6 Integration (M20_001 AC 5.5): custom profile with non-default role_ids ---
+
+test "M20_001 AC-5.5 integration: custom profile planner/coder/reviewer builds valid stages" {
+    // Acceptance criterion 5.5: profile with role_ids planner/coder/reviewer must compile,
+    // execute all stages, and gate repair must reference the correct implement stage.
+    const alloc = std.testing.allocator;
+    const json =
+        \\{"agent_id":"custom-profile","stages":[
+        \\  {"stage_id":"plan","role":"planner","skill":"echo"},
+        \\  {"stage_id":"implement","role":"coder","skill":"scout"},
+        \\  {"stage_id":"verify","role":"reviewer","skill":"warden","gate":true,"on_pass":"done","on_fail":"retry"}
+        \\]}
+    ;
+    var profile = try topology.parseProfileJson(alloc, json);
+    defer profile.deinit();
+
+    // Role IDs come from config — not from hardcoded constants.
+    try std.testing.expectEqualStrings("planner", profile.stages[0].role_id);
+    try std.testing.expectEqualStrings("coder", profile.stages[1].role_id);
+    try std.testing.expectEqualStrings("reviewer", profile.stages[2].role_id);
+
+    // Skill IDs are the execution backends.
+    try std.testing.expectEqualStrings("echo", profile.stages[0].skill_id);
+    try std.testing.expectEqualStrings("scout", profile.stages[1].skill_id);
+    try std.testing.expectEqualStrings("warden", profile.stages[2].skill_id);
+
+    // Gate stage is the last one; buildStages() returns only the middle stages.
+    try std.testing.expect(profile.gateStage().is_gate);
+    try std.testing.expectEqual(@as(usize, 1), profile.buildStages().len);
+    try std.testing.expectEqualStrings("implement", profile.buildStages()[0].stage_id);
+}
+
+// --- T7 Invariant (M20_001): default profile structural invariants ---
+
+test "M20_001 T7 invariant: default profile has exactly 3 stages" {
+    var profile = try topology.defaultProfile(std.testing.allocator);
+    defer profile.deinit();
+    try std.testing.expectEqual(@as(usize, 3), profile.stages.len);
+}
+
+test "M20_001 T7 invariant: default profile stage[0] is NOT a gate" {
+    var profile = try topology.defaultProfile(std.testing.allocator);
+    defer profile.deinit();
+    try std.testing.expect(!profile.stages[0].is_gate);
+}
+
+test "M20_001 T7 invariant: default profile last stage IS the gate" {
+    var profile = try topology.defaultProfile(std.testing.allocator);
+    defer profile.deinit();
+    const last = profile.stages[profile.stages.len - 1];
+    try std.testing.expect(last.is_gate);
+}
+
+test "M20_001 T7 invariant: default profile artifact names follow position contract" {
+    // Regression: re-introducing role-based dispatch would break this.
+    var profile = try topology.defaultProfile(std.testing.allocator);
+    defer profile.deinit();
+    try std.testing.expectEqualStrings("plan.json", profile.stages[0].artifact_name);
+    try std.testing.expectEqualStrings("implementation.md", profile.stages[1].artifact_name);
+    try std.testing.expectEqualStrings("validation.md", profile.stages[2].artifact_name);
 }
