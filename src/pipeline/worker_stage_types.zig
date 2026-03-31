@@ -29,9 +29,11 @@ pub const RunContext = struct {
     attempt: u32,
     agent_id: []const u8 = "",
     /// GitHub App installation ID for this workspace (M16_003 §2).
-    /// When set, the worker fetches a short-lived installation token before
-    /// any stage that requires git access. Never written to Postgres.
     github_installation_id: []const u8 = "",
+    // M17_001 §1.2: per-run limits loaded at claim time (0 = unlimited)
+    max_tokens: u64 = 0,
+    max_wall_time_seconds: u64 = 0,
+    run_created_at_ms: i64 = 0,
 };
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

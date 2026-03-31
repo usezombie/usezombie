@@ -34,7 +34,7 @@ fn outboxStatusLabel(status: OutboxStatus) []const u8 {
 
 fn shouldReconcileSideEffectsForState(to: types.RunState) bool {
     return switch (to) {
-        .SPEC_QUEUED, .BLOCKED, .NOTIFIED_BLOCKED, .DONE => true,
+        .SPEC_QUEUED, .BLOCKED, .NOTIFIED_BLOCKED, .DONE, .CANCELLED => true,
         else => false,
     };
 }
@@ -45,6 +45,7 @@ fn deadLetterReasonForState(to: types.RunState) []const u8 {
         .BLOCKED => "reconciled_on_blocked",
         .NOTIFIED_BLOCKED => "reconciled_on_notified_blocked",
         .DONE => "reconciled_on_done",
+        .CANCELLED => "reconciled_on_cancelled",
         else => "reconciled",
     };
 }
@@ -145,6 +146,14 @@ const ALLOWED = [_][2]types.RunState{
     .{ .PR_OPENED, .NOTIFIED },
     .{ .NOTIFIED, .DONE },
     .{ .BLOCKED, .NOTIFIED_BLOCKED },
+    // M17_001 §3.3: operator cancel from any active state → CANCELLED (terminal, non-billable)
+    .{ .SPEC_QUEUED, .CANCELLED },
+    .{ .RUN_PLANNED, .CANCELLED },
+    .{ .PATCH_IN_PROGRESS, .CANCELLED },
+    .{ .PATCH_READY, .CANCELLED },
+    .{ .VERIFICATION_IN_PROGRESS, .CANCELLED },
+    .{ .VERIFICATION_FAILED, .CANCELLED },
+    .{ .PR_PREPARED, .CANCELLED },
 };
 
 pub fn isAllowed(from: types.RunState, to: types.RunState) bool {
@@ -478,4 +487,70 @@ test "outbox status labels are stable" {
     try std.testing.expectEqualStrings("pending", outboxStatusLabel(.pending));
     try std.testing.expectEqualStrings("delivered", outboxStatusLabel(.delivered));
     try std.testing.expectEqualStrings("dead_letter", outboxStatusLabel(.dead_letter));
+}
+
+// ── M17_001 — CANCELLED transition coverage ──────────────────────────────
+
+// T1: all seven active states can transition to CANCELLED.
+test "M17: CANCELLED reachable from all active non-terminal states" {
+    const sources = [_]types.RunState{
+        .SPEC_QUEUED, .RUN_PLANNED,              .PATCH_IN_PROGRESS,
+        .PATCH_READY, .VERIFICATION_IN_PROGRESS, .VERIFICATION_FAILED,
+        .PR_PREPARED,
+    };
+    for (sources) |from| {
+        try std.testing.expect(isAllowed(from, .CANCELLED));
+    }
+}
+
+// T2: terminal states must NOT transition to CANCELLED (no re-cancelling).
+test "M17: terminal states cannot transition to CANCELLED" {
+    try std.testing.expect(!isAllowed(.DONE, .CANCELLED));
+    try std.testing.expect(!isAllowed(.NOTIFIED_BLOCKED, .CANCELLED));
+    try std.testing.expect(!isAllowed(.CANCELLED, .CANCELLED));
+}
+
+// T2: CANCELLED must not transition to any other state (terminal = no exit).
+test "M17: CANCELLED has no outbound transitions" {
+    const all_states = [_]types.RunState{
+        .SPEC_QUEUED,              .RUN_PLANNED,         .PATCH_IN_PROGRESS, .PATCH_READY,
+        .VERIFICATION_IN_PROGRESS, .VERIFICATION_FAILED, .PR_PREPARED,       .PR_OPENED,
+        .NOTIFIED,                 .DONE,                .BLOCKED,           .NOTIFIED_BLOCKED,
+        .CANCELLED,
+    };
+    for (all_states) |to| {
+        try std.testing.expect(!isAllowed(.CANCELLED, to));
+    }
+}
+
+// T2: late-pipeline states (PR_OPENED, NOTIFIED) cannot cancel — they are
+// already past the last active worker step.
+test "M17: PR_OPENED and NOTIFIED cannot transition to CANCELLED" {
+    try std.testing.expect(!isAllowed(.PR_OPENED, .CANCELLED));
+    try std.testing.expect(!isAllowed(.NOTIFIED, .CANCELLED));
+}
+
+// T1: CANCELLED triggers side-effect reconciliation (non-billable cleanup).
+test "M17: CANCELLED triggers reconcile side effects" {
+    try std.testing.expect(shouldReconcileSideEffectsForState(.CANCELLED));
+}
+
+// T1: CANCELLED dead-letter reason string is stable (used in DB dead_letter rows).
+test "M17: CANCELLED dead-letter reason is reconciled_on_cancelled" {
+    try std.testing.expectEqualStrings("reconciled_on_cancelled", deadLetterReasonForState(.CANCELLED));
+}
+
+// T3: existing reconcile trigger set is not narrowed by M17 additions.
+test "M17: existing reconcile-trigger states unaffected" {
+    try std.testing.expect(shouldReconcileSideEffectsForState(.SPEC_QUEUED));
+    try std.testing.expect(shouldReconcileSideEffectsForState(.BLOCKED));
+    try std.testing.expect(shouldReconcileSideEffectsForState(.DONE));
+    try std.testing.expect(shouldReconcileSideEffectsForState(.NOTIFIED_BLOCKED));
+}
+
+// T4: non-reconcile states remain unchanged after M17 (regression guard).
+test "M17: non-reconcile states not modified by M17" {
+    try std.testing.expect(!shouldReconcileSideEffectsForState(.PATCH_IN_PROGRESS));
+    try std.testing.expect(!shouldReconcileSideEffectsForState(.PR_OPENED));
+    try std.testing.expect(!shouldReconcileSideEffectsForState(.NOTIFIED));
 }

@@ -18,6 +18,38 @@ const log = std.log.scoped(.http);
 const API_ACTOR = "api";
 const uc4 = @import("../../../db/test_fixtures_uc4.zig");
 
+// M17_001 §2: default per-run token ceiling used for workspace budget projection.
+const DEFAULT_RUN_MAX_TOKENS: i64 = 100_000;
+
+/// M17_001 §2.3-2.4: transactional workspace monthly token budget check.
+/// Returns null when budget is within limits, a non-null sentinel when exceeded.
+fn enforceWorkspaceMonthlyBudget(conn: *pg.Conn, workspace_id: []const u8, now_ms: i64) !?bool {
+    _ = now_ms; // passed for testability; Postgres computes month boundary
+    var lock_q = try conn.query(
+        \\SELECT monthly_token_budget FROM workspaces WHERE workspace_id = $1 FOR UPDATE
+    , .{workspace_id});
+    defer lock_q.deinit();
+    const lock_row = (try lock_q.next()) orelse return null;
+    const budget: i64 = lock_row.get(i64, 0) catch 0;
+    try lock_q.drain();
+    if (budget <= 0) return null; // 0 = unlimited
+
+    var usage_q = try conn.query(
+        \\SELECT COALESCE(SUM(ul.token_count), 0)
+        \\FROM billing.usage_ledger ul
+        \\JOIN core.runs r ON r.run_id = ul.run_id
+        \\WHERE r.workspace_id = $1
+        \\  AND to_timestamp(r.created_at / 1000.0) >= date_trunc('month', now() AT TIME ZONE 'UTC')
+    , .{workspace_id});
+    defer usage_q.deinit();
+    const usage_row = (try usage_q.next()) orelse return null;
+    const used: i64 = usage_row.get(i64, 0) catch 0;
+    try usage_q.drain();
+
+    if (used + DEFAULT_RUN_MAX_TOKENS > budget) return true;
+    return null;
+}
+
 const queue_unavailable_code = error_codes.ERR_QUEUE_UNAVAILABLE;
 const queue_unavailable_message = "Queue unavailable";
 
@@ -181,6 +213,16 @@ pub fn handleStartRun(ctx: *common.Context, req: *httpz.Request, res: *httpz.Res
     };
     defer alloc.free(credit.currency);
 
+    // M17_001 §2.3-2.4: workspace monthly token budget gate (transactional).
+    const budget_violated = enforceWorkspaceMonthlyBudget(conn, rval.workspace_id, std.time.milliTimestamp()) catch {
+        common.internalOperationError(res, "Failed to check workspace budget", req_id);
+        return;
+    };
+    if (budget_violated != null) {
+        common.errorResponse(res, .payment_required, error_codes.ERR_WORKSPACE_MONTHLY_BUDGET_EXCEEDED, "Workspace monthly token budget exceeded", req_id);
+        return;
+    }
+
     {
         var ws_check = conn.query(
             "SELECT paused FROM workspaces WHERE workspace_id = $1",
@@ -313,10 +355,10 @@ pub fn handleStartRun(ctx: *common.Context, req: *httpz.Request, res: *httpz.Res
         \\INSERT INTO runs
         \\  (run_id, workspace_id, spec_id, tenant_id, state, attempt, mode,
         \\   requested_by, idempotency_key, request_id, trace_id, branch, run_snapshot_version,
-        \\   dedup_key, created_at, updated_at)
+        \\   dedup_key, max_repair_loops, max_tokens, max_wall_time_seconds, created_at, updated_at)
         \\SELECT $1, $2, $3, tenant_id, 'SPEC_QUEUED', 1, $4, $5, $6, $7,
         \\       $8, $9, (SELECT wap.config_version_id FROM workspace_active_config wap WHERE wap.workspace_id = $2),
-        \\       $10, $11, $11
+        \\       $10, 3, 100000, 600, $11, $11
         \\FROM workspaces WHERE workspace_id = $2
         \\ON CONFLICT (workspace_id, idempotency_key) DO UPDATE
         \\SET updated_at = runs.updated_at

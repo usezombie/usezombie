@@ -588,10 +588,19 @@ pub fn executeRun(
                         .repair_stage_id = repair_stage.stage_id,
                         .repair_role_id = repair_stage.role_id,
                         .repair_skill_id = repair_stage.skill_id,
+                        // M17_001 §1.2: per-run limits
+                        .max_tokens = ctx.max_tokens,
+                        .max_wall_time_seconds = ctx.max_wall_time_seconds,
+                        .run_created_at_ms = ctx.run_created_at_ms,
+                        .attempt = ctx.attempt,
                     });
                     defer {
                         for (gate_outcome.results.items) |r| r.deinit(run_alloc);
                         gate_outcome.results.deinit(run_alloc);
+                    }
+                    if (!gate_outcome.all_passed and gate_outcome.state_written) {
+                        // Limit exceeded or cancelled — state already transitioned by gate loop.
+                        return;
                     }
                     if (!gate_outcome.all_passed) {
                         try worker_stage_outcomes.handleGateExhaustedOutcome(.{
