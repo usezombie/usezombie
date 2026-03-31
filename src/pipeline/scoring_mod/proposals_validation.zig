@@ -180,8 +180,6 @@ pub fn applyProposalChangesToConfig(
         .stages = try stages.toOwnedSlice(alloc),
         .gate_tools = try gt_cloned.toOwnedSlice(alloc),
         .max_repair_loops = profile.max_repair_loops,
-        .max_tokens = profile.max_tokens,
-        .max_wall_time_seconds = profile.max_wall_time_seconds,
         .alloc = alloc,
     };
     defer candidate.deinit();
