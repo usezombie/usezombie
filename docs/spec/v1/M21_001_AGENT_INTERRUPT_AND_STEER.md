@@ -7,7 +7,7 @@
 **Status:** PENDING
 **Priority:** P1 — No way to redirect a running agent without aborting it; user must kill the run and restart from scratch
 **Batch:** B1
-**Depends on:** M18_001 (SSE stream must be live before interrupt UX can be built on top)
+**Depends on:** M18_001 (SSE stream must be live before interrupt UX can be built on top); `stream.zig` must patch `TERMINAL_STATES` to include `"ABORTED"` — without this, acceptance criteria 5.4 cannot pass (stream hangs indefinitely after abort instead of closing with `run_complete`)
 
 ---
 
@@ -33,8 +33,8 @@ Two interrupt modes:
 
 **Dimensions:**
 - 1.1 PENDING `POST /v1/runs/{id}:interrupt` endpoint: validates run exists, checks workspace auth, accepts `message` + `mode` fields
-- 1.2 PENDING Queued path: write `run:{id}:interrupt` Redis key (SETEX 300); return ack immediately
-- 1.3 PENDING Instant path: additionally call executor IPC `injectUserMessage` if an active `execution_id` exists on the run row; fall back to queued if no active execution
+- 1.2 PENDING Queued path: write `run:{id}:interrupt` Redis key (SETEX 300); return ack immediately; **last-write-wins**: if two interrupts arrive before the next gate checkpoint, the second silently overwrites the first — this is intentional v1 behavior; callers must not assume delivery of every POST
+- 1.3 PENDING Instant path: additionally call executor IPC `injectUserMessage` if an active `execution_id` exists on the run row; if IPC returns an error (including TOCTOU: executor terminated after DB read), fall back to the queued path — write Redis key, return `mode: queued` in ack; never silently drop
 - 1.4 PENDING SSE stream emits `event: interrupt_ack` with `{"mode":"queued"|"instant","received_at":...}` after the interrupt is stored or delivered
 
 ---

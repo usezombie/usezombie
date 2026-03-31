@@ -32,6 +32,10 @@ Files the new session will modify or remove:
 
 ## Starting Instructions for M18_003 Session
 
+**IMPORTANT: Section 0.0 Discovery must be completed before writing any code.**
+The core architecture question — where does the agent run and how does it access
+the user's local filesystem — is unresolved. See the spec for 3 candidate options.
+
 1. Mark `docs/spec/v1/M18_003_API_BACKED_SPEC_PREVIEW.md` as IN_PROGRESS,
    add `**Branch:** m18-003-api-spec-preview`
 
@@ -40,14 +44,22 @@ Files the new session will modify or remove:
    git worktree add .worktrees/m18-003 -b m18-003-api-spec-preview
    ```
 
-3. Implement server endpoints first (sections 2.1 + 2.2 of the spec),
-   then migrate CLI (section 3.0).
+3. **Complete Section 0.0 discovery first:**
+   - Research how Amp, Claude Code, Cursor, Devin handle local file access
+   - Measure pipeline overhead: `start_run → first SSE event` timing
+   - Decide between Option A (local agent + remote LLM), Option B (file upload),
+     Option C (chat window + MCP filesystem mount)
+   - Record the decision in the spec before touching any code
 
-4. The SSE consumer in the CLI should use the existing `EventSource` / fetch
-   streaming pattern already established in M13/M17 run watch — check
-   `zombiectl/src/commands/core.js` commandRunWatch for the pattern.
+4. Do NOT reference `commandRunWatch` — it does not exist in the CLI.
+   There is no existing SSE consumer. `lib/http.js` uses `res.text()` (buffered).
+   A new `streamFetch()` helper must be built using `fetch()` + `response.body.getReader()`.
 
-5. Run full test suite before PR: `bun test zombiectl/test/` — 377 tests
+5. Agents go through the full worker pipeline (start_run → sandbox → SSE back).
+   nullclaw cannot be called directly from an HTTP handler. Study pipeline
+   overhead before assuming it meets the 5-second first-result target.
+
+6. Run full test suite before PR: `bun test zombiectl/test/` — 377 tests
    must pass, new API contract tests must be added.
 
 ## API Endpoints to Create on the Server

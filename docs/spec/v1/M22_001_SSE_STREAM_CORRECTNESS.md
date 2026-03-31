@@ -69,8 +69,8 @@ The fix is a single ID namespace: use `created_at` (Unix ms) for both stored rep
 **Dimensions:**
 - 3.1 PENDING Worker gate event payload (`worker_gate_loop.zig`) includes `"created_at":{unix_ms}` field alongside existing fields; use `std.time.milliTimestamp()` at publish time
 - 3.2 PENDING Live SSE loop in `stream.zig`: extract `created_at` from parsed pub/sub event JSON; use it as the SSE `id:` value instead of `event_seq`
-- 3.3 PENDING `streamStoredEvents` parameter renamed from `after_created_at` to `after_event_id`; semantics unchanged (Unix ms threshold); documents the unified namespace
-- 3.4 PENDING `Last-Event-ID` reconnect path: parse header as `i64` Unix ms; pass to `streamStoredEvents` — replays only events with `created_at > last_event_id`, which correctly excludes already-seen events
+- 3.3 PENDING Reconnect path: parse `Last-Event-ID` header as `i64` Unix ms; pass to `streamStoredEvents` (parameter renamed from `after_created_at` to `after_event_id`) — replays only events with `created_at > after_event_id`; unified namespace documented
+- 3.4 PENDING `streamViaPoll` fallback: emit `created_at` (Unix ms from stored event row) as the SSE `id:` value instead of the per-connection `seq` counter; ensures clients reconnecting from the fallback path are not flooded by the `id: 1/2/3...` vs large-timestamp mismatch
 
 ---
 
@@ -84,7 +84,7 @@ The fix is a second terminal-state check immediately after `subscriber.subscribe
 
 **Dimensions:**
 - 4.1 PENDING After `subscriber.subscribe(channel)` succeeds, re-query `SELECT state FROM runs WHERE run_id = $1`
-- 4.2 PENDING If the post-subscribe state is terminal: call `streamStoredEvents` to replay all gate results (from `after_event_id = 0`), emit `run_complete` event, return — no read loop entered
+- 4.2 PENDING If the post-subscribe state is terminal: call `streamStoredEvents` to replay missed gate results (from `after_event_id = last_event_id`), emit `run_complete` event, return — no read loop entered; for fresh connections `last_event_id = 0` so all events replay; for reconnects only the gap is replayed
 - 4.3 PENDING If the post-subscribe state is non-terminal: proceed to read loop as before — race window is now closed
 - 4.4 PENDING Add a test in `stream_test.zig` (or the existing `runs/tests.zig`) that simulates a run completing between the initial check and subscribe: verify the handler emits all events and closes cleanly
 
@@ -97,7 +97,7 @@ The fix is a second terminal-state check immediately after `subscriber.subscribe
 - [ ] 5.1 `zombied run <spec> --watch` prints each gate result to stdout as it completes — not after the run finishes
 - [ ] 5.2 SSE stream sends a heartbeat comment within 30 seconds when no gate events arrive (gate takes >30s)
 - [ ] 5.3 Client disconnects after receiving 3 live events, reconnects with `Last-Event-ID` equal to the last received event's `id`; server replays exactly the missed events — no duplicates, no gaps
-- [ ] 5.4 Run completes between initial state check and pub/sub subscribe; handler detects this, replays all gate results, emits `run_complete`, and closes — no indefinite hang
+- [ ] 5.4 Run completes between initial state check and pub/sub subscribe; handler detects this, replays missed gate results (from `last_event_id`, or from `0` for fresh connections), emits `run_complete`, and closes — no indefinite hang, no duplicate events on reconnect
 - [ ] 5.5 Cross-compile passes on all three CI targets (no regression)
 
 ---
