@@ -17,7 +17,8 @@ pub fn computeDedupKey(
     hasher.update(workspace_id);
     if (base_commit_sha) |sha| hasher.update(sha);
     const digest = hasher.finalResult();
-    return std.fmt.allocPrint(alloc, "{}", .{std.fmt.fmtSliceHexLower(&digest)});
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    return alloc.dupe(u8, &hex);
 }
 
 // ── Unit tests (T7, T8) ──────────────────────────────────────────────────────

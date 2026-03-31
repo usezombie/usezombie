@@ -20,7 +20,7 @@ pub const SpecValidation = struct {
 
     pub fn deinit(self: *SpecValidation, alloc: std.mem.Allocator) void {
         for (self.warnings.items) |w| alloc.free(w);
-        self.warnings.deinit();
+        self.warnings.deinit(alloc);
     }
 };
 
@@ -32,7 +32,7 @@ pub fn validate(
     spec: []const u8,
     cwd: std.fs.Dir,
 ) !SpecValidation {
-    var result = SpecValidation{ .warnings = std.ArrayList([]const u8).init(alloc) };
+    var result = SpecValidation{ .warnings = .{} };
 
     // 1.1 — Empty / whitespace-only check.
     const trimmed = std.mem.trim(u8, spec, " \t\r\n");

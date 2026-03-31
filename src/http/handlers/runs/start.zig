@@ -69,8 +69,7 @@ fn upsertInlineSpec(
     var content_hash_hasher = std.crypto.hash.sha2.Sha256.init(.{});
     content_hash_hasher.update(spec_markdown);
     const content_digest = content_hash_hasher.finalResult();
-    var content_hash_buf: [32 * 2]u8 = undefined;
-    const content_hash_hex = try std.fmt.bufPrint(&content_hash_buf, "{}", .{std.fmt.fmtSliceHexLower(&content_digest)});
+    const content_hash_hex = std.fmt.bytesToHex(content_digest, .lower);
 
     const file_path = try std.fmt.allocPrint(alloc, "inline:{s}", .{content_hash_hex[0..16]});
 
@@ -270,13 +269,13 @@ pub fn handleStartRun(ctx: *common.Context, req: *httpz.Request, res: *httpz.Res
         null;
 
     if (dedup_key) |dk| {
-        var dedup_q = conn.query(
+        const dedup_q = conn.query(
             \\SELECT run_id FROM runs
             \\WHERE dedup_key = $1
             \\  AND state IN ('SPEC_QUEUED', 'RUNNING', 'PLANNED')
             \\LIMIT 1
         , .{dk}) catch null;
-        if (dedup_q) |*dq| {
+        if (dedup_q) |dq| {
             defer dq.deinit();
             // check-pg-drain: ok — at most 1 row; drained in the else branch or by deinit.
             if (dq.next() catch null) |dup_row| {
