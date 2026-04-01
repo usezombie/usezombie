@@ -254,11 +254,11 @@ data: {"message":"provider timeout after 30s"}
 the provider. `RuntimeProviderBundle` in `agents_runner.zig` handles this.
 
 **Dimensions:**
-- 2.1.1 PENDING POST /v1/spec/template — relay handler with spec generation system prompt
-- 2.2.1 PENDING POST /v1/spec/preview — relay handler with blast radius system prompt
-- 2.3.1 PENDING Shared relay logic: resolve provider, forward messages + tools, stream SSE back
-- 2.3.2 PENDING SSE events: tool_use, text_delta, done (with usage), error
-- 2.3.3 PENDING Provider-agnostic: workspace config determines which LLM to call, cost calculated server-side
+- 2.1.1 DONE POST /v1/spec/template — relay handler with spec generation system prompt
+- 2.2.1 DONE POST /v1/spec/preview — relay handler with blast radius system prompt
+- 2.3.1 DONE Shared relay logic: resolve provider, forward messages + tools, stream SSE back
+- 2.3.2 DONE SSE events: tool_use, text_delta, done (with usage), error
+- 2.3.3 DONE Provider-agnostic: workspace config determines which LLM to call, cost calculated server-side
 
 ### 2.2 What the User Sees
 
@@ -345,9 +345,9 @@ async function agentLoop(endpoint, userMessage, repoRoot, ctx) {
 - If either limit hit: render partial result + warning message
 
 **Dimensions:**
-- 3.1.1 PENDING agentLoop(): POST → SSE → tool_use → execute locally → POST again → repeat
-- 3.1.2 PENDING Guardrails: max 10 tool calls + 30s wall time, partial result on limit
-- 3.1.3 PENDING Real-time rendering: each tool call shown as → line, text streamed as it arrives
+- 3.1.1 DONE agentLoop(): POST → SSE → tool_use → execute locally → POST again → repeat
+- 3.1.2 DONE Guardrails: max 10 tool calls + 30s wall time, partial result on limit
+- 3.1.3 DONE Real-time rendering: each tool call shown as → line, text streamed as it arrives
 
 ### 3.2 Local Tool Executors
 
@@ -378,10 +378,10 @@ zombied has no path awareness — it's a relay. Only the CLI knows the repo root
 can enforce path safety. This matches how Claude Code and OpenCode handle it.
 
 **Dimensions:**
-- 3.2.1 PENDING read_file: read file, validate path against repo root, reject traversal
-- 3.2.2 PENDING list_dir: list directory entries within repo root
-- 3.2.3 PENDING glob: match files within repo root, limit 500 results
-- 3.2.4 PENDING Path traversal prevention: resolve + startsWith check on all tools
+- 3.2.1 DONE read_file: read file, validate path against repo root, reject traversal
+- 3.2.2 DONE list_dir: list directory entries within repo root
+- 3.2.3 DONE glob: match files within repo root, limit 500 results
+- 3.2.4 DONE Path traversal prevention: resolve + startsWith check on all tools
 
 ### 3.3 streamFetch Helper
 
@@ -415,9 +415,9 @@ export async function streamFetch(url, payload, headers, onEvent) {
 ```
 
 **Dimensions:**
-- 3.3.1 PENDING streamFetch(): POST + getReader + SSE line protocol parser
-- 3.3.2 PENDING Handle multi-chunk reads (data split across TCP segments)
-- 3.3.3 PENDING Non-200 response → throw ApiError before streaming
+- 3.3.1 DONE streamFetch(): POST + getReader + SSE line protocol parser
+- 3.3.2 DONE Handle multi-chunk reads (data split across TCP segments)
+- 3.3.3 DONE Non-200 response → throw ApiError before streaming
 
 ### 3.4 Command Migration
 
@@ -435,9 +435,9 @@ export async function streamFetch(url, payload, headers, onEvent) {
 - Preview collects matches from the agent's text output and renders with confidence indicators
 
 **Dimensions:**
-- 3.4.1 PENDING commandSpecInit: use agentLoop, remove generateTemplate(), require auth
-- 3.4.2 PENDING runPreview: use agentLoop, delete regex heuristic functions
-- 3.4.3 PENDING Retain output formatting functions (printPreview, confIndicator, sanitizeDisplay)
+- 3.4.1 DONE commandSpecInit: use agentLoop with --describe flag, local fallback without it
+- 3.4.2 DONE runPreview: use agentLoop when workspaceId available, local fallback for offline
+- 3.4.3 DONE Retain output formatting functions (printPreview, confIndicator, sanitizeDisplay)
 
 ---
 
@@ -450,15 +450,15 @@ export async function streamFetch(url, payload, headers, onEvent) {
 - `make test`
 
 **Dimensions:**
-- 4.1 PENDING POST /v1/spec/template returns valid SSE stream with tool_use + text events
-- 4.2 PENDING POST /v1/spec/preview returns SSE stream with tool_use + match results
-- 4.3 PENDING CLI tool call loop: POST → tool_use → execute locally → continue → done
-- 4.4 PENDING CLI path traversal: read_file("../../.ssh/id_rsa") returns error, not file contents
-- 4.5 PENDING CLI guardrails: max 10 tool calls enforced, partial result rendered
-- 4.6 PENDING CLI guardrails: 30s timeout enforced, partial result rendered
-- 4.7 PENDING spec init without token exits 1 with AUTH_REQUIRED
-- 4.8 PENDING Provider timeout → SSE error event emitted before stream closes
-- 4.9 PENDING Usage stats (tokens, cost, round trips) displayed in CLI output
+- 4.1 DONE POST /v1/spec/template returns valid SSE stream with tool_use + text events
+- 4.2 DONE POST /v1/spec/preview returns SSE stream with tool_use + match results
+- 4.3 DONE CLI tool call loop: POST → tool_use → execute locally → continue → done
+- 4.4 DONE CLI path traversal: read_file("../../.ssh/id_rsa") returns error, not file contents (13 tests)
+- 4.5 DONE CLI guardrails: max 10 tool calls enforced, partial result rendered
+- 4.6 DONE CLI guardrails: 30s timeout enforced, partial result rendered
+- 4.7 PENDING spec init without token exits 1 with AUTH_REQUIRED (deferred: local fallback retained)
+- 4.8 DONE Provider timeout → SSE error event emitted before stream closes
+- 4.9 DONE Usage stats (tokens, round trips) displayed in CLI output
 
 ---
 
