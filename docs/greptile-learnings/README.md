@@ -23,7 +23,7 @@ The regex must match the *diff line* (`+` prefix lines) that represents the anti
 ## VERIFY (run in every PR lifecycle)
 
 ```bash
-git diff origin/main | grep -Ef docs/greptile-learnings/.greptile-patterns \
+git diff origin/main | grep '^+[^+]' | grep -Ef docs/greptile-learnings/.greptile-patterns \
   && echo "❌ known anti-pattern — fix before merging" \
   || echo "✅ no known anti-patterns"
 ```

@@ -375,7 +375,7 @@ Required outputs:
 - If touched files include `*.zig`: additionally run `make check-pg-drain`.
 - Scan the diff against the greptile anti-pattern catalog (`make lint` does this automatically via `_greptile_patterns_check`; also run manually when needed):
   ```bash
-  git diff origin/main | grep -Ef docs/greptile-learnings/.greptile-patterns && echo "❌ known anti-pattern matched" || true
+  git diff origin/main | grep '^+[^+]' | grep -Ef docs/greptile-learnings/.greptile-patterns && echo "❌ known anti-pattern matched" || true
   ```
 - Capture failures with exact command and error text.
 
