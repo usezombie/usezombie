@@ -4,7 +4,8 @@
 **Milestone:** M18
 **Workstream:** 003
 **Date:** Mar 31, 2026
-**Status:** PENDING
+**Status:** IN_PROGRESS
+**Branch:** fix/deploy-executor-skip-worker-restart
 **Priority:** P1 — move spec init and run preview from local heuristics to server-side agent with SSE streaming
 **Batch:** B2 — depends on M18_002 (local implementation, now the reference spec)
 **Depends on:** M18_002
