@@ -1,0 +1,3 @@
+"UZ-[A-Z]+-[0-9]+"
+pub const ERR_[A-Z_]+ =
+expectEqual.*day_index

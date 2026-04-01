@@ -2,7 +2,7 @@
 # QUALITY — code quality, formatting, analysis
 # =============================================================================
 
-.PHONY: lint lint-zig lint-website lint-apps lint-ci doctor check-pg-drain _fmt _fmt_check _zlint_check _pg_drain_check _zig_target_lint _zig_line_limit_check _hardcoded_role_check _website_lint _app_lint _zombiectl_lint _actionlint_check
+.PHONY: lint lint-zig lint-website lint-apps lint-ci doctor check-pg-drain _fmt _fmt_check _zlint_check _pg_drain_check _zig_target_lint _zig_line_limit_check _hardcoded_role_check _website_lint _app_lint _zombiectl_lint _actionlint_check _greptile_patterns_check
 
 ZLINT ?= zlint
 ACTIONLINT ?= actionlint
@@ -139,7 +139,17 @@ lint-apps: _app_lint _zombiectl_lint  ## Lint app and zombiectl (Next.js ESLint 
 
 lint-ci: _actionlint_check  ## Lint GitHub Actions workflows (actionlint)
 
-lint: lint-zig lint-website lint-apps lint-ci  ## Lint everything (zombied + website + app + zombiectl + CI workflows)
+_greptile_patterns_check:
+	@echo "→ [zombied] Scanning diff against greptile anti-pattern catalog..."
+	@if [ ! -f docs/greptile-learnings/.greptile-patterns ]; then \
+		echo "✗ docs/greptile-learnings/.greptile-patterns missing"; exit 1; \
+	fi
+	@if git diff origin/main 2>/dev/null | grep -Ef docs/greptile-learnings/.greptile-patterns; then \
+		echo "❌ known anti-pattern matched — fix before merging"; exit 1; \
+	fi
+	@echo "✓ [zombied] No known greptile anti-patterns in diff"
+
+lint: lint-zig lint-website lint-apps lint-ci _greptile_patterns_check  ## Lint everything (zombied + website + app + zombiectl + CI workflows)
 	@echo "✓ All lint checks passed"
 
 doctor:  ## Run zombied doctor (connectivity + config check)
