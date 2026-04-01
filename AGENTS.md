@@ -784,16 +784,25 @@ Agent-first. One file only: `docs/greptile-learnings/.greptile-patterns`. No cat
 
 **Pre-PR (automatic):** `make lint` runs `_greptile_patterns_check` which scans `git diff origin/main` additions against `.greptile-patterns`. No separate step needed.
 
-**Post-PR — when asked to "resolve greptile on PR #N":**
+**Post-PR — triggered by ANY mention of greptile/reptile feedback, review comments, or "fix greptile":**
 
-1. Fetch review ID and inline comments per README.md
+Execute ALL steps below as a single workflow. Do not stop after fixing code — the reply, pattern, and report steps are mandatory.
+
+1. Fetch greptile review ID and inline comments:
+   ```bash
+   gh api repos/OWNER/REPO/pulls/N/reviews --jq '.[] | select(.user.login | test("greptile")) | .id'
+   gh api repos/OWNER/REPO/pulls/N/reviews/{ID}/comments --jq '.[] | {id, path, body: .body[:150]}'
+   ```
 2. Fix each finding in the worktree (P0/P1 required; P2 at discretion)
 3. Run `make lint && make test` and `make test-integration-db` if DB-backed files were touched
-4. For every P0/P1 finding: derive a grep-E regex and append to `docs/greptile-learnings/.greptile-patterns`. See README.md for self-matching warning
-5. Verify: bad example matches, fix does not
-6. Reply to each greptile thread
+4. For every P0/P1 finding: derive a grep-E regex and append to `docs/greptile-learnings/.greptile-patterns`. Verify no self-match (see README.md)
+5. Verify: bad example matches the pattern, fix does not
+6. **Reply to each greptile thread** with what was fixed and which commit:
+   ```bash
+   gh api repos/OWNER/REPO/pulls/N/comments/{comment_id}/replies -f body="Fixed in <sha>: <what changed>"
+   ```
 7. Commit fix + pattern append together, push the branch
-8. Report: list each finding, severity, fix applied, pattern added (or why not), and thread reply ID
+8. **Report to user**: table with each finding, severity, fix applied, pattern added (or why not), and thread reply ID
 
 ## Skills Policy
 

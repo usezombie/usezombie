@@ -11,191 +11,106 @@
 
 ---
 
-## 0.0 Discovery Required — Unresolved Architecture
+## 0.0 Discovery — Architecture Decision (RESOLVED)
 
-**Status:** PENDING — must be resolved before implementation begins
-
-Do not start sections 2.0-3.0 until 0.4 Decision Gate is filled in.
+**Status:** DONE — Apr 01, 2026
 
 ### 0.1 The Problem
 
 When you run `zombiectl spec init` or `zombiectl run --preview`, you want an agent
-that actually understands your repo — not regex heuristics. The blocker:
+that actually understands your repo — not regex heuristics. The blocker: the agent
+runs server-side but needs to read files on the user's laptop.
 
-```
-User's laptop                    Server worker sandbox
-─────────────────                ─────────────────────
-/repos/my-project/               agent runs here
-  go.mod                    ??   cannot read these files
-  src/main.go
-  ...10,000 files
-```
-
-The agent can't think about files it can't see. Three ways to close this gap:
-
----
-
-### Option A — Send Context in the Request (Local reads, server thinks)
-
-```
-CLI reads local FS
-  → packs manifest file contents + file tree into POST body
-  → sends to zombied
-  → zombied calls Anthropic, proxies the SSE stream back
-  → CLI renders tokens as they arrive
-```
-
-The CLI decides what to include (manifest files: go.mod, Cargo.toml, package.json;
-file tree: paths only). The model gets that context in one prompt and responds.
-
-**Feels like:** fast. One round trip. No sandbox boot. First token in ~2s.
-
-**Tradeoff:** CLI decides upfront what the agent sees. If it picks the wrong files
-to include, the agent works with incomplete context. No way to ask for more.
-
-**Precedent:** How Claude Code, Amp, Cursor, Aider all work. The model is remote,
-the context selection is local, the rendering is local.
-
----
-
-### Option B — Send the Folder (Upload, then agent runs)
-
-Three mechanisms for sending the folder to the sandbox:
-
-**B1 — Git bundle**
-```bash
-git archive HEAD | gzip | POST /v1/spec/bundle
-```
-CLI packs the whole repo as a git archive (~1-5MB), uploads to server, sandbox
-unpacks it. Agent gets the real tree with real file contents.
-
-**B2 — Rsync / file sync endpoint**
-CLI syncs the working directory to a server-side path. Like Replit's workspace sync.
-Agent has a persistent copy it can browse and re-use between sessions.
-
-**B3 — Selective upload**
-CLI walks the tree, uploads only manifest files + files referenced in the spec.
-Smaller payload, but CLI still decides what to include.
-
-In all B variants the agent runs in the full worker pipeline:
-```
-upload → start_run → job queue → worker pickup → sandbox mounts bundle
-→ agent reads files natively → SSE stream results back
-```
-
-**Feels like:** slow first run (15-40s pipeline overhead + upload time).
-Agent has full file access once running — no context limits.
-
-**Tradeoff:** Pipeline overhead may miss the "feels instant" bar.
-Files leave the user's machine. Requires new upload endpoint + bundle mount.
-
----
-
-### Option C — MCP Filesystem Mount (Agent pulls files on demand)
-
-MCP (Model Context Protocol) is a standard for how an AI model requests data
-from outside its context window. Instead of sending files upfront, the CLI
-exposes local files as callable tools. The agent asks for what it needs.
-
-```
-CLI starts a local tool server that exposes:
-  read_file(path)   → reads from local disk, returns contents
-  list_dir(path)    → lists directory, returns entries
-  glob(pattern)     → finds matching files, returns paths
-
-Model calls tools as needed:
-  → read_file("go.mod")          CLI reads locally, returns content
-  → list_dir("src/")             CLI reads locally, returns listing
-  → read_file("src/server.go")   CLI reads locally, returns content
-  → "I've seen enough. High confidence: src/server.go"
-```
-
-The CLI sits in a loop: send message → get tool call request → execute locally →
-send result back → repeat until the model streams its final answer.
-
-**What the user sees:**
-```
-$ zombiectl run --spec feature.md --preview
-
-  🧟 analyzing your repo...
-
-  → read go.mod  (Go 1.21, github.com/acme/api)
-  → listed src/  (23 files)
-  → read src/http/server.go
-
-  ● src/http/server.go    high
-  ● src/http/handler.go   high
-  ◆ src/config/config.go  medium
-
-  3 file(s) matched
-```
-
-Agent reads exactly what it needs. Files never leave the laptop unless the agent
-asks for them. User sees the agent's work as it happens.
-
-**Feels like:** a chat window in the terminal. Like Claude Code browsing your repo.
-
-**Tradeoff:** Most complex to build. Requires the local tool call loop (~200 lines),
-a security boundary (only allow reads inside the repo path), and latency per tool
-call (~200-400ms per read_file round trip). Best UX. Most work.
-
-**Security boundary (required):** The CLI must reject any tool call that resolves
-outside the repo root. `read_file("../../.ssh/id_rsa")` must return an error.
-
----
-
-### 0.2 Pipeline Overhead Study
-
-Options B and C use the full worker pipeline. Measure before committing:
-
-- `start_run` POST → first SSE event: ___s (cold worker), ___s (warm)
-- Sandbox boot time alone: ___s
-- **Target:** user sees first output within 5s of running the command
-
-If overhead > 3s, Option B likely fails the bar without pipeline changes.
-Option A and C have no pipeline overhead (no sandbox, no job queue).
-
----
-
-### 0.3 Competitive Research
+### 0.2 Competitive Research
 
 | Tool | Where agent runs | How it gets files | First result latency |
 |------|-----------------|-------------------|---------------------|
-| Claude Code | CLI process | MCP tool calls (Option C) | ~2s |
-| Amp Code | ? | ? | ? |
-| Cursor | IDE process | IDE sends selected context (Option A) | ~1s |
-| Aider | CLI process | sends diff + relevant files (Option A) | ~2s |
-| Devin | Remote sandbox | clones from GitHub URL (Option B1) | ~30s |
-| GitHub Copilot | IDE process | LSP sends open files (Option A) | ~1s |
-| Claude.ai Projects | API call | user uploads files explicitly (Option B3) | ~3s |
+| Claude Code | CLI → Anthropic API direct | Native tool calls (read_file, list_dir, glob) executed locally by CLI | ~2s |
+| OpenCode | CLI → Vercel AI SDK → Provider | Same pattern, AI SDK auto-executes tools locally | ~2s |
+| Cursor | IDE process | IDE sends selected context upfront | ~1s |
+| Devin | Remote sandbox | Clones from GitHub URL | ~30s |
 
-Fill in the Amp row during discovery. That's the closest analog to zombiectl.
+**Key finding from source review (Claude Code at ~/Projects/claurst/, OpenCode at
+~/Projects/opencode/):** Neither sends files upfront. Both send tool definitions with
+the API request. The model decides what to read via tool calls. The CLI executes tools
+locally and sends results back. The model typically reads 3-8 files total, not the
+whole repo.
 
----
+### 0.3 Architecture: Stateless Tool-Call Relay
+
+zombied acts as a stateless relay between the CLI and the workspace's LLM provider.
+This is the same pattern as Claude Code, but with zombied in the middle (because
+LLM API keys are server-side secrets managed per-workspace).
+
+```
+zombiectl (CLI)                   zombied                     LLM Provider
+─────────────────                 ──────                      ────────────
+POST /v1/agent/stream
+  { mode: "spec_init",
+    messages: [user intent],
+    tools: [read_file,
+            list_dir, glob] } ──→ resolve workspace provider
+                                  add system prompt + API key
+                                  forward ───────────────────→
+                                                           ←── tool_use: list_dir(".")
+                              ←── SSE: event: tool_use
+CLI runs list_dir locally
+POST /v1/agent/stream
+  { messages: [user intent,
+    asst: tool_use(list_dir),
+    user: tool_result(...)] } ──→ forward ───────────────────→
+                                                           ←── tool_use: read_file("go.mod")
+                              ←── SSE: event: tool_use
+CLI reads go.mod locally
+POST /v1/agent/stream
+  { messages: [...accumulated,
+    asst: tool_use(read_file),
+    user: tool_result(...)] } ──→ forward ───────────────────→
+                                                           ←── text: "# M5_001..."
+                              ←── SSE: event: text_delta
+                              ←── SSE: event: done { usage }
+CLI writes spec to disk
+```
+
+**Key properties:**
+- **Stateless:** CLI manages conversation history and resends full messages with each
+  POST. zombied holds nothing between requests. Same as Anthropic's Messages API.
+- **Provider-agnostic:** zombied resolves the LLM provider from workspace config (could
+  be Anthropic, OpenAI, Google, or user's own key). CLI never knows or cares.
+- **Files never leave the laptop** unless the model explicitly asks via tool calls.
+  Model reads 3-8 files total, not the whole repo.
+- **Protocol:** Multi-request loop over HTTP/1.1 keep-alive. httpz only supports
+  HTTP/1.1; Cloudflare Tunnel handles HTTP/2 at the edge.
 
 ### 0.4 Decision Gate
 
-Fill this in before writing any implementation code. Update sections 2.0-3.0 to match.
-
 ```
-CHOSEN OPTION: [ A / B1 / B2 / B3 / C ]
+CHOSEN: Stateless tool-call relay (Option C-relay via zombied)
 
 RATIONALE:
-- Pipeline overhead measured at: ___s cold, ___s warm
-- Chosen because: ___
+- Matches how Claude Code and OpenCode work (verified from source).
+- Model decides what to read, not the CLI. No upfront context guessing.
+- Files stay on the user's laptop. Only sent one-at-a-time when model asks.
+- zombied is a pure pass-through: adds API key + system prompt, forwards,
+  streams back. No server state, no sandbox, no job queue.
+- Provider-agnostic: workspace config determines which LLM provider to call.
 
 REJECTED:
-- Option ___ because: ___
-
-IMPACT ON SECTIONS 2.0-3.0:
-- ___
+- Option A (CLI packs context upfront): CLI must guess what to include.
+  If it guesses wrong, model works with incomplete context. No way to ask
+  for more. Neither Claude Code nor OpenCode does this for exploration tasks.
+- Option B (upload bundle to sandbox): 15-40s pipeline overhead for a 5-second
+  operation. Files leave the user's machine. Massive overkill.
+- Option C-direct (CLI calls LLM API directly): LLM API keys are server-side
+  secrets managed per-workspace. CLI has no access to key material.
 ```
 
 ### 0.5 Dimensions
 
-- 0.1 PENDING Measure pipeline overhead (start_run → first SSE event, cold + warm)
-- 0.2 PENDING Research Amp Code — where does their agent run, how does it get files
-- 0.3 PENDING Decide Option A / B / C, fill in 0.4, update sections 2.0-3.0
+- 0.1 DONE Researched Claude Code source (~/Projects/claurst/) — tool loop in query/src/lib.rs:140-416, tools in crates/tools/src/
+- 0.2 DONE Researched OpenCode source (~/Projects/opencode/) — tool loop in session/prompt.ts runLoop(), Vercel AI SDK handles tool execution
+- 0.3 DONE Architecture decided: stateless tool-call relay through zombied
+- 0.4 DONE Protocol decided: multi-request HTTP/1.1 keep-alive (httpz constraint, Cloudflare handles HTTP/2 at edge)
 
 ---
 
@@ -224,31 +139,21 @@ substring heuristics. That misses the point — the agent should reason about in
 **What M18_003 delivers:** Agent drafts the spec from developer intent. Agent predicts
 impact from spec content. Developer reviews, edits, approves. Agent executes.
 
-The mechanism for giving the agent access to the local repo is the open question —
-see Section 0.0.
-
 ### 1.1 Alternatives to Track
-
-Other tools that generate or assist with spec/plan creation. Track these for
-competitive awareness and to avoid reinventing solved problems.
 
 | Tool | What it does | Relevant to |
 |------|-------------|-------------|
 | fission.ai | ? — research needed | spec generation from intent |
 | gstack `/office-hours` | YC-style problem framing + plan | spec problem statement |
-| gstack `/plan-eng-review` | architecture + test plan from spec | spec validation |
-| gstack `/autoplan` | full CEO + eng + design review pipeline | spec review pipeline |
-| Linear | issue → spec translation | spec structure |
 | GitHub Copilot Workspace | intent → plan → code | closest end-to-end analog |
-
-**Discovery task:** Research fission.ai and GitHub Copilot Workspace specifically.
-Both claim to go from developer intent to actionable plan. What does their output
-look like? How does it compare to the zombiectl spec format? What can be learned
-or integrated?
 
 ---
 
 ## 2.0 API Design
+
+Both endpoints use the same **stateless tool-call relay** mechanism. zombied is a
+pass-through: adds system prompt + workspace API key, forwards to the configured
+provider, streams SSE back. CLI manages conversation history and resends with each POST.
 
 ### 2.1 Spec Template Generation
 
@@ -258,41 +163,39 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "file_paths": ["src/main.go", "tests/main_test.go", ...],
-  "makefile_targets": ["lint", "test", "build"],
-  "test_patterns": ["*_test.*", "*.test.*"],
-  "project_structure": ["src/", "tests/", "docs/"],
-  "manifest_files": {
-    "go.mod": "module github.com/foo/bar\n\ngo 1.21\n",
-    "package.json": "{\"name\":\"zombiectl\",\"version\":\"1.0.0\"}"
-  }
+  "messages": [
+    {
+      "role": "user",
+      "content": "Generate a spec template for: Add rate limiting per API key with Redis backend"
+    }
+  ],
+  "tools": [
+    {
+      "name": "read_file",
+      "description": "Read a file from the user's repo",
+      "input_schema": { "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"] }
+    },
+    {
+      "name": "list_dir",
+      "description": "List directory contents",
+      "input_schema": { "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"] }
+    },
+    {
+      "name": "glob",
+      "description": "Find files matching a glob pattern",
+      "input_schema": { "type": "object", "properties": { "pattern": { "type": "string" } }, "required": ["pattern"] }
+    }
+  ]
 }
 
-→ 200 application/json
-{
-  "template": "# M{N}_001: {Feature Title}\n\n**Prototype:** v1.0.0\n..."
-}
+→ 200 text/event-stream
 ```
 
-The CLI reads the contents of manifest files that exist in the repo root
-(go.mod, Cargo.toml, package.json, pyproject.toml, mix.exs — whichever are present)
-and includes them in the POST body. The server agent uses these contents to detect language
-and ecosystem. All other source file contents stay local — only manifest file contents
-are sent.
+**System prompt (server-side, not sent by CLI):** "You are a spec generation agent.
+Explore the repo to understand language, ecosystem, structure. Generate a milestone
+spec using the canonical format."
 
-The server calls nullclaw agent directly from the HTTP handler — it does NOT create a run
-or spawn a sandbox process. Same pattern as the proposals agent in
-`src/pipeline/agents_runner.zig`. Handler timeout: 30 seconds.
-
-The CLI shows a `ui-progress.js` spinner while awaiting the response (template generation
-is a single LLM call, 5-15s). No streaming of the template itself is required for v1.
-
-**Dimensions:**
-- 2.1.1 PENDING POST /v1/spec/template endpoint — validates input, calls nullclaw agent, returns template
-- 2.1.2 PENDING Agent reads manifest_files contents to detect language + ecosystem; falls back to file_paths names if manifest_files is empty
-- 2.1.3 PENDING Returns structured template matching the canonical spec format from CLAUDE.md
-
-### 2.2 SSE Preview Stream
+### 2.2 Impact Preview
 
 ```
 POST /v1/spec/preview
@@ -300,94 +203,240 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "spec_content": "# Feature\n\nEdit `src/foo.go` and `lib/bar.ts`...",
-  "file_paths": ["src/foo.go", "lib/bar.ts", "src/util.go", ...]
+  "messages": [
+    {
+      "role": "user",
+      "content": "Which files will this spec touch?\n\n# M5_001: Rate Limiting..."
+    }
+  ],
+  "tools": [ ... same tool definitions ... ]
 }
 
 → 200 text/event-stream
-event: match
-data: {"file":"src/foo.go","confidence":"high"}
+```
 
-event: match
-data: {"file":"lib/bar.ts","confidence":"medium"}
+**System prompt (server-side):** "You are a blast radius analyzer. Read the spec,
+explore the repo, and predict which files the agent will touch. Output each match
+with confidence (high, medium, low)."
 
-event: match
-data: {"file":"src/util.go","confidence":"low"}
+### 2.3 Shared Relay Protocol
+
+Both endpoints use identical SSE event types and the same stateless round-trip loop.
+
+**SSE event types:**
+
+```
+event: tool_use
+data: {"id":"tu_01","name":"read_file","input":{"path":"go.mod"}}
+
+event: text_delta
+data: {"text":"# M5_001: Rate Limiting\n\n"}
 
 event: done
-data: {}
-```
+data: {"usage":{"input_tokens":12450,"output_tokens":3200,"cost_usd":0.085,"provider":"anthropic","model":"claude-sonnet-4-6","round_trips":4}}
 
-Agent semantically matches spec intent to file paths. Streams results as each
-file is scored — gives real-time feedback for large repos without waiting for
-full completion.
-
-If the agent errors mid-stream, the server emits an error event before closing:
-```
 event: error
-data: {"message": "agent timed out after 60s"}
+data: {"message":"provider timeout after 30s"}
 ```
 
-The CLI uses fetch() + response.body.getReader() to consume the stream (standard
-browser-compatible POST + SSE pattern). EventSource is NOT used — it only supports GET.
-The CLI does NOT have an existing SSE consumer; a new streamFetch() helper must be
-added to zombiectl/src/lib/http.js.
+**Stateless round trip (same for both endpoints):**
+1. CLI POSTs `{ messages, tools }` → zombied adds system prompt + API key → forwards to provider
+2. Provider returns `tool_use` → zombied streams SSE `event: tool_use` back to CLI
+3. CLI executes tool locally (reads file from laptop)
+4. CLI appends assistant `tool_use` + user `tool_result` to message history
+5. CLI POSTs updated `{ messages }` to same endpoint → goto 2
+6. Provider returns text → zombied streams `event: text_delta`
+7. Provider finishes → zombied streams `event: done` with usage
 
-Handler stall deadline: 60 seconds between events. File path limit: CLI sends at most
-2000 relative paths (BFS order, truncated after limit). Server does NOT create a run.
+**Provider resolution:** zombied resolves the LLM provider from workspace config
+(Anthropic, OpenAI, Google, or user's own key). The CLI never sees or specifies
+the provider. `RuntimeProviderBundle` in `agents_runner.zig` handles this.
 
 **Dimensions:**
-- 2.2.1 PENDING POST /v1/spec/preview endpoint — SSE response, nullclaw agent streams matches
-- 2.2.2 PENDING Agent uses spec content semantically (not substring) to score each file
-- 2.2.3 PENDING Each SSE event: `event: match\ndata: { file, confidence }` where confidence ∈ high|medium|low
-- 2.2.4 PENDING `event: done\ndata: {}` signals stream end; `event: error\ndata: {message}` on failure
+- 2.1.1 PENDING POST /v1/spec/template — relay handler with spec generation system prompt
+- 2.2.1 PENDING POST /v1/spec/preview — relay handler with blast radius system prompt
+- 2.3.1 PENDING Shared relay logic: resolve provider, forward messages + tools, stream SSE back
+- 2.3.2 PENDING SSE events: tool_use, text_delta, done (with usage), error
+- 2.3.3 PENDING Provider-agnostic: workspace config determines which LLM to call, cost calculated server-side
+
+### 2.2 What the User Sees
+
+**spec init:**
+```
+$ zombiectl spec init --describe "Add rate limiting with Redis"
+
+  🧟 analyzing your repo...
+  → listed ./             (root structure)
+  → read go.mod           (Go 1.21, github.com/acme/api)
+  → read Makefile          (lint, test, build)
+  → listed src/            (4 dirs, 23 files)
+
+  🧟 drafting spec...
+
+  ✓ wrote docs/spec/v1/pending/M5_001_RATE_LIMITING.md
+    4.8s | 4 reads | 15.6K tokens | $0.09
+```
+
+**run --preview:**
+```
+$ zombiectl run --spec M5_001_RATE_LIMITING.md --preview
+
+  🧟 analyzing your repo against spec...
+  → read M5_001_RATE_LIMITING.md
+  → listed src/http/       (middleware, handlers)
+  → read src/http/middleware.go
+  → listed src/redis/      (client)
+  → grep "docker-compose" .
+
+  ● src/http/middleware.go       high
+  ● src/redis/client.go          high
+  ◆ src/config/config.go         medium
+  ◆ docker-compose.yml           medium
+  ○ src/http/handler.go          low
+
+  5 file(s) in blast radius
+    5.2s | 5 reads | 18.3K tokens | $0.11
+```
+
+Each `→` line appears in real-time as the model makes tool calls. The user sees the
+agent exploring their repo, not a blind spinner.
 
 ---
 
-## 3.0 CLI Migration
+## 3.0 CLI Implementation
 
-### 3.1 spec init
+### 3.1 Tool Call Loop
 
-`commandSpecInit` sends collected local facts to the server, writes the returned template.
+New core primitive: the agent loop. CLI sends messages, receives SSE events, executes
+tool calls locally, sends results back, repeats until done.
 
-**Before (M18_002):** scans repo locally, generates template with string interpolation.
-**After (M18_003):** scans repo locally for paths + Makefile + test patterns + manifest file
-contents, shows spinner, POSTs to `/v1/spec/template`, writes returned template to disk.
+```js
+// Pseudo-code for the agent loop
+async function agentLoop(endpoint, userMessage, repoRoot, ctx) {
+  const tools = [readFileTool, listDirTool, globTool];
+  let messages = [{ role: "user", content: userMessage }];
+  let toolCalls = 0;
+  const startTime = Date.now();
 
-- Remove `generateTemplate()` from the CLI — server owns template generation
-- Add manifest file content reading: read go.mod, Cargo.toml, package.json, pyproject.toml,
-  mix.exs from repoPath (whichever exist) and include in POST body
-- `spec init` becomes auth-required: add `spec.init` to routes.js, remove from `AUTH_EXEMPT_ROUTES`
-- Show spinner (ui-progress.js) while awaiting server response
-- `commandSpecInit` JSON output: `detected.*` fields come from server response
+  while (toolCalls < MAX_TOOL_CALLS && (Date.now() - startTime) < MAX_WALL_MS) {
+    const events = await streamFetch(endpoint, { messages, tools }, ctx);
+
+    for (const event of events) {
+      if (event.type === "tool_use") {
+        toolCalls++;
+        renderToolCall(event);  // → read go.mod
+        const result = executeLocally(event.name, event.input, repoRoot);
+        messages.push({ role: "assistant", content: [{ type: "tool_use", ...event }] });
+        messages.push({ role: "user", content: [{ type: "tool_result", tool_use_id: event.id, content: result }] });
+        break;  // POST again with accumulated messages
+      }
+      if (event.type === "text_delta") { renderText(event.text); }
+      if (event.type === "done") { renderUsage(event.usage); return; }
+      if (event.type === "error") { renderError(event.message); return; }
+    }
+  }
+}
+```
+
+**Guardrails (CLI-enforced):**
+- Max 10 tool calls per session (spec init needs 3-5, preview needs 4-8)
+- Max 30s total wall time
+- If either limit hit: render partial result + warning message
 
 **Dimensions:**
-- 3.1.1 PENDING commandSpecInit: POST collected facts + manifest file contents to /v1/spec/template
-- 3.1.2 PENDING Remove generateTemplate() and local template string from CLI
-- 3.1.3 PENDING Move spec.init out of AUTH_EXEMPT_ROUTES — requires token; show spinner during request
+- 3.1.1 PENDING agentLoop(): POST → SSE → tool_use → execute locally → POST again → repeat
+- 3.1.2 PENDING Guardrails: max 10 tool calls + 30s wall time, partial result on limit
+- 3.1.3 PENDING Real-time rendering: each tool call shown as → line, text streamed as it arrives
 
-### 3.2 run --preview
+### 3.2 Local Tool Executors
 
-`runPreview` sends spec content + local file tree to `/v1/spec/preview` SSE stream,
-prints matches as they arrive.
+Three read-only tools executed by the CLI on the user's laptop:
 
-**Before (M18_002):** extractSpecRefs() regex + matchRefsToFiles() substring scoring.
-**After (M18_003):** sends spec_content + file_paths (max 2000), renders SSE events as they stream.
+**read_file(path):** Read file contents. Resolve path against repo root. Reject
+if resolved path escapes repo root (path traversal prevention). Return file
+contents as string, or error if file not found or path rejected.
 
-- Add `streamFetch(url, payload, onEvent, opts)` helper to `lib/http.js`:
-  uses `fetch()` + `response.body.getReader()` + SSE line protocol parser
-- Remove `extractSpecRefs()` and `matchRefsToFiles()` from the CLI call path
-  (keep the functions in the file, marked @internal, until M18_003 SSE is stable;
-  delete them in the follow-on cleanup commit)
-- `printPreview` is retained — renders the collected match list at stream end
-- `confIndicator` / `sanitizeDisplay` retained — output formatting stays client-side
-- Preview spinner shown while stream is open; each match rendered as event arrives
+**list_dir(path):** List directory entries. Same path validation. Return entries
+as newline-separated list with trailing `/` for directories.
+
+**glob(pattern):** Find files matching glob pattern within repo root. Return
+matching paths as newline-separated list. Limit to 500 results.
+
+**Security boundary (CLI-side only):**
+```js
+function validatePath(inputPath, repoRoot) {
+  const resolved = path.resolve(repoRoot, inputPath);
+  if (!resolved.startsWith(repoRoot + path.sep) && resolved !== repoRoot) {
+    return { error: "path outside repo root" };
+  }
+  return { resolved };
+}
+```
+
+zombied has no path awareness — it's a relay. Only the CLI knows the repo root and
+can enforce path safety. This matches how Claude Code and OpenCode handle it.
 
 **Dimensions:**
-- 3.2.1 PENDING runPreview: POST to /v1/spec/preview, consume SSE stream via streamFetch()
-- 3.2.2 PENDING Print each match as its SSE event arrives (streaming UX, not batch)
-- 3.2.3 PENDING streamFetch() helper: fetch + getReader + SSE line protocol parser in lib/http.js
-- 3.2.4 PENDING Handle stream errors and partial results gracefully (event: error → show partial + error message)
+- 3.2.1 PENDING read_file: read file, validate path against repo root, reject traversal
+- 3.2.2 PENDING list_dir: list directory entries within repo root
+- 3.2.3 PENDING glob: match files within repo root, limit 500 results
+- 3.2.4 PENDING Path traversal prevention: resolve + startsWith check on all tools
+
+### 3.3 streamFetch Helper
+
+New SSE consumer in `zombiectl/src/lib/http.js`. The CLI has no existing SSE
+consumption capability.
+
+```js
+export async function streamFetch(url, payload, headers, onEvent) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json", "Accept": "text/event-stream" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) { throw new ApiError(...); }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let boundary;
+    while ((boundary = buf.indexOf("\n\n")) !== -1) {
+      const frame = buf.slice(0, boundary);
+      buf = buf.slice(boundary + 2);
+      const event = parseSseFrame(frame);  // { type, data }
+      if (event) onEvent(event);
+    }
+  }
+}
+```
+
+**Dimensions:**
+- 3.3.1 PENDING streamFetch(): POST + getReader + SSE line protocol parser
+- 3.3.2 PENDING Handle multi-chunk reads (data split across TCP segments)
+- 3.3.3 PENDING Non-200 response → throw ApiError before streaming
+
+### 3.4 Command Migration
+
+**spec init:**
+- `commandSpecInit` now calls `agentLoop("/v1/spec/template", userIntent, repoRoot, ctx)`
+- Remove `generateTemplate()` and local template string — server agent generates it
+- `spec init` becomes auth-required: remove `spec.init` from `AUTH_EXEMPT_ROUTES`
+- Output: writes agent-generated spec to disk, displays usage stats
+
+**run --preview:**
+- `runPreview` now calls `agentLoop("/v1/spec/preview", specContent, repoRoot, ctx)`
+- Delete `extractSpecRefs()`, `matchRefsToFiles()`, `scoreMatch()`, `walkDirForPreview()`
+  — clean break, no @internal retention
+- Retain `printPreview()`, `confIndicator()`, `sanitizeDisplay()` for output formatting
+- Preview collects matches from the agent's text output and renders with confidence indicators
+
+**Dimensions:**
+- 3.4.1 PENDING commandSpecInit: use agentLoop, remove generateTemplate(), require auth
+- 3.4.2 PENDING runPreview: use agentLoop, delete regex heuristic functions
+- 3.4.3 PENDING Retain output formatting functions (printPreview, confIndicator, sanitizeDisplay)
 
 ---
 
@@ -400,13 +449,15 @@ prints matches as they arrive.
 - `make test`
 
 **Dimensions:**
-- 4.1 PENDING POST /v1/spec/template returns valid spec markdown for Go, Rust, TS, Python repos (using manifest_files content)
-- 4.2 PENDING POST /v1/spec/preview streams correct high/medium/low matches for known spec fixtures
-- 4.3 PENDING CLI spec init writes server-returned template unchanged to disk; shows spinner during wait
-- 4.4 PENDING CLI run --preview renders streamed matches in real-time (each event before done arrives)
-- 4.5 PENDING spec init without token exits 1 with AUTH_REQUIRED, not a local template
-- 4.6 PENDING LLM timeout on template → 503 with clear error message (not silent hang)
-- 4.7 PENDING LLM timeout/error on preview → event: error emitted before stream closes
+- 4.1 PENDING POST /v1/spec/template returns valid SSE stream with tool_use + text events
+- 4.2 PENDING POST /v1/spec/preview returns SSE stream with tool_use + match results
+- 4.3 PENDING CLI tool call loop: POST → tool_use → execute locally → continue → done
+- 4.4 PENDING CLI path traversal: read_file("../../.ssh/id_rsa") returns error, not file contents
+- 4.5 PENDING CLI guardrails: max 10 tool calls enforced, partial result rendered
+- 4.6 PENDING CLI guardrails: 30s timeout enforced, partial result rendered
+- 4.7 PENDING spec init without token exits 1 with AUTH_REQUIRED
+- 4.8 PENDING Provider timeout → SSE error event emitted before stream closes
+- 4.9 PENDING Usage stats (tokens, cost, round trips) displayed in CLI output
 
 ---
 
@@ -414,25 +465,28 @@ prints matches as they arrive.
 
 **Status:** PENDING
 
-- [ ] 5.1 `zombiectl spec init` calls `/v1/spec/template`, writes returned template — no local generation
-- [ ] 5.2 `zombiectl run --spec FILE --preview` streams file matches from `/v1/spec/preview` SSE
-- [ ] 5.3 Language detection works for Go, Rust, TypeScript, Python, Elixir via manifest file contents
+- [ ] 5.1 `zombiectl spec init --describe "..."` calls `/v1/spec/template`, agent explores repo via tool calls, writes generated spec — no local template generation
+- [ ] 5.2 `zombiectl run --spec FILE --preview` calls `/v1/spec/preview`, agent reads spec + explores repo, outputs file matches with confidence
+- [ ] 5.3 Each tool call (read_file, list_dir, glob) renders as a `→` line in real-time
 - [ ] 5.4 `spec init` without auth token exits 1 with AUTH_REQUIRED error
-- [ ] 5.5 SSE stream renders each match as it arrives — user sees results before stream completes
-- [ ] 5.6 All 377+ existing zombiectl tests pass; new API contract tests added
-- [ ] 5.7 Template endpoint returns 503 (not hang) on LLM timeout; preview stream emits error event
+- [ ] 5.5 Path traversal attempts are rejected by CLI before any file read
+- [ ] 5.6 Agent sessions respect max 10 tool calls + 30s wall time; partial results shown on limit
+- [ ] 5.7 Usage stats (tokens, cost, provider, model, round trips) shown after completion
+- [ ] 5.8 All 377+ existing zombiectl tests pass; new tests for tool loop, SSE parser, path validation
+- [ ] 5.9 Provider timeout/error → SSE error event, CLI shows clear error message
 
 ---
 
 ## 6.0 Out of Scope
 
-- Source file contents sent to server — only manifest file contents (go.mod, Cargo.toml etc.)
-- Streaming the template token-by-token (batch JSON + spinner is sufficient for v1)
-- Workspace-scoped file tree caching on the server
-- Preview for repos not yet connected to a workspace (requires worktree walk milestone)
-- Agent-driven directory ignore list (tracked separately)
-- `extractSpecRefs()`/`matchRefsToFiles()` deletion (retained as @internal; deleted in follow-on cleanup after SSE is stable)
-- Retry on LLM provider failure (server returns 503; client surfaces the error)
+- Write tools (agent can only read files, not modify via relay)
+- Full agent execution (`zombiectl run`) — stays on the pipeline/sandbox path
+- Provider selection UI (workspace config is pre-existing)
+- HTTP/2 support in httpz (separate infra milestone if needed)
+- WebSocket upgrade path (defer until needed)
+- Retry on LLM provider failure (zombied returns error event, CLI surfaces it)
+- Background/async agent sessions (spec init + preview are short-lived, synchronous)
+- Server-side session state (CLI manages conversation history, zombied is stateless)
 
 ---
 
@@ -442,39 +496,52 @@ prints matches as they arrive.
 
 New routes in `router.zig`:
 ```
-spec_template,     // POST /v1/spec/template
-spec_preview,      // POST /v1/spec/preview
+spec_template,    // POST /v1/spec/template
+spec_preview,     // POST /v1/spec/preview
 ```
 
-Handlers call nullclaw agent directly — same pattern as `pipeline/agents_runner.zig`.
-Use `res.chunk()` for SSE streaming (same as `runs/stream.zig`).
-SSE headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache`,
-`Connection: keep-alive`, `X-Accel-Buffering: no`.
+Both routes dispatch to a shared `handleAgentRelay()` function with different system prompts.
+
+Handler flow:
+1. Parse JSON body: extract `messages`, `tools`
+2. Resolve workspace provider via `RuntimeProviderBundle` (same as `agents_runner.zig`)
+3. Attach the route-specific system prompt (spec generation or blast radius)
+4. Forward `{ system, messages, tools }` to provider API
+6. Stream provider response back as SSE via `res.chunk()`:
+   - Provider `tool_use` blocks → `event: tool_use\ndata: {...}\n\n`
+   - Provider text deltas → `event: text_delta\ndata: {...}\n\n`
+   - Provider finish → `event: done\ndata: {usage}\n\n`
+   - Provider error → `event: error\ndata: {message}\n\n`
+
+SSE headers (same pattern as `runs/stream.zig`):
+```
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+X-Accel-Buffering: no
+```
+
+**Cost tracking:** Each provider API response includes usage (input_tokens, output_tokens).
+zombied knows the provider and model pricing. The `done` event includes accumulated cost
+across all round trips for the session. zombied records total usage against workspace billing.
 
 ### CLI (JS)
 
-New helper in `zombiectl/src/lib/http.js`:
-```js
-// streamFetch: POST to URL, consume SSE line protocol, call onEvent per event
-export async function streamFetch(url, payload, headers, onEvent) {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { ...headers, "Content-Type": "application/json", "Accept": "text/event-stream" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) { /* throw ApiError */ }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  // parse SSE line protocol: event: / data: / blank line boundaries
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    // split on double-newline, parse event + data fields, call onEvent
-  }
-}
-```
+New files:
+- `zombiectl/src/lib/agent-loop.js` — agentLoop() orchestrator
+- `zombiectl/src/lib/tool-executors.js` — read_file, list_dir, glob with path validation
+- `zombiectl/src/lib/sse-parser.js` — SSE line protocol parser (or inline in streamFetch)
+
+Modified files:
+- `zombiectl/src/lib/http.js` — add streamFetch()
+- `zombiectl/src/commands/spec_init.js` — replace generateTemplate() with agentLoop()
+- `zombiectl/src/commands/run_preview.js` — replace regex heuristics with agentLoop()
+- `zombiectl/src/commands/core.js` — update run --preview integration
+- `zombiectl/src/cli.js` — remove spec.init from AUTH_EXEMPT_ROUTES
+
+Deleted code:
+- `generateTemplate()` in spec_init.js
+- `extractSpecRefs()`, `matchRefsToFiles()`, `scoreMatch()`, `walkDirForPreview()` in run_preview.js
 
 ## GSTACK REVIEW REPORT
 
@@ -482,8 +549,18 @@ export async function streamFetch(url, payload, headers, onEvent) {
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
 | Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | ISSUES OPEN | 10 issues, 4 critical gaps |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 2 | ISSUES RESOLVED | 8 issues, 0 critical gaps — full rewrite to relay architecture |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
 
-**UNRESOLVED:** 2 (manifest file resolution, extractSpecRefs removal timing)
-**VERDICT:** ENG REVIEW OPEN — address 4 critical gaps before implementation.
+**UNRESOLVED:** 0
+**DECISIONS MADE:**
+1. Option A → relay architecture (zombied as stateless tool-call proxy)
+2. Protocol: multi-request HTTP/1.1 keep-alive (httpz constraint)
+3. Session state: stateless, CLI manages conversation history
+4. Endpoints: two routes POST /v1/spec/template + POST /v1/spec/preview, shared relay logic
+5. Provider: workspace config, not hardcoded Anthropic
+6. Security: CLI-side path validation only (matches Claude Code/OpenCode)
+7. Guardrails: max 10 tool calls + 30s total timeout
+8. Dead code: delete regex heuristics immediately (no @internal retention)
+**VERDICT:** ENG REVIEW CLEAR — spec fully rewritten to relay architecture.
+**NOTE:** Architecture doc (docs/contributing/architecture.md) needs "Agent relay model" section added during implementation.
