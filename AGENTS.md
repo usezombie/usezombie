@@ -284,14 +284,31 @@ Description.
 - `IN_PROGRESS` — Currently being worked on
 - `DONE` or `✅` — Complete, verified, and tested
 
-### Completion Workflow
+### Spec Lifecycle (Directory Gates)
 
-When a spec is fully implemented:
+Specs follow a directory-based lifecycle. These moves are **mandatory gates**, not bookkeeping.
 
+```
+docs/spec/
+├── TEMPLATE.md          ← canonical milestone template
+└── v1/
+    ├── pending/         ← spec created, not yet started
+    ├── active/          ← agent working on it (one worktree per active spec)
+    └── done/            ← all dimensions DONE, PR merged
+```
+
+**Activation (before any implementation):**
+1. Move spec: `pending/` → `active/`
+2. Update spec header: `Status: IN_PROGRESS`, add `Branch: <branch-name>`
+3. Commit the spec move on the working branch
+4. **Gate:** No code changes permitted until these 3 steps are committed.
+
+**Completion (before opening PR):**
 1. Mark all sections and dimensions as `DONE` or `✅`
-2. Update **Status:** to `DONE`
-3. Move file from `docs/spec/v1/active/` to `docs/spec/v1/done/`
-4. Create handoff notes if work continues
+2. Update spec header: `Status: DONE`
+3. Move spec: `active/` → `done/`
+4. Commit the spec move on the feature branch
+5. **Gate:** Do not open PR until `docs/spec/v1/done/` contains the spec in the branch diff.
 
 ### Prohibited
 
@@ -324,7 +341,36 @@ imageoptim <file>
 
 Every non-trivial task must follow this exact state machine:
 
-`PLAN -> EXECUTE -> VERIFY -> DOCUMENT -> COMMIT`
+**With spec** (new milestone or continuing an existing spec):
+
+`CHORE(open) → PLAN → EXECUTE → VERIFY → DOCUMENT → COMMIT → CHORE(close)`
+
+**Without spec** (bug fix, config change, refactor with no milestone):
+
+`PLAN → EXECUTE → VERIFY → DOCUMENT → COMMIT`
+
+**How to decide:** If the work creates a new spec, or continues work on an existing spec in `docs/spec/v1/active/` or `docs/spec/v1/pending/`, use the full lifecycle with CHORE bookends. Otherwise, skip CHORE steps.
+
+**Trigger detection:** Before starting any work on a branch, scan for spec files in the diff (`git log --oneline --name-only`) and in `docs/spec/v1/pending/`. If a spec relates to the current work and is still in `pending/`, CHORE(open) is the mandatory first action — before research, before pushes, before PRs. The user's phrasing does not matter; the presence of a spec is the trigger.
+
+### CHORE (open)
+
+Runs before PLAN. Sets up the spec and workspace. **Required when a spec is involved.**
+
+Required outputs:
+
+- If this is a milestone: create or move spec per Spec Lifecycle above.
+- If starting work: spec moved to `active/`, status `IN_PROGRESS`, worktree created.
+
+Restrictions:
+
+- No code changes yet.
+- Spec must be committed before proceeding.
+
+Exit criteria:
+
+- Spec exists in correct directory (`pending/` if just planning, `active/` if starting work).
+- Worktree and branch ready (if starting work).
 
 ### PLAN
 
@@ -334,11 +380,12 @@ Required outputs:
 - Explicit assumptions list.
 - File/task impact list.
 - Verification plan (commands/tests).
+- Read existing docs before coding when behavior is unclear.
 
 Restrictions:
 
 - No file mutations.
-- No branch/worktree mutation yet.
+- No branch/worktree mutation.
 
 Exit criteria:
 
@@ -372,6 +419,12 @@ Required outputs:
   git diff origin/main | grep '^+[^+]' | grep -Ef docs/greptile-learnings/.greptile-patterns && echo "❌ known anti-pattern matched" || true
   ```
 - Capture failures with exact command and error text.
+- After any refactor: list newly dead code explicitly. Never silently remove without user confirmation:
+  ```
+  NEWLY UNREACHABLE AFTER THIS CHANGE:
+  - [symbol/file]: [why it's now dead]
+  → Remove these? Confirm before I proceed.
+  ```
 
 Restrictions:
 
@@ -405,6 +458,7 @@ Required outputs:
 
 - Focused commit(s), clean message, no unrelated files.
 - Branch/PR metadata prepared with `gh`/`glab` as applicable.
+- Update spec dimensions/sections to `DONE` for completed work.
 
 Restrictions:
 
@@ -414,6 +468,26 @@ Restrictions:
 Exit criteria:
 
 - Commit created and reported.
+
+### CHORE (close)
+
+Runs after the last COMMIT, before opening a PR. **Required when a spec is involved.**
+
+Required outputs:
+
+- All spec dimensions and sections marked `DONE` or `✅`.
+- Spec header `Status: DONE`.
+- Spec moved from `active/` → `done/`.
+- Spec move committed on the feature branch.
+
+Gate:
+
+- Verify `docs/spec/v1/done/` contains the spec file in the branch diff.
+- If the spec is not in `done/` — do not open the PR.
+
+Exit criteria:
+
+- PR opened with spec in `done/` directory.
 
 ## Hard Safety Rules
 
@@ -433,7 +507,7 @@ These rules apply to every task, not just second-model reviews. Non-negotiable.
 
 ### Non-Trivial Definition
 
-A task is **non-trivial** (triggers full PLAN → EXECUTE → VERIFY → DOCUMENT → COMMIT lifecycle) if it:
+A task is **non-trivial** (triggers full lifecycle: CHORE → PLAN → EXECUTE → VERIFY → DOCUMENT → COMMIT → CHORE) if it:
 
 - Touches more than 1 file
 - Introduces a new abstraction or pattern
