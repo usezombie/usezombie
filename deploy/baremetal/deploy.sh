@@ -253,7 +253,9 @@ main() {
 
   resolve_component "$COMPONENT"
 
-  if is_already_installed; then
+  # Skip version check when CI provides a local binary — always do a full
+  # install+restart cycle. The shortcut is only for release-download mode.
+  if [[ -z "$LOCAL_BINARY" ]] && is_already_installed; then
     notify_discord "ok"
     return 0
   fi
