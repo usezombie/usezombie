@@ -181,7 +181,7 @@ restart_services() {
     # before worker, so on first deploy the worker binary does not exist yet.
     if [[ -x "${INSTALL_DIR}/zombied" ]]; then
       sleep 2
-      systemctl start zombied-worker.service || true
+      systemctl restart zombied-worker.service || true
     else
       log "Worker binary not installed yet — skipping worker start."
     fi
