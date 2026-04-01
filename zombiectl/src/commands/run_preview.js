@@ -147,7 +147,6 @@ async function agentPreview(markdown, repoPath, ctx, deps) {
  * Uses regex to extract file refs from spec and match against repo tree.
  */
 async function localPreview(markdown, repoPath, ctx, deps) {
-  const { writeLine, ui } = deps;
   const { walkDirForPreview } = await import("./run_preview_walk.js");
 
   const refs = extractSpecRefs(markdown);

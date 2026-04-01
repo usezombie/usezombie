@@ -14,12 +14,13 @@ describe("parseSseBuffer", () => {
 
   test("parses multiple events", () => {
     const buf = 'event: text_delta\ndata: {"text":"hello"}\n\nevent: done\ndata: {"usage":{"total_tokens":100}}\n\n';
-    const { events, remainder } = parseSseBuffer(buf);
-    expect(events).toHaveLength(2);
-    expect(events[0].type).toBe("text_delta");
-    expect(events[0].data.text).toBe("hello");
-    expect(events[1].type).toBe("done");
-    expect(events[1].data.usage.total_tokens).toBe(100);
+    const result = parseSseBuffer(buf);
+    expect(result.events).toHaveLength(2);
+    expect(result.events[0].type).toBe("text_delta");
+    expect(result.events[0].data.text).toBe("hello");
+    expect(result.events[1].type).toBe("done");
+    expect(result.events[1].data.usage.total_tokens).toBe(100);
+    expect(result.remainder).toBe("");
   });
 
   test("returns remainder for incomplete frame", () => {

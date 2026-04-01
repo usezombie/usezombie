@@ -1,4 +1,4 @@
-import { streamFetch, authHeaders, ApiError } from "./http.js";
+import { streamFetch, authHeaders } from "./http.js";
 import { executeTool } from "./tool-executors.js";
 
 const MAX_TOOL_CALLS = 10;

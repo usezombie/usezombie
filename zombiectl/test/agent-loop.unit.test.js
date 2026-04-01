@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
@@ -17,28 +17,7 @@ function makeTmp() {
 }
 
 /**
- * Create a mock fetch that returns SSE events per round-trip.
- * `rounds` is an array of SSE body strings, one per POST.
- */
-function mockStreamFetch(rounds) {
-  let callIndex = 0;
-  return async (url, opts) => {
-    const body = rounds[Math.min(callIndex++, rounds.length - 1)];
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(encoder.encode(body));
-        controller.close();
-      },
-    });
-    return { ok: true, body, status: 200, headers: new Headers(), getReader: undefined,
-      // fetch Response-compatible shape
-      ...{ body: stream } };
-  };
-}
-
-/**
- * Build a mock fetch that returns an SSE body from a string.
+ * Build a mock fetch response that returns an SSE body from a string.
  */
 function sseResponse(sseBody) {
   const encoder = new TextEncoder();

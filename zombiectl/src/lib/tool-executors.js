@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { resolve, relative, sep } from "node:path";
+import { resolve, sep } from "node:path";
 import { Glob } from "bun";
 
 const MAX_GLOB_RESULTS = 500;

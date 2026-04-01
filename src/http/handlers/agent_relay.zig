@@ -223,7 +223,8 @@ fn handleRelay(
         log.warn("relay.provider_error err={s} workspace_id={s}", .{ @errorName(err), workspace_id });
         // Set SSE headers and send error event
         setSseHeaders(res);
-        const error_event = std.fmt.allocPrint(alloc,
+        const error_event = std.fmt.allocPrint(
+            alloc,
             "event: error\ndata: {{\"message\":\"provider error: {s}\"}}\n\n",
             .{@errorName(err)},
         ) catch return;
@@ -237,7 +238,8 @@ fn handleRelay(
     // Emit tool_use events if the model requested tool calls
     if (response.hasToolCalls()) {
         for (response.tool_calls) |tc| {
-            const event = std.fmt.allocPrint(alloc,
+            const event = std.fmt.allocPrint(
+                alloc,
                 "event: tool_use\ndata: {{\"id\":\"{s}\",\"name\":\"{s}\",\"input\":{s}}}\n\n",
                 .{ tc.id, tc.name, tc.arguments },
             ) catch continue;
@@ -250,7 +252,8 @@ fn handleRelay(
         if (text.len > 0) {
             // Escape the text for JSON embedding
             const escaped = jsonEscapeString(alloc, text) catch text;
-            const event = std.fmt.allocPrint(alloc,
+            const event = std.fmt.allocPrint(
+                alloc,
                 "event: text_delta\ndata: {{\"text\":\"{s}\"}}\n\n",
                 .{escaped},
             ) catch return;
@@ -259,7 +262,8 @@ fn handleRelay(
     }
 
     // Emit done event with usage
-    const done_event = std.fmt.allocPrint(alloc,
+    const done_event = std.fmt.allocPrint(
+        alloc,
         "event: done\ndata: {{\"usage\":{{\"input_tokens\":{d},\"output_tokens\":{d},\"total_tokens\":{d}}},\"provider\":\"{s}\",\"model\":\"{s}\"}}\n\n",
         .{
             response.usage.prompt_tokens,
