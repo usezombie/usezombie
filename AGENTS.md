@@ -506,7 +506,7 @@ Rules:
 - **HTTP calls:** Use native HTTP client, not `curl` subprocess.
 - **File operations:** Use native filesystem APIs, not `find`/`grep`/`sed` subprocess.
 - **Build tools:** Zig build system, not shell scripts wrapping other tools.
-- **Exception:** Personal developer tools (e.g., `pass-cli`, `gh`, `glab`, `oracle`) are allowed because the user chose them. Core product code must not depend on subprocess launches.
+- **Exception:** Personal developer tools (e.g., `op`, `gh`, `glab`, `oracle`) are allowed because the user chose them. Core product code must not depend on subprocess launches.
 
 ```
 ❌ Bad: std.process.Child.init(.{ .argv = &.{"git", "clone", repo_url} })
@@ -866,14 +866,22 @@ cp ~/.config/opencode/opencode.json "$DST/.config/opencode/opencode.json"
 
 Agent-first. One file only: `docs/greptile-learnings/.greptile-patterns`. No category files.
 
-`make lint` scans every PR diff against this file automatically (`_greptile_patterns_check`).
+**Pre-PR (automatic):** `make lint` runs `_greptile_patterns_check` which scans `git diff origin/main` additions against `.greptile-patterns`. No separate step needed.
 
-**When asked to resolve greptile PR comments:**
-1. Fetch inline comments: `gh api repos/OWNER/REPO/pulls/N/reviews/ID/comments`
-2. Fix each finding in the worktree.
-3. For every P0/P1 finding: derive a grep-E regex for the anti-pattern and append it to `.greptile-patterns`.
-4. Verify: `echo 'bad example' | grep -Ef docs/greptile-learnings/.greptile-patterns` must match; the fix must not.
-5. Commit fix + pattern append together.
+**Post-PR — when asked to "resolve greptile on PR #N":**
+
+1. Fetch review ID and inline comments:
+   ```bash
+   gh api repos/OWNER/REPO/pulls/N/reviews | python3 -c "import sys,json; [print(r['id']) for r in json.load(sys.stdin) if 'greptile' in r['user']['login']]"
+   gh api repos/OWNER/REPO/pulls/N/reviews/{ID}/comments
+   ```
+2. Fix each finding in the worktree (P0/P1 required; P2 at discretion).
+3. Run `make lint && make test` and `make test-integration-db` if DB-backed files were touched.
+4. For every P0/P1 finding: derive a grep-E regex and append to `docs/greptile-learnings/.greptile-patterns`. Verify: bad example matches, fix does not.
+5. Reply to each greptile thread: `gh api repos/OWNER/REPO/pulls/N/comments/{comment_id}/replies -f body="..."` — state what was fixed and which commit.
+6. Confirm all threads have replies: re-fetch comments and check.
+7. Commit fix + pattern append together, push the branch.
+8. Report: list each finding, severity, fix applied, pattern added (or why not), and thread reply ID.
 
 ## Skills Policy
 
