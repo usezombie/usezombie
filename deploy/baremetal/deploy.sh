@@ -170,11 +170,13 @@ restart_services() {
   if [[ "$COMPONENT" == "executor" ]]; then
     log "Draining worker before executor restart (Requires= dependency) ..."
     drain_worker
-    # Force-stop if worker is still active (e.g. crash-looping ignores drain).
-    if systemctl is-active --quiet zombied-worker.service 2>/dev/null; then
-      log "Worker still active after drain — force stopping."
-      systemctl stop zombied-worker.service 2>/dev/null || true
-    fi
+    # Unconditionally stop the worker — drain checks is-active which returns
+    # false for "activating (auto-restart)" crash-loops, so drain skips them.
+    # A bare stop here catches every state (active, activating, failed).
+    # Timeout prevents hanging on TimeoutStopSec=300; SIGKILL as fallback.
+    timeout 15 systemctl stop zombied-worker.service 2>/dev/null \
+      || systemctl kill --signal=SIGKILL zombied-worker.service 2>/dev/null \
+      || true
     log "Restarting executor ..."
     systemctl restart zombied-executor.service
     # Only restart the worker if its binary is installed. CI deploys executor
