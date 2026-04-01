@@ -20,10 +20,6 @@ A match fails the lint gate with the anti-pattern shown.
 Append one grep-E regex per line to `.greptile-patterns`. No labels, no comments.
 The regex must match the *diff line* (`+` prefix lines) that represents the anti-pattern.
 
-## VERIFY (run in every PR lifecycle)
+## VERIFY
 
-```bash
-git diff origin/main | grep '^+[^+]' | grep -Ef docs/greptile-learnings/.greptile-patterns \
-  && echo "❌ known anti-pattern — fix before merging" \
-  || echo "✅ no known anti-patterns"
-```
+Run `make lint` — `_greptile_patterns_check` is wired in and handles the scan.
