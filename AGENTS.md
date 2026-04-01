@@ -351,7 +351,9 @@ Every non-trivial task must follow this exact state machine:
 
 **How to decide:** If the work creates a new spec, or continues work on an existing spec in `docs/spec/v1/active/` or `docs/spec/v1/pending/`, use the full lifecycle with CHORE bookends. Otherwise, skip CHORE steps.
 
-**Trigger detection:** Before starting any work on a branch, scan for spec files in the diff (`git log --oneline --name-only`) and in `docs/spec/v1/pending/`. If a spec relates to the current work and is still in `pending/`, CHORE(open) is the mandatory first action — before research, before pushes, before PRs. The user's phrasing does not matter; the presence of a spec is the trigger.
+**Trigger detection (CHORE open):** Before starting any work on a branch, scan for spec files in the diff (`git log --oneline --name-only`) and in `docs/spec/v1/pending/`. If a spec relates to the current work and is still in `pending/`, CHORE(open) is the mandatory first action — before research, before pushes, before PRs. The user's phrasing does not matter; the presence of a spec is the trigger.
+
+**Trigger detection (CHORE close):** After any COMMIT on a branch with a spec in `docs/spec/v1/active/`, immediately proceed to CHORE(close) — do not stop, do not wait for the user to ask. The completion of COMMIT is the trigger. Check: `ls docs/spec/v1/active/`. If a spec file exists there, CHORE(close) is the mandatory next action before reporting completion.
 
 ### CHORE (open)
 
