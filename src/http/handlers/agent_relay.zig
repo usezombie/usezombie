@@ -147,7 +147,7 @@ fn handleRelay(
 
     // Resolve workspace LLM provider credentials
     const provider_name = crypto_store.load(alloc, conn, workspace_id, "llm_provider_preference") catch {
-        common.errorResponse(res, .bad_request, "UZ-RELAY-001", "No LLM provider configured for workspace. Set credentials via PUT /v1/workspaces/{id}/credentials/llm", req_id);
+        common.errorResponse(res, .bad_request, error_codes.ERR_RELAY_NO_PROVIDER, "No LLM provider configured for workspace. Set credentials via PUT /v1/workspaces/{id}/credentials/llm", req_id);
         return;
     };
 

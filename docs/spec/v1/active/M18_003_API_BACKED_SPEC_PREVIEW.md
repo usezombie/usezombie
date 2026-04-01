@@ -260,7 +260,7 @@ the provider. `RuntimeProviderBundle` in `agents_runner.zig` handles this.
 - 2.3.2 DONE SSE events: tool_use, text_delta, done (with usage), error
 - 2.3.3 DONE Provider-agnostic: workspace config determines which LLM to call, cost calculated server-side
 
-### 2.2 What the User Sees
+### 2.4 What the User Sees
 
 **spec init:**
 ```
@@ -564,4 +564,4 @@ Deleted code:
 7. Guardrails: max 10 tool calls + 30s total timeout
 8. Dead code: delete regex heuristics immediately (no @internal retention)
 **VERDICT:** ENG REVIEW CLEAR — spec fully rewritten to relay architecture.
-**NOTE:** Architecture doc (docs/contributing/architecture.md) needs "Agent relay model" section added during implementation.
+**NOTE:** DONE — Architecture doc (docs/contributing/architecture.md) agent relay section added.

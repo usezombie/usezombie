@@ -105,7 +105,7 @@ POST /v1/agent/stream
 | `spec init`, `run --preview` | Agent relay | Short-lived (5-8s), read-only, needs local file access |
 | `run` (full execution) | Pipeline | Long-lived (1-5min), needs write access, sandbox isolation |
 
-**Reference:** Claude Code (~/Projects/claurst/) and OpenCode (~/Projects/opencode/)
+**Reference:** [Claude Code](https://github.com/anthropics/claude-code) and [OpenCode](https://github.com/opencodelabs/opencode)
 use the same pattern: CLI holds tools, model calls them on demand, API is a relay.
 The difference is zombied sits between CLI and provider (because API keys are
 server-side), whereas Claude Code calls the provider directly.
