@@ -127,12 +127,6 @@ Execution pattern:
 - Before creating any new `*.zig` file, read `docs/contributing/ZIG_RULES.md` and follow its rules first.
 - When writing or reviewing any Zig code that calls `conn.query()`: verify `.drain()` is present in the same function before `deinit()`. Run `make check-pg-drain` to confirm. Use `conn.exec()` instead whenever no result rows are needed.
 - For date-time entries in docs/notes, use format `Feb 02, 2026: 10:30 AM`.
-- Sync is mandatory, not user-prompted: after any change under `~/Projects/ai-jumpstart/*` (except `README.md`), sync mapped files to `~/Projects/dotfiles` in the same turn and explicitly report `sync completed + verified`.
-- For Oracle CLI assistance, run once per session:
-
-```bash
-oracle --help
-```
 
 ## Docs Discipline
 
@@ -435,7 +429,7 @@ Exit criteria:
 
 ## Cognitive Discipline
 
-These rules apply to every task, not just second-model reviews. Non-negotiable. Full detail in [`docs/BEHAVIORAL_GUARDRAILS.md`](./docs/BEHAVIORAL_GUARDRAILS.md).
+These rules apply to every task, not just second-model reviews. Non-negotiable.
 
 ### Non-Trivial Definition
 
@@ -558,22 +552,6 @@ Persist durable context in files:
 
 Never rely on prior chat context when a file can hold canonical state.
 
-## Tooling Preflight
-
-At start of a new environment/session, run:
-
-```bash
-for c in gh glab git tmux mise brew bun bunx node npm python go cargo rustc playwright stagehand axe oracle imageoptim trash; do
-  if command -v "$c" >/dev/null 2>&1; then
-    printf "%-12s %s\n" "$c" "$(command -v "$c")"
-  else
-    printf "%-12s NOT_FOUND\n" "$c"
-  fi
-done
-```
-
-Use output to decide workflow, then refresh `docs/tooling-inventory.md` when baseline changes.
-
 ## Git Forge Policy (`gh` vs `glab`)
 
 Detect the forge from `git remote -v` output **before** running any forge command.
@@ -656,19 +634,6 @@ Rules:
 
 ## Tool Commands (Primary)
 
-- Oracle:
-
-```bash
-oracle --help
-```
-
-- Oracle review escalation levels:
-  - **Level 1** — Single-agent deterministic (default, Claude Code solo, no review)
-  - **Level 2** — Inline review lens in this session: say *"Oracle review: [question]"* or *"CTO review: [question]"* — agent picks CTO lens (strategic) or Engineer lens (tactical) based on the question; see `skills/oracle/SKILL.md`
-  - **Level 3** — Cross-model CLI review: `npx @indykish/oracle --engine api --model claude-4.6-sonnet` (escalation: `claude-4.6-opus`)
-  - **Level 4** — Parallel execution in worktrees with multi-agent tmux orchestration
-  - API cost guardrail: explicit user approval required before Level 3 CLI runs
-
 ## Editor Notes (Zed)
 
 If Zed is installed but not on `PATH`, use macOS `open` to target the running instance:
@@ -705,8 +670,6 @@ Rules:
 - One tmux pane per agent role (Oracle/Codex/Claude/tests).
 - No file edits outside current worktree.
 - Merge only after `VERIFY` passes.
-
-Authoritative workflow: `docs/worktree-tmux.md`.
 
 ## QA Testing Decision
 
@@ -745,7 +708,7 @@ MCP note:
 
 ## DX Platform Stack (Default)
 
-See [`docs/STACK.md`](./docs/STACK.md) for full stack defaults (Website, CLI, Desktop, Mobile). Use those defaults unless the user or existing repo constraints require otherwise.
+Use these defaults unless the user or existing repo constraints require otherwise.
 
 ## API Keys And Credentials (Operational Minimum)
 
@@ -812,55 +775,6 @@ qmd search "API design" --all --files --min-score 0.3
 - Blog repo: blank for now.
 - Local scaffold copy in this repo: `runbooks/docs/mac-vm.md`.
 - Codex limits personal tracker: `$HOME/Documents/indykish/codex limits.md`.
-
-## Dotfiles Sync Tracking
-
-Files in this repo (`~/Projects/ai-jumpstart`) that must be synced to `~/Projects/dotfiles` when modified:
-
-| Source (ai-jumpstart) | Destination (dotfiles) | Notes |
-|----------------------|----------------------|-------|
-| `AGENTS.md` | `AGENTS.md` | Oracle operating model |
-| `CLAUDE.md` | `CLAUDE.md` | Thin pointer to AGENTS.md |
-| `.zshrc` | `.zshrc` | Shell configuration |
-| `.npmrc` | `.npmrc` | npm configuration |
-| `skills/**/*.md` | `skills/**/*.md` | All skill definitions |
-| `docs/**/*.md` | `docs/**/*.md` | Stack, guardrails, runbooks |
-| `.config/opencode/` | `.config/opencode/` | opencode configuration |
-
-**Excluded from sync:**
-- `README.md` (repo-specific, not shared)
-
-**File sources:**
-- `AGENTS.md`, `CLAUDE.md`, `.npmrc`, `skills/**` → source is `~/Projects/ai-jumpstart/`
-- `.zshrc` → source is `~/` (home directory)
-- `opencode.json` → source is `~/.config/opencode/opencode.json`
-
-**Tree compare (run to see drift before syncing):**
-```bash
-SRC=~/Projects/ai-jumpstart; DST=~/Projects/dotfiles
-for f in AGENTS.md CLAUDE.md .npmrc; do
-  diff "$SRC/$f" "$DST/$f" > /dev/null 2>&1 && echo "ok      $f" || echo "DRIFT   $f"
-done
-diff ~/.zshrc "$DST/.zshrc" > /dev/null 2>&1 && echo "ok      .zshrc" || echo "DRIFT   .zshrc"
-for f in $(find "$SRC/skills" "$SRC/docs" -name "*.md" | sed "s|$SRC/||"); do
-  diff "$SRC/$f" "$DST/$f" > /dev/null 2>&1 && echo "ok      $f" || echo "DRIFT   $f"
-done
-diff ~/.config/opencode/opencode.json "$DST/.config/opencode/opencode.json" > /dev/null 2>&1 && echo "ok      .config/opencode/opencode.json" || echo "DRIFT   .config/opencode/opencode.json"
-```
-
-**Sync command (after confirming drift):**
-```bash
-SRC=~/Projects/ai-jumpstart; DST=~/Projects/dotfiles
-cp "$SRC/AGENTS.md"   "$DST/AGENTS.md"
-cp "$SRC/CLAUDE.md"   "$DST/CLAUDE.md"
-cp "$SRC/.npmrc"      "$DST/.npmrc"
-cp ~/.zshrc           "$DST/.zshrc"
-rsync -av --relative "$SRC/skills/" "$DST/"
-rsync -av --relative "$SRC/docs/" "$DST/"
-cp ~/.config/opencode/opencode.json "$DST/.config/opencode/opencode.json"
-```
-
-**Note:** `README.md` is excluded from sync (repo-specific).
 
 ## Greptile Learnings Catalog
 
