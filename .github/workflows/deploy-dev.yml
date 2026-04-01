@@ -281,6 +281,13 @@ jobs:
           $SSH "$TARGET" "systemctl is-active zombied-worker.service 2>&1 || echo 'worker: not active (first deploy?)'"
           echo "::endgroup::"
 
+          # Pre-install both binaries before any service restart. This
+          # eliminates drift: even if a restart times out, the on-disk
+          # binaries are always current for the next attempt.
+          echo ">>> pre-installing binaries..."
+          $SSH "$TARGET" "sudo install -m 755 /opt/zombie/bin/zombied-executor /usr/local/bin/zombied-executor"
+          $SSH "$TARGET" "sudo install -m 755 /opt/zombie/bin/zombied          /usr/local/bin/zombied"
+
           # Deploy executor first (worker Requires= it), then worker.
           # DRAIN_TIMEOUT=60 keeps drain within CI budget.
           # deploy.sh sources /opt/zombie/.discord-env for DISCORD_WEBHOOK_URL.
