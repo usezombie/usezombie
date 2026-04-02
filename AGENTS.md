@@ -864,9 +864,10 @@ Agent-first. One file only: `docs/greptile-learnings/.greptile-patterns`. No cat
 
 Execute ALL steps below as a single workflow. Do not stop after fixing code — the reply, pattern, and report steps are mandatory.
 
-1. Fetch greptile review ID and inline comments:
+1. Fetch **ALL** greptile review IDs and inline comments for **every** review (greptile may post multiple reviews as new commits are pushed — process all of them, not just the first):
    ```bash
    gh api repos/OWNER/REPO/pulls/N/reviews --jq '.[] | select(.user.login | test("greptile")) | .id'
+   # Loop through EVERY review ID and fetch its comments:
    gh api repos/OWNER/REPO/pulls/N/reviews/{ID}/comments --jq '.[] | {id, path, body: .body[:150]}'
    ```
 2. Fix each finding in the worktree (P0/P1 required; P2 at discretion)
