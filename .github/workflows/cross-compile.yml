@@ -16,6 +16,15 @@ on:
       - 'build.zig'
       - 'build.zig.zon'
       - '.github/workflows/cross-compile.yml'
+  workflow_call:
+    # Called by release.yml to run verify-runtime-compat against release binaries.
+    # Callers are responsible for building and uploading the artifact named
+    # "zombied-linux-amd64-ci" before invoking this workflow.
+    inputs:
+      skip_build:
+        description: "Set to 'true' to skip build jobs and only run verify-runtime-compat"
+        type: string
+        default: "false"
 
 permissions:
   contents: read
