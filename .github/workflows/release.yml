@@ -341,6 +341,46 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ env.FLY_API_TOKEN }}
 
+      - name: Ensure restart-policy always on prod machines
+        # Set restart-policy=always so Fly self-heals the machine on crash.
+        run: |
+          APP="${{ vars.FLY_APP_PROD }}"
+          for MID in $(flyctl machine list --app "$APP" --json | jq -r '.[].id'); do
+            flyctl machine update "$MID" --restart-policy always --app "$APP" --yes
+          done
+        env:
+          FLY_API_TOKEN: ${{ env.FLY_API_TOKEN }}
+
+      - name: Ensure cloudflared-prod tunnel is running
+        # cloudflared-prod bridges Cloudflare Edge to zombied-prod.internal:3000 over 6PN.
+        # If its machines are stopped/crashed, every /healthz poll returns status=000.
+        # Restart stopped machines or deploy from scratch if no machines exist.
+        run: |
+          TUNNEL_APP="cloudflared-prod"
+          TUNNEL_CONFIG="deploy/fly/cloudflared-prod/fly.toml"
+          echo "Checking tunnel connector ($TUNNEL_APP)..."
+          MACHINES="$(flyctl machine list --app "$TUNNEL_APP" --json 2>/dev/null || echo '[]')"
+          RUNNING="$(echo "$MACHINES" | jq '[.[] | select(.state == "started")] | length')"
+          TOTAL="$(echo "$MACHINES" | jq 'length')"
+          echo "  machines: $RUNNING/$TOTAL running"
+          if [ "$RUNNING" -eq 0 ] && [ "$TOTAL" -gt 0 ]; then
+            echo "  ▲ no running machines — restarting..."
+            for MID in $(echo "$MACHINES" | jq -r '.[].id'); do
+              flyctl machine start "$MID" --app "$TUNNEL_APP" || true
+            done
+            echo "  waiting 15s for tunnel reconnect..."
+            sleep 15
+          elif [ "$TOTAL" -eq 0 ]; then
+            echo "  ▲ no machines found — deploying $TUNNEL_APP from scratch..."
+            flyctl deploy --app "$TUNNEL_APP" --config "$TUNNEL_CONFIG" --wait-timeout 60 || true
+            echo "  waiting 15s for tunnel reconnect..."
+            sleep 15
+          else
+            echo "  ✓ tunnel is running"
+          fi
+        env:
+          FLY_API_TOKEN: ${{ env.FLY_API_TOKEN }}
+
       - name: Verify PROD API rollout via Cloudflare Tunnel
         run: |
           echo "Waiting for PROD API..."
