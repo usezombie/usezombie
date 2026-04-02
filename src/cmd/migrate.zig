@@ -27,6 +27,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
                 continue;
             }
             log.err("migrate.db_connect status=fail error_code={s} role=migrator err={s}", .{ error_codes.ERR_STARTUP_DB_CONNECT, @errorName(err) });
+            preflight.deinitOtelLogs();
             std.process.exit(1);
         };
 
@@ -42,6 +43,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
                 continue;
             }
             log.err("migrate.run status=fail error_code={s} err={s}", .{ error_codes.ERR_STARTUP_MIGRATION_CHECK, @errorName(err) });
+            preflight.deinitOtelLogs();
             std.process.exit(1);
         };
         pool.deinit();
