@@ -23,7 +23,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
                 log.warn("migrate.retry status=connect_failure attempt={d}/{d} err={s} delay_ms={d}", .{
                     attempt, max_migrate_attempts, @errorName(err), retry_delay_ms,
                 });
-                std.time.sleep(retry_delay_ms * std.time.ns_per_ms);
+                std.Thread.sleep(retry_delay_ms * std.time.ns_per_ms);
                 attempt += 1;
                 continue;
             }
@@ -37,7 +37,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
                 log.warn("migrate.retry status=transient_failure attempt={d}/{d} err={s} delay_ms={d}", .{
                     attempt, max_migrate_attempts, @errorName(err), retry_delay_ms,
                 });
-                std.time.sleep(retry_delay_ms * std.time.ns_per_ms);
+                std.Thread.sleep(retry_delay_ms * std.time.ns_per_ms);
                 attempt += 1;
                 continue;
             }
