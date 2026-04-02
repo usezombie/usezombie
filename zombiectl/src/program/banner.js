@@ -27,8 +27,10 @@ export function printBanner(stream, version, opts = {}) {
 export function printPreReleaseWarning(stream, opts = {}) {
   const noColor = opts.noColor || false;
   const jsonMode = opts.jsonMode || false;
+  const ttyOnly = opts.ttyOnly || false;
 
   if (jsonMode) return;
+  if (ttyOnly) return;
 
   if (noColor) {
     stream.write(`\n[PRE-RELEASE] This is a pre-release build for early access testing.\n`);

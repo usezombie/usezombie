@@ -44,7 +44,7 @@ export async function runCli(argv, io = {}) {
   const { global, rest } = parseGlobalArgs(argv, env);
   const noColor = Boolean(env.NO_COLOR === "1" || env.NO_COLOR === "true");
 
-  printPreReleaseWarning(stderr, { noColor, jsonMode: global.json });
+  printPreReleaseWarning(stderr, { noColor, jsonMode: global.json, ttyOnly: !stderr.isTTY });
 
   if (global.version) {
     if (global.json) {
