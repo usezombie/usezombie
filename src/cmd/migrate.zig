@@ -18,7 +18,6 @@ pub fn run(alloc: std.mem.Allocator) !void {
     while (true) {
         log.info("migrate.start status=connecting role=migrator attempt={d}/{d}", .{ attempt, max_migrate_attempts });
         const pool = db.initFromEnvForRole(alloc, .migrator) catch |err| {
-            log.err("migrate.db_connect status=fail error_code={s} role=migrator err={s}", .{ error_codes.ERR_STARTUP_DB_CONNECT, @errorName(err) });
             if (attempt < max_migrate_attempts and isRetryable(err)) {
                 log.warn("migrate.retry status=connect_failure attempt={d}/{d} err={s} delay_ms={d}", .{
                     attempt, max_migrate_attempts, @errorName(err), retry_delay_ms,
@@ -27,6 +26,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
                 attempt += 1;
                 continue;
             }
+            log.err("migrate.db_connect status=fail error_code={s} role=migrator err={s}", .{ error_codes.ERR_STARTUP_DB_CONNECT, @errorName(err) });
             std.process.exit(1);
         };
 
