@@ -407,8 +407,8 @@ jobs:
           for i in $(seq 1 12); do
             OUT="$(flyctl machine list --app "${APP}" || true)"
             echo "${OUT}"
-            if echo "${OUT}" | grep -qiE '\b(started|stopped)\b'; then
-              echo "✓ at least one machine is in a settled state (started/stopped) for ${APP}"
+            if echo "${OUT}" | grep -qiE '\bstarted\b'; then
+              echo "✓ at least one machine is in started state for ${APP}"
               exit 0
             fi
             echo "attempt ${i}/12: no settled machine yet; retrying in 5s..."

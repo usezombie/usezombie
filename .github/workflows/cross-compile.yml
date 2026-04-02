@@ -37,6 +37,7 @@ jobs:
   # x86_64: build inside Alpine container — musl-native OpenSSL, fully static output.
   # JS actions work inside Alpine on x86_64 runners.
   cross-compile-linux-x86:
+    if: inputs.skip_build != 'true'
     runs-on: ubuntu-latest
     container:
       image: mirror.gcr.io/library/alpine:3.21
@@ -86,6 +87,7 @@ jobs:
   # then invoke `docker run alpine:3.21` for the Zig build step to get
   # musl-native static OpenSSL — the same pattern as `make build-linux-alpine`.
   cross-compile-linux-aarch64:
+    if: inputs.skip_build != 'true'
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
@@ -174,6 +176,7 @@ jobs:
             sh -c 'ldd /test/zombied 2>&1 | grep -q "not a dynamic executable" && echo "✓ trixie-slim: static binary confirmed" || (echo "FAIL: dynamic deps found in trixie-slim"; ldd /test/zombied 2>&1; exit 1)'
 
   cross-compile-macos:
+    if: inputs.skip_build != 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
