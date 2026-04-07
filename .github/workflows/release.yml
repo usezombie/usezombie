@@ -559,7 +559,9 @@ jobs:
       - name: Deploy canary worker
         run: |
           KEY_FILE="$RUNNER_TEMP/worker-canary.key"
-          printf '%s\n' "$WORKER_SSH_KEY" > "$KEY_FILE"
+          printf '%s\n' "$WORKER_SSH_KEY" | \
+            sed 's/-----BEGIN OPENSSH PRIVATE KEY----- /-----BEGIN OPENSSH PRIVATE KEY-----\n/;s/ -----END OPENSSH PRIVATE KEY-----/\n-----END OPENSSH PRIVATE KEY-----/' | \
+            awk 'NR==2{gsub(/ /,"\n")} 1' > "$KEY_FILE"
           chmod 600 "$KEY_FILE"
           VERSION="${GITHUB_REF#refs/tags/}"
           HOST="${{ steps.canary.outputs.host }}"
@@ -615,7 +617,9 @@ jobs:
             echo "Deploying $NAME ($HOST) [$((i+1))/$TOTAL] ..."
             KEY_FILE="$RUNNER_TEMP/worker-${NAME}.key"
             SSH_KEY=$(op read "op://${{ vars.VAULT_PROD }}/${VAULT_KEY}/ssh-private-key")
-            printf '%s\n' "$SSH_KEY" > "$KEY_FILE"
+            printf '%s\n' "$SSH_KEY" | \
+              sed 's/-----BEGIN OPENSSH PRIVATE KEY----- /-----BEGIN OPENSSH PRIVATE KEY-----\n/;s/ -----END OPENSSH PRIVATE KEY-----/\n-----END OPENSSH PRIVATE KEY-----/' | \
+              awk 'NR==2{gsub(/ /,"\n")} 1' > "$KEY_FILE"
             chmod 600 "$KEY_FILE"
 
             if ssh -i "$KEY_FILE" -o StrictHostKeyChecking=no "$HOST" \

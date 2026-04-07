@@ -256,7 +256,9 @@ jobs:
         timeout-minutes: 8
         run: |
           ANT_KEY="$RUNNER_TEMP/dev-worker-ant.key"
-          printf '%s\n' "$WORKER_ANT_SSH_KEY" > "$ANT_KEY"
+          printf '%s\n' "$WORKER_ANT_SSH_KEY" | \
+            sed 's/-----BEGIN OPENSSH PRIVATE KEY----- /-----BEGIN OPENSSH PRIVATE KEY-----\n/;s/ -----END OPENSSH PRIVATE KEY-----/\n-----END OPENSSH PRIVATE KEY-----/' | \
+            awk 'NR==2{gsub(/ /,"\n")} 1' > "$ANT_KEY"
           chmod 600 "$ANT_KEY"
           SSH="ssh -i $ANT_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=6"
           SCP="scp -i $ANT_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=15"
