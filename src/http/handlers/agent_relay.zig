@@ -1,7 +1,8 @@
-//! M18_003: Stateless agent relay handler.
+//! Stateless LLM relay primitive.
 //! Accepts CLI messages + tool definitions, forwards to workspace LLM provider,
 //! streams response back as SSE events (tool_use, text_delta, done, error).
-//! zombied is a pure pass-through: adds system prompt + API key, forwards, streams back.
+//! zombied is a pure pass-through: adds a caller-supplied system prompt + API
+//! key, forwards, streams back.
 //!
 //! Streaming handler — does not use hx.authenticated(). Blocks in a loop calling
 //! res.chunk(); arena lifetime spans the entire stream.
@@ -23,36 +24,7 @@ const ToolSpec = providers.ToolSpec;
 
 const log = std.log.scoped(.http);
 
-const SPEC_TEMPLATE_SYSTEM_PROMPT =
-    \\You are a spec generation agent for the zombie platform.
-    \\Explore the user's repo to understand its language, ecosystem, and structure.
-    \\Use the provided tools (read_file, list_dir, glob) to examine the codebase.
-    \\Generate a complete milestone spec using the canonical format.
-    \\Include concrete sections, dimensions, acceptance criteria, and verification gates.
-    \\Base your output on what you actually find in the repo, not assumptions.
-;
-
-const SPEC_PREVIEW_SYSTEM_PROMPT =
-    \\You are a blast radius analyzer for the zombie platform.
-    \\Read the spec provided, then explore the user's repo using the provided tools.
-    \\Predict which files the agent will touch when implementing this spec.
-    \\Output each match with confidence (high, medium, low) and a brief reason.
-    \\Format: one line per file, e.g. "● src/http/router.zig  high  — new route variants needed"
-;
-
 const MAX_ROUND_TRIPS: u32 = 10;
-
-pub const Mode = enum {
-    spec_template,
-    spec_preview,
-
-    pub fn systemPrompt(self: Mode) []const u8 {
-        return switch (self) {
-            .spec_template => SPEC_TEMPLATE_SYSTEM_PROMPT,
-            .spec_preview => SPEC_PREVIEW_SYSTEM_PROMPT,
-        };
-    }
-};
 
 // ── JSON request payload ────────────────────────────────────────────────────
 
@@ -77,19 +49,14 @@ const RelayRequest = struct {
     tools: []const JsonTool = &.{},
 };
 
-// ── Handler entry points ────────────────────────────────────────────────────
+// ── Relay primitive ─────────────────────────────────────────────────────────
 
-pub fn innerSpecTemplate(hx: hx_mod.Hx, req: *httpz.Request, workspace_id: []const u8) void {
-    innerRelay(hx, req, workspace_id, .spec_template);
-}
-
-pub fn innerSpecPreview(hx: hx_mod.Hx, req: *httpz.Request, workspace_id: []const u8) void {
-    innerRelay(hx, req, workspace_id, .spec_preview);
-}
-
-// ── Shared relay logic ──────────────────────────────────────────────────────
-
-fn innerRelay(hx: hx_mod.Hx, req: *httpz.Request, workspace_id: []const u8, mode: Mode) void {
+pub fn innerRelay(
+    hx: hx_mod.Hx,
+    req: *httpz.Request,
+    workspace_id: []const u8,
+    system_prompt: []const u8,
+) void {
     if (!common.requireUuidV7Id(hx.res, hx.req_id, workspace_id, "workspace_id")) return;
 
     const body = req.body() orelse {
@@ -161,9 +128,6 @@ fn innerRelay(hx: hx_mod.Hx, req: *httpz.Request, workspace_id: []const u8, mode
     };
     defer runtime_provider.deinit();
     const provider_i = runtime_provider.provider();
-
-    // Build ChatRequest: system prompt + CLI messages + tool specs
-    const system_prompt = mode.systemPrompt();
 
     // Convert JSON messages to ChatMessage array
     var messages: std.ArrayList(ChatMessage) = .{};
@@ -310,15 +274,16 @@ fn jsonEscapeString(alloc: std.mem.Allocator, input: []const u8) ![]const u8 {
     return buf.toOwnedSlice(alloc);
 }
 
-// ── Tests ───────────────────────────────────────────────────────────────────
-
-test "Mode.systemPrompt returns distinct prompts" {
-    const t = Mode.spec_template.systemPrompt();
-    const p = Mode.spec_preview.systemPrompt();
-    try std.testing.expect(t.len > 0);
-    try std.testing.expect(p.len > 0);
-    try std.testing.expect(!std.mem.eql(u8, t, p));
+// Invariant #3 — v1 spec-specific system prompts must not reappear.
+comptime {
+    const self = @This();
+    if (@hasDecl(self, "SPEC_TEMPLATE_SYSTEM_PROMPT")) @compileError("SPEC_TEMPLATE_SYSTEM_PROMPT must not exist (removed in M29_002)");
+    if (@hasDecl(self, "SPEC_PREVIEW_SYSTEM_PROMPT")) @compileError("SPEC_PREVIEW_SYSTEM_PROMPT must not exist (removed in M29_002)");
+    if (@hasDecl(self, "innerSpecTemplate")) @compileError("innerSpecTemplate must not exist (removed in M29_002)");
+    if (@hasDecl(self, "innerSpecPreview")) @compileError("innerSpecPreview must not exist (removed in M29_002)");
 }
+
+// ── Tests ───────────────────────────────────────────────────────────────────
 
 test "jsonEscapeString escapes newlines and quotes" {
     const alloc = std.testing.allocator;

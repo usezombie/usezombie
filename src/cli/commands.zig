@@ -35,8 +35,12 @@ test "parseSubcommandName defaults to serve for unknown values" {
 
 test "Subcommand enum has no run variant" {
     const fields = @typeInfo(Subcommand).@"enum".fields;
-    inline for (fields) |f| {
-        if (std.mem.eql(u8, f.name, "run")) @compileError("Subcommand.run must not exist (removed in M29_002)");
+    comptime var has_run = false;
+    comptime {
+        for (fields) |f| {
+            if (std.mem.eql(u8, f.name, "run")) has_run = true;
+        }
     }
+    try std.testing.expect(!has_run);
     try std.testing.expectEqual(@as(usize, 5), fields.len);
 }
