@@ -1,0 +1,105 @@
+/v1/webhooks/{zombie_id}/approval:
+  post:
+    operationId: approval_webhook
+    summary: Resolve a zombie approval gate
+    description: Called by a human (via email link or Slack action) to approve or reject a paused zombie. Body is HMAC-signed
+      by the issuer; the signature is verified against the zombie's webhook secret.
+    tags:
+    - Webhooks
+    parameters:
+    - name: zombie_id
+      in: path
+      required: true
+      description: UUIDv7 of the zombie.
+      schema:
+        type: string
+        format: uuid
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+            - decision
+            - signature
+            properties:
+              decision:
+                type: string
+                enum:
+                - approved
+                - rejected
+              signature:
+                type: string
+                description: HMAC signature over the body.
+              reason:
+                type: string
+    responses:
+      '200':
+        description: OK
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+      '400':
+        $ref: ../components/responses.yaml#/components/responses/Error
+      '401':
+        $ref: ../components/responses.yaml#/components/responses/Error
+      '404':
+        $ref: ../components/responses.yaml#/components/responses/Error
+    security: []
+/v1/webhooks/{zombie_id}/grant-approval:
+  post:
+    operationId: grant_approval_webhook
+    summary: Approve or reject an integration grant request
+    description: Human-in-the-loop approval webhook for integration grant requests (Slack, GitHub, etc.). HMAC-signed.
+    tags:
+    - Webhooks
+    parameters:
+    - name: zombie_id
+      in: path
+      required: true
+      description: UUIDv7 of the zombie.
+      schema:
+        type: string
+        format: uuid
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+            - grant_id
+            - decision
+            - signature
+            properties:
+              grant_id:
+                type: string
+              decision:
+                type: string
+                enum:
+                - approved
+                - rejected
+              signature:
+                type: string
+    responses:
+      '200':
+        description: OK
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+      '400':
+        $ref: ../components/responses.yaml#/components/responses/Error
+      '401':
+        $ref: ../components/responses.yaml#/components/responses/Error
+      '404':
+        $ref: ../components/responses.yaml#/components/responses/Error
+    security: []

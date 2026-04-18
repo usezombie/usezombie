@@ -1,0 +1,78 @@
+/v1/workspaces/{workspace_id}/spec/preview:
+  post:
+    operationId: spec_preview
+    summary: 'Agent relay: preview a spec'
+    description: Internal endpoint used by the agent relay to preview a spec before execution. Request/response shapes are
+      version-coupled to the relay.
+    tags:
+    - Spec
+    parameters:
+    - name: workspace_id
+      in: path
+      required: true
+      description: UUIDv7 of the workspace.
+      schema:
+        type: string
+        format: uuid
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            description: Relay-specific request payload.
+    responses:
+      '200':
+        description: OK
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Preview payload.
+      '400':
+        $ref: ../components/responses.yaml#/components/responses/Error
+      '401':
+        $ref: ../components/responses.yaml#/components/responses/Error
+      '403':
+        $ref: ../components/responses.yaml#/components/responses/Error
+      '404':
+        $ref: ../components/responses.yaml#/components/responses/Error
+/v1/workspaces/{workspace_id}/spec/template:
+  post:
+    operationId: spec_template
+    summary: 'Agent relay: fetch a spec template'
+    description: Internal endpoint used by the agent relay to materialise a spec template for a given workspace. Request/response
+      shapes are version-coupled to the relay.
+    tags:
+    - Spec
+    parameters:
+    - name: workspace_id
+      in: path
+      required: true
+      description: UUIDv7 of the workspace.
+      schema:
+        type: string
+        format: uuid
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            description: Relay-specific request payload.
+    responses:
+      '200':
+        description: OK
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Rendered template payload.
+      '400':
+        $ref: ../components/responses.yaml#/components/responses/Error
+      '401':
+        $ref: ../components/responses.yaml#/components/responses/Error
+      '403':
+        $ref: ../components/responses.yaml#/components/responses/Error
+      '404':
+        $ref: ../components/responses.yaml#/components/responses/Error
