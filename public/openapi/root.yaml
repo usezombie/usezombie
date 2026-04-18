@@ -132,6 +132,8 @@ paths:
     $ref: ./paths/slack.yaml#/~1v1~1slack~1install
   /v1/slack/interactions:
     $ref: ./paths/slack.yaml#/~1v1~1slack~1interactions
+  /v1/webhooks/svix/{zombie_id}:
+    $ref: ./paths/webhooks.yaml#/~1v1~1webhooks~1svix~1{zombie_id}
   /v1/webhooks/{zombie_id}:
     $ref: ./paths/zombies.yaml#/~1v1~1webhooks~1{zombie_id}
   /v1/webhooks/{zombie_id}/approval:

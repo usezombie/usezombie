@@ -401,3 +401,39 @@ test "custom-method subpath: empty ids are rejected" {
     try std.testing.expect(match("/v1/workspaces//pause") == null);
     try std.testing.expect(match("/v1/workspaces//sync") == null);
 }
+
+// Every entry in the route manifest must be dispatchable through match().
+// Guards the in-repo invariant that route_manifest.zig stays aligned with
+// router.zig's match() body. The OpenAPI ↔ manifest half of the sync is
+// enforced by scripts/check_openapi_sync.py (run via `make check-openapi-sync`).
+test "route_manifest: every entry dispatches through match()" {
+    const manifest = @import("route_manifest.zig");
+    var buf: [256]u8 = undefined;
+
+    for (manifest.entries) |entry| {
+        // Substitute every `{...}` placeholder with a single alnum segment
+        // that satisfies isSingleSegment / the various matcher format checks.
+        var out_len: usize = 0;
+        var i: usize = 0;
+        while (i < entry.path.len) : (i += 1) {
+            if (entry.path[i] == '{') {
+                // Skip to '}' and emit a placeholder.
+                while (i < entry.path.len and entry.path[i] != '}') : (i += 1) {}
+                buf[out_len] = 'x';
+                out_len += 1;
+            } else {
+                buf[out_len] = entry.path[i];
+                out_len += 1;
+            }
+        }
+        const concrete = buf[0..out_len];
+
+        if (match(concrete) == null) {
+            std.debug.print(
+                "route_manifest: {s} {s} (concrete: {s}) did not dispatch\n",
+                .{ entry.method, entry.path, concrete },
+            );
+            return error.ManifestEntryDoesNotDispatch;
+        }
+    }
+}
