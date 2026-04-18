@@ -50,11 +50,13 @@
 | `.redocly.yaml` | CREATE | Lint config: require `operationId`, `summary`, `tags`, `ErrorBody` for 4xx/5xx (subsumes existing `check_openapi_errors.py`) |
 | `scripts/check_openapi_sync.py` | CREATE | Router ↔ OpenAPI path-parity gate (≤ 60 lines Python; matches existing `scripts/check_openapi_errors.py` pattern) |
 | `Makefile` / `make/quality.mk` | MODIFY | Add `make openapi` (bundle + lint) and `make check-openapi-sync` (parity gate); fold existing `check-openapi-errors` into `make openapi` Redocly lint |
-| `.github/workflows/ci.yml` | MODIFY | Wire `make check-openapi-sync` into the lint job; add "bundled artifact is in sync" check that re-bundles and asserts `public/openapi.json` is unchanged |
+| `.github/workflows/lint.yml` | MODIFY | Add a `lint-openapi` job: `bun install --frozen-lockfile` at root (picks up `@redocly/cli` devDependency), run `make openapi` (assert clean-rebuild matches committed `public/openapi.json`), run `make check-openapi-sync`. Wired into the existing `lint` aggregator job's `needs:` list. |
 | `docs/REST_API_DESIGN_GUIDELINES.md` | MODIFY | Document the split-file workflow: "edit YAML under `public/openapi/`, run `make openapi`. Never hand-edit `public/openapi.json`." |
 | `public/AGENTS.md` | PRE-EXISTING | Index of agent-facing public surfaces (llms.txt, skill.md, agent-manifest.json, heartbeat, openapi.json). Created as a prerequisite to this spec; referenced from `public/openapi/AGENTS.md`. |
 | `public/openapi/AGENTS.md` | CREATE | Agent-edit recipe for the split OpenAPI: rename-path / append-path / remove-path / update-description step-by-step, plus the "never hand-edit `public/openapi.json`" rule. Replaces the originally proposed `README.md`. |
-| `scripts/check_openapi_errors.py` | DELETE | Superseded by Redocly lint rules in `.redocly.yaml` |
+| `package.json` (root) | MODIFY | Add `@redocly/cli` (^2.28.1) to root `devDependencies`. `bun install` at repo root exposes the binary as `bun x redocly` / `./node_modules/.bin/redocly`; CI uses the same path. Frozen-lockfile install in CI pins the version. |
+| `src/http/router.zig` | MODIFY | Add `pub const route_manifest = [_]RouteManifestEntry{…}` — canonical list of every `METHOD /path` the router matches, with `{param}` placeholders. Source of truth for `scripts/check_openapi_sync.py`. See §3 for rationale (regex-scraping the `match()` body is brittle; an explicit manifest is stable and self-documenting). |
+| `scripts/check_openapi_errors.py` | KEEP (unchanged) | Retained as a second-stage check. Redocly's built-in rules do **not** subsume the bespoke checks this script enforces: `application/problem+json` content-type, required `ErrorBody` fields (`docs_uri`, `title`, `detail`, `error_code`, `request_id`), the `/readyz 503` allowlist, and "the old `Error` schema is gone". Called from `make openapi` after Redocly lint. See §2 for the invocation order. |
 
 ## Applicable Rules
 
@@ -116,20 +118,35 @@ components:
 |-----|--------|--------|-------|----------|-----------|
 | 1.1 | PENDING | `public/openapi/` directory | Split existing 4.3K-line `openapi.json` into YAML files by tag | Every path in the original `openapi.json` appears in exactly one `paths/*.yaml`; every shared schema appears in `components/schemas.yaml` | manual diff |
 | 1.2 | PENDING | `public/openapi/root.yaml` | YAML parse | Parses cleanly; all `$ref` targets resolve to existing files | unit (redocly lint) |
-| 1.3 | PENDING | `make openapi` after split | Run bundler against split source | `public/openapi.json` byte-diff against the pre-split version is empty after `jq -S` canonicalization (key ordering may differ; content must not) | integration |
+| 1.3 | PENDING | `make openapi` after mechanical split | Run bundler against split source | `public/openapi.json` byte-diff against the pre-split version is empty after `jq -S` canonicalization — the split commit MUST preserve content exactly. Lint-blocking content bugs (see Dim 1.4) are fixed in a separate follow-up commit so this byte-parity claim is auditable in history. | integration |
+| 1.4 | PENDING | Tag normalization follow-up commit | Recon surfaced two content bugs that will fail Redocly's `operation-tag-defined: error`: (a) `/v1/workspaces/{id}/zombies/{id}/stop` uses tag `"Zombie"` (singular typo), (b) `/v1/workspaces/{id}/activity` uses undeclared tag `"Activity"`. Fix: rename `"Zombie"` → `"Zombies"` in the `/stop` operation; add `"Activity"` to the top-level `tags` array in `root.yaml` (or rename to `"Workspaces"` if we decide activity is a workspace sub-feature — decision captured in the Ripley's Log). | Committed as a narrow follow-up after the byte-parity split. `make openapi` + Redocly lint pass. | integration |
 
 ### §2 — Bundler + lint (`make openapi`)
 
 **Status:** PENDING
 
-New make target that runs `@redocly/cli` to (a) bundle the YAML tree into `public/openapi.json`, (b) lint the bundled output. Replaces the existing `check-openapi-errors` target by folding its rules into the Redocly config.
+New make target that (a) bundles the YAML tree into `public/openapi.json` via Redocly CLI, (b) runs Redocly's structural lint, (c) runs the existing `scripts/check_openapi_errors.py` against the bundled output. The existing `make check-openapi-errors` target is folded in here; the standalone target is removed.
+
+**Why `check_openapi_errors.py` is kept (reversed from the first draft of this spec):** Redocly's built-in rules assert that a 4xx/5xx response exists, but do NOT assert the bespoke contract this codebase relies on:
+
+- `application/problem+json` media type (RFC 7807).
+- Required `ErrorBody` properties: `docs_uri`, `title`, `detail`, `error_code`, `request_id`.
+- Deprecated `Error` schema is absent.
+- `/readyz 503` is explicitly allowlisted because its body is the same `ReadyzBody` schema as its 200 (not an error envelope).
+
+Porting these into a custom Redocly plugin would be strictly more code than keeping the 130-line Python script. The script stays; it just moves from `make lint-zig` into `make openapi` so it runs against every new bundle.
+
+**Redocly binary resolution:** `@redocly/cli` is declared in root `package.json` devDependencies; `bun install` at repo root exposes it via `./node_modules/.bin/redocly`. Locally and in CI, the make target invokes `bun x redocly` (bun-first per existing repo convention; falls back through `$PATH` if bun resolves a global install).
 
 **`make openapi`:**
 
 ```make
-openapi:  ## Bundle public/openapi/ into public/openapi.json and lint
-	npx @redocly/cli@latest bundle public/openapi/root.yaml -o public/openapi.json
-	npx @redocly/cli@latest lint public/openapi.json --config .redocly.yaml
+REDOCLY := bun x redocly
+
+openapi:  ## Bundle public/openapi/ into public/openapi.json, lint, and run bespoke error-schema checks
+	$(REDOCLY) bundle public/openapi/root.yaml -o public/openapi.json
+	$(REDOCLY) lint public/openapi.json --config .redocly.yaml
+	python3 scripts/check_openapi_errors.py
 ```
 
 **`.redocly.yaml` (minimum):**
@@ -140,92 +157,97 @@ rules:
   operation-operationId: error
   operation-summary: error
   operation-tag-defined: error
-  # Subsumes check_openapi_errors.py: every 4xx/5xx uses ErrorBody
   operation-4xx-response: error
   no-invalid-media-type-examples: error
+  # Structural checks only — content checks (ErrorBody fields, problem+json
+  # media type, readyz 503 allowlist) live in scripts/check_openapi_errors.py.
 ```
 
 **Dimensions:**
 
 | Dim | Status | Target | Input | Expected | Test type |
 |-----|--------|--------|-------|----------|-----------|
-| 2.1 | PENDING | `make openapi` | clean YAML source | Exits 0; `public/openapi.json` regenerated; lint passes | integration |
-| 2.2 | PENDING | `make openapi` with a bad 4xx response | Edit a path to reference a schema that is not `ErrorBody` | Redocly lint fails with the specific path + rule name | integration |
+| 2.1 | PENDING | `make openapi` | clean YAML source | Exits 0; `public/openapi.json` regenerated; Redocly lint passes; `check_openapi_errors.py` prints `OK` | integration |
+| 2.2 | PENDING | `make openapi` with a bad 4xx response | Edit a path to reference a schema that is not `ErrorBody` | `check_openapi_errors.py` fails with the specific path + expected schema (Redocly's structural pass is insufficient here — this is what the Python script catches) | integration |
 | 2.3 | PENDING | `make openapi` idempotency | Run `make openapi` twice in a row | Second run produces byte-identical output to the first | unit |
+| 2.4 | PENDING | `make openapi` with an undeclared tag | Add a path with `tags: [MadeUp]` without declaring `MadeUp` in `root.yaml` | Redocly lint fails with `operation-tag-defined` citing the exact path | integration |
 
 ### §3 — Router ↔ OpenAPI sync gate (`make check-openapi-sync`)
 
 **Status:** PENDING
 
-Python script (~60 lines, matches existing `scripts/check_openapi_errors.py` pattern) that asserts path parity between `src/http/router.zig` and `public/openapi.json`. Runs in CI on every PR.
+Python script that asserts **(method, path) parity** between `src/http/router.zig` and `public/openapi.json`. Runs in CI on every PR.
 
-**`scripts/check_openapi_sync.py` (sketch):**
+**Design decision (reversed from the first draft):** Regex-scraping the body of `match()` in `router.zig` is not viable — routes resolve through `std.mem.eql`, `std.mem.startsWith`, and helper calls like `matchWorkspaceSuffix(path, "/credentials/llm")`. The URL shape lives across multiple files and hand-written helpers; no regex is both precise and complete.
+
+**The manifest approach.** Add a small, explicitly-maintained constant at the top of `src/http/router.zig`:
+
+```zig
+pub const RouteManifestEntry = struct { method: []const u8, path: []const u8 };
+
+// Canonical route manifest. One entry per (method, path) the server matches.
+// Paths use {param} placeholders (OpenAPI style). Kept in sync with both
+// `match()` below and public/openapi.json — `make check-openapi-sync` asserts
+// (method, path) parity against the bundled OpenAPI spec.
+pub const route_manifest = [_]RouteManifestEntry{
+    .{ .method = "GET",    .path = "/healthz" },
+    .{ .method = "GET",    .path = "/readyz" },
+    .{ .method = "GET",    .path = "/metrics" },
+    .{ .method = "POST",   .path = "/v1/auth/sessions" },
+    .{ .method = "GET",    .path = "/v1/auth/sessions/{session_id}" },
+    .{ .method = "POST",   .path = "/v1/auth/sessions/{session_id}/complete" },
+    // … one line per route, ~48 entries total as of v0.18.0 …
+};
+```
+
+Why this is better than regex-scraping:
+
+- **Self-documenting.** A reader sees the full public URL surface in one place.
+- **Stable.** Refactors to the matcher internals don't break the sync gate.
+- **Trivially parseable.** The Python script parses with one regex: `\.method = "(\w+)", \.path = "([^"]+)"`.
+- **Cheap to maintain.** Engineers already add inline `// METHOD /path` comments next to enum variants; formalising them as a const array is a one-time extraction.
+
+An initial unit test in `router.zig` asserts every manifest entry is dispatchable (i.e. `match(manifest_entry.path_with_concrete_ids)` returns non-null) — guards the in-file invariant.
+
+**`scripts/check_openapi_sync.py`:**
 
 ```python
 #!/usr/bin/env python3
-"""Fail if router.zig paths and openapi.json paths diverge.
-
-ASSUMPTION: src/http/router.zig registers every /v1 route as a LITERAL string
-match arm of the form `"/v1/..." =>`. This script's regex cannot see through
-string interpolation, variable-based path construction, comptime concatenation,
-or macro-expanded route tables. If router.zig is ever refactored to register
-routes dynamically, this gate will silently drop coverage — it will still exit
-0 but compare an incomplete set.
-
-DEFENSIVE FLOOR: the script asserts a minimum known-good path count. If the
-extracted router set drops below MIN_EXPECTED_PATHS, we fail the build and
-force a human review of the regex. Bump MIN_EXPECTED_PATHS in lockstep when
-new endpoints land.
-"""
+"""Fail if router.zig route_manifest and openapi.json diverge on (method, path)."""
 import json, re, sys, pathlib
 
-# Floor — bump when new endpoints land. If the regex silently breaks, this
-# fires before path parity does.
-MIN_EXPECTED_PATHS = 30
+MANIFEST_RE = re.compile(r'\.method\s*=\s*"(\w+)"\s*,\s*\.path\s*=\s*"([^"]+)"')
 
-ROUTER = pathlib.Path("src/http/router.zig").read_text()
-SPEC = json.loads(pathlib.Path("public/openapi.json").read_text())
+router_src = pathlib.Path("src/http/router.zig").read_text()
+router_pairs = set((m, p) for m, p in MANIFEST_RE.findall(router_src))
 
-# Extract "/v1/..." literals from router.zig `match()` arms.
-router_paths = set(re.findall(r'"(/v1/[^"]+)"\s*=>', ROUTER))
-# Normalize :id → {id} for OpenAPI-style path params.
-router_paths = {re.sub(r':(\w+)', r'{\1}', p) for p in router_paths}
+spec = json.loads(pathlib.Path("public/openapi.json").read_text())
+spec_pairs = set()
+for path, methods in spec.get("paths", {}).items():
+    for method, op in methods.items():
+        if method.lower() not in {"get","post","put","patch","delete","head","options"}:
+            continue
+        spec_pairs.add((method.upper(), path))
 
-if len(router_paths) < MIN_EXPECTED_PATHS:
-    print(
-        f"FAIL: router_paths set has {len(router_paths)} entries, "
-        f"below floor of {MIN_EXPECTED_PATHS}. "
-        "The regex may have silently stopped matching — review "
-        "scripts/check_openapi_sync.py against the current router.zig shape."
-    )
-    sys.exit(1)
-
-spec_paths = set(SPEC.get("paths", {}).keys())
-
-missing_in_spec = router_paths - spec_paths
-missing_in_router = spec_paths - router_paths
+missing_in_spec = router_pairs - spec_pairs
+missing_in_router = spec_pairs - router_pairs
 
 if missing_in_spec or missing_in_router:
     if missing_in_spec:
-        print(f"FAIL: router has paths not in openapi.json: {sorted(missing_in_spec)}")
+        print("FAIL: router has (method, path) not in openapi.json:")
+        for m, p in sorted(missing_in_spec): print(f"  {m} {p}")
     if missing_in_router:
-        print(f"FAIL: openapi.json has paths not in router: {sorted(missing_in_router)}")
+        print("FAIL: openapi.json has (method, path) not in router:")
+        for m, p in sorted(missing_in_router): print(f"  {m} {p}")
     sys.exit(1)
 
-print(f"OK: router ↔ openapi.json path parity ({len(router_paths)} paths)")
+print(f"OK: router ↔ openapi.json parity ({len(router_pairs)} method/path pairs)")
 ```
-
-**Regex coverage invariant:** the pattern `"/v1/..." =>` matches every literal
-route arm in `router.zig` today. If a future refactor moves routes into a
-variable-driven table or a comptime-built dispatch map, this script will miss
-them. The `MIN_EXPECTED_PATHS` floor is the canary — it fails loudly if the
-regex stops matching enough routes. Update it in the same commit that adds a
-new literal route.
 
 **`make check-openapi-sync`:**
 
 ```make
-check-openapi-sync:  ## Assert router.zig ↔ openapi.json path parity
+check-openapi-sync:  ## Assert router.zig route_manifest ↔ openapi.json (method, path) parity
 	python3 scripts/check_openapi_sync.py
 ```
 
@@ -323,10 +345,11 @@ No new Zig interfaces. The contract surface is:
 | OpenAPI path added without router arm | YAML edited without wiring handler | `make check-openapi-sync` fails in CI | CI red; script prints unmatched path |
 | YAML edited but bundled JSON not re-committed | Developer forgot `make openapi` | CI "bundle in sync" check fails (re-bundle produces different output than committed) | CI red; diff of the un-bundled changes |
 | Direct hand-edit to `public/openapi.json` | Developer bypasses YAML | Next `make openapi` regenerates the file and wipes the edit; if committed directly, CI "bundle in sync" catches it | CI red; advisory pre-commit hook warns if enabled |
-| `npx @redocly/cli` network flake | CI container without cached npm | Bundle step fails with network error | CI red; retry or pin via `.npmrc` / Dockerfile |
+| Redocly install flake | CI without bun install cache | `bun install` or `bun x redocly` fails | CI red; rerun, or fall back to global `npm install -g @redocly/cli` pinned to the same version |
+| `route_manifest` drifts from `match()` | Engineer adds a real route arm in `match()` but forgets the manifest entry | `make check-openapi-sync` fails (spec has path, router manifest does not) OR the in-file unit test fails (manifest entry not dispatchable) | CI red; fix is to add the manifest line |
 
 **Platform constraints:**
-- CI image must have `node` (for `npx @redocly/cli`) and `python3` on PATH. Both already present in the existing CI image.
+- CI image must have `bun` (existing), `python3` (existing). Root `bun install --frozen-lockfile` resolves `@redocly/cli` into `./node_modules/.bin/redocly`.
 - Mintlify reads `public/openapi.json` from raw GitHub main; the file MUST remain committed.
 
 ---
@@ -338,8 +361,8 @@ No new Zig interfaces. The contract surface is:
 | Every endpoint in router.zig has a matching OpenAPI path | `make check-openapi-sync` |
 | Every OpenAPI path has a matching router arm | `make check-openapi-sync` |
 | Every operation has `operationId`, `summary`, `tags` | Redocly lint (`.redocly.yaml`) |
-| Every 4xx/5xx response uses `$ref: '#/components/responses/ErrorBody'` | Redocly lint (subsumes `check_openapi_errors.py`) |
-| `public/openapi.json` is a build artifact, never hand-edited | CI "bundle in sync" check + `public/openapi/README.md` policy |
+| Every 4xx/5xx response uses `$ref: '#/components/responses/ErrorBody'` with `application/problem+json` | `scripts/check_openapi_errors.py` (kept; Redocly's built-ins do not cover this) |
+| `public/openapi.json` is a build artifact, never hand-edited | CI "bundle in sync" check + `public/openapi/AGENTS.md` policy |
 | `make openapi` is idempotent | Dim 2.3 — byte-identical output across two runs |
 | Mintlify continues to render `docs.usezombie.com/api-reference` identically | Manual before/after comparison on a staging Mintlify env |
 
@@ -382,29 +405,35 @@ No new Zig interfaces. The contract surface is:
 
 | Step | Action | Verify (must pass before next step) |
 |------|--------|--------------------------------------|
-| 1 | Set up `public/openapi/` directory structure (root.yaml + empty paths/ + components/) | `ls public/openapi/` returns the expected tree |
-| 2 | Extract `components/schemas.yaml` + `components/responses.yaml` + `components/security.yaml` from the monolithic `openapi.json`; reference via `$ref` in `root.yaml` | `npx @redocly/cli bundle public/openapi/root.yaml -o /tmp/test.json` succeeds |
-| 3 | Split paths into `paths/*.yaml` by tag; wire `$ref` in `root.yaml` | `make openapi` produces `public/openapi.json`; `jq -S` diff against pre-split is empty |
-| 4 | Write `.redocly.yaml` with lint rules that subsume `check_openapi_errors.py` | `npx @redocly/cli lint public/openapi.json --config .redocly.yaml` passes |
-| 5 | Add `make openapi` target | `make openapi` exits 0; re-run is idempotent |
-| 6 | Write `scripts/check_openapi_sync.py` | `python3 scripts/check_openapi_sync.py` exits 0 on clean tree |
-| 7 | Add `make check-openapi-sync` target | Fails on synthetic drift; passes on clean tree |
-| 8 | Wire both targets into CI (`.github/workflows/ci.yml`) | Synthetic drift PR fails CI |
-| 9 | Delete `scripts/check_openapi_errors.py` and its make target | `grep -rn check_openapi_errors` returns zero hits outside historical files |
-| 10 | Update `docs/REST_API_DESIGN_GUIDELINES.md` + add `public/openapi/AGENTS.md` (four recipes + hard rule + link to `public/AGENTS.md`) | Both documents land in the same PR; `public/AGENTS.md` is already in place from the prerequisite step |
-| 11 | Rehearse recipes from `public/openapi/AGENTS.md`: run the rename + append recipes on a throwaway path in a scratch commit, confirm `make openapi` + `make check-openapi-sync` pass, then revert | Dim 5.2 and Dim 5.3 pass |
-| 12 | Manual Mintlify regression check: compare 5 rendered endpoints before and after on a staging env | Rendering is identical |
+| 1 | Add `@redocly/cli` to root `package.json` devDependencies; `bun install` produces `./node_modules/.bin/redocly` | `bun x redocly --version` prints 2.28.x |
+| 2 | Snapshot pre-split spec for byte-parity diffing: `jq -S . public/openapi.json > /tmp/m28_003_pre_split.json` | `/tmp/m28_003_pre_split.json` exists and is non-empty |
+| 3 | Set up `public/openapi/` directory structure (root.yaml + empty paths/ + components/) | `ls public/openapi/` returns the expected tree |
+| 4 | Extract `components/schemas.yaml` + `components/responses.yaml` + `components/security.yaml` from the monolithic `openapi.json`; reference via `$ref` in `root.yaml` | `bun x redocly bundle public/openapi/root.yaml -o /tmp/test.json` succeeds |
+| 5 | Split paths into `paths/*.yaml` by tag; wire `$ref` in `root.yaml`. **Mechanical split only — preserve all content including the pre-existing tag typo and undeclared tag.** | Bundle: `bun x redocly bundle ... -o public/openapi.json`; `jq -S . public/openapi.json \| diff - /tmp/m28_003_pre_split.json` → empty (Dim 1.3). Commit as the "mechanical split" commit. |
+| 6 | Tag normalization follow-up: fix `"Zombie"` → `"Zombies"` on `/stop`; declare `"Activity"` in `root.yaml` tags. Commit narrowly. | `bun x redocly lint ...` passes `operation-tag-defined` (Dim 1.4). |
+| 7 | Write `.redocly.yaml` (minimum structural rules only — content checks stay in Python) | `bun x redocly lint public/openapi.json --config .redocly.yaml` passes |
+| 8 | Add `make openapi` target: bundle → redocly lint → `python3 scripts/check_openapi_errors.py`. Remove the standalone `make check-openapi-errors` target; update `lint-zig` to drop its dependency. | `make openapi` exits 0; re-run is idempotent; `make lint-zig` still passes without the removed target |
+| 9 | Add `route_manifest` + `RouteManifestEntry` to `src/http/router.zig`; add an in-file unit test asserting every manifest entry is dispatchable through `match()` | `zig build test` passes; manifest entries match every current route |
+| 10 | Write `scripts/check_openapi_sync.py` (parses manifest + openapi.json, asserts (method, path) set parity) | `python3 scripts/check_openapi_sync.py` exits 0 on clean tree |
+| 11 | Add `make check-openapi-sync` target | Fails on synthetic drift; passes on clean tree |
+| 12 | Wire a new `lint-openapi` job into `.github/workflows/lint.yml`: `bun install --frozen-lockfile` at root → `make openapi` → `git diff --exit-code public/openapi.json` (bundle-in-sync gate) → `make check-openapi-sync`. Add it to the `lint` aggregator's `needs:` list. | Synthetic drift PR fails CI in `lint-openapi` |
+| 13 | Update `docs/REST_API_DESIGN_GUIDELINES.md` + add `public/openapi/AGENTS.md` (four recipes + hard rule + link to `public/AGENTS.md`) | Both documents land in the same PR; `public/AGENTS.md` already in place |
+| 14 | Rehearse recipes from `public/openapi/AGENTS.md`: rename + append on a throwaway path in a scratch commit, confirm `make openapi` + `make check-openapi-sync` pass, then revert | Dim 5.2, 5.3 pass |
+| 15 | Manual Mintlify regression check: spot-check 5 rendered endpoints on `docs.usezombie.com/api-reference` before/after | Rendering identical |
 
 ---
 
 ## Acceptance Criteria
 
 - [ ] `public/openapi/root.yaml` + `paths/*.yaml` + `components/*.yaml` exist and together describe every endpoint currently in `public/openapi.json`.
-- [ ] `make openapi` regenerates `public/openapi.json`; diff against the pre-split canonicalized (`jq -S`) version is empty.
+- [ ] After the mechanical-split commit, `make openapi` regenerates `public/openapi.json`; diff against the pre-split canonicalized (`jq -S`) version is empty (Dim 1.3).
+- [ ] Tag normalization commit fixes `"Zombie"` → `"Zombies"` and declares `"Activity"`; Redocly lint passes after this commit (Dim 1.4).
 - [ ] `make openapi` is idempotent (second run produces identical output to first).
-- [ ] `make check-openapi-sync` passes on `main` and fails on a synthetic drift PR.
-- [ ] Both targets are wired into CI; a drift PR cannot merge.
-- [ ] `check_openapi_errors.py` is deleted; its rules are enforced by `.redocly.yaml`.
+- [ ] `make check-openapi-sync` (manifest-backed) passes on `main` and fails on a synthetic drift PR.
+- [ ] All three gates (`make openapi`, bundle-in-sync, `make check-openapi-sync`) run in the `lint-openapi` job in `.github/workflows/lint.yml`; a drift PR cannot merge.
+- [ ] `scripts/check_openapi_errors.py` is retained and called from `make openapi` (post-Redocly-lint). The standalone `make check-openapi-errors` target is removed. `lint-zig` no longer depends on it.
+- [ ] `src/http/router.zig` contains a `pub const route_manifest` with an entry per (method, path), and an in-file test asserts every entry is dispatchable through `match()`.
+- [ ] Root `package.json` declares `@redocly/cli` in devDependencies; CI installs it via `bun install --frozen-lockfile`.
 - [ ] `docs/REST_API_DESIGN_GUIDELINES.md` documents the split workflow; hand-editing `public/openapi.json` is called out as forbidden.
 - [ ] `public/openapi/AGENTS.md` exists, contains all four agent-edit recipes (rename / append / remove / update description), states the hard rule, and links to `public/AGENTS.md`.
 - [ ] `public/AGENTS.md` is in place as the public-surface index (done as a prerequisite, referenced from `public/openapi/AGENTS.md`).
@@ -454,16 +483,16 @@ curl -sI https://raw.githubusercontent.com/usezombie/usezombie/main/public/opena
 
 **1. Orphaned files — must be deleted from disk and git.**
 
-| File to delete | Verify deleted |
-|---------------|----------------|
-| `scripts/check_openapi_errors.py` | `test ! -f scripts/check_openapi_errors.py` |
+None. (First-draft plan to delete `scripts/check_openapi_errors.py` reversed — the script is retained because Redocly built-ins do not cover its checks. See §2.)
 
 **2. Orphaned references — zero remaining references.**
 
 | Deleted symbol or import | Grep command | Expected |
 |-------------------------|--------------|----------|
-| `check_openapi_errors` | `grep -rn "check_openapi_errors" . --include="*.py" --include="Makefile" --include="*.mk"` | 0 matches |
-| `make check-openapi-errors` | `grep -rn "check-openapi-errors" . --include="Makefile" --include="*.mk" --include="*.yml"` | 0 matches |
+| Standalone `check-openapi-errors` make target | `grep -rn "^check-openapi-errors:" Makefile make/*.mk` | 0 matches (folded into `make openapi`) |
+| `check-openapi-errors` as a make prereq | `grep -rn "check-openapi-errors" Makefile make/*.mk .github/workflows/*.yml` | 0 matches |
+
+**3. Router renames caught by sync gate.** Any M28_002-era renames (e.g. `external_agents` → `agent_keys`) should have zero stale references in OpenAPI + router. The new sync gate will catch it in CI on the first drift.
 
 ---
 
