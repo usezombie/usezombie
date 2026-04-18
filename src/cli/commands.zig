@@ -4,7 +4,6 @@ pub const Subcommand = enum {
     serve,
     worker,
     doctor,
-    run,
     migrate,
     reconcile,
 };
@@ -24,7 +23,6 @@ test "parseSubcommandName returns known subcommands" {
     try std.testing.expectEqual(Subcommand.serve, parseSubcommandName("serve"));
     try std.testing.expectEqual(Subcommand.worker, parseSubcommandName("worker"));
     try std.testing.expectEqual(Subcommand.doctor, parseSubcommandName("doctor"));
-    try std.testing.expectEqual(Subcommand.run, parseSubcommandName("run"));
     try std.testing.expectEqual(Subcommand.migrate, parseSubcommandName("migrate"));
     try std.testing.expectEqual(Subcommand.reconcile, parseSubcommandName("reconcile"));
 }
@@ -32,4 +30,13 @@ test "parseSubcommandName returns known subcommands" {
 test "parseSubcommandName defaults to serve for unknown values" {
     try std.testing.expectEqual(Subcommand.serve, parseSubcommandName("unknown"));
     try std.testing.expectEqual(Subcommand.serve, parseSubcommandName("help"));
+    try std.testing.expectEqual(Subcommand.serve, parseSubcommandName("run"));
+}
+
+test "Subcommand enum has no run variant" {
+    const fields = @typeInfo(Subcommand).@"enum".fields;
+    inline for (fields) |f| {
+        if (std.mem.eql(u8, f.name, "run")) @compileError("Subcommand.run must not exist (removed in M29_002)");
+    }
+    try std.testing.expectEqual(@as(usize, 5), fields.len);
 }
