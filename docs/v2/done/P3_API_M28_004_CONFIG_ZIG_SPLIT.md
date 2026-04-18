@@ -4,7 +4,7 @@
 **Milestone:** M28
 **Workstream:** 004
 **Date:** Apr 18, 2026
-**Status:** IN_PROGRESS
+**Status:** DONE
 **Priority:** P3 — deferrable; no user-visible behavior change
 **Batch:** B1
 **Branch:** feat/m28-config-split
@@ -61,10 +61,10 @@ Extract four modules along a lifecycle axis (types / parse / markdown-frontmatte
 
 | Dim | Status | Target | Input | Expected | Test type |
 |-----|--------|--------|-------|----------|-----------|
-| 1.1 | PENDING | `config_types.zig` | N/A (type module) | File compiles, exports 9 symbols, ≤ 250L | unit |
-| 1.2 | PENDING | `config_parser.zig:parseZombieConfig` | Valid config JSON | Returns populated `ZombieConfig` identical to pre-split | unit |
-| 1.3 | PENDING | `config_markdown.zig:extractZombieInstructions` | TRIGGER.md with frontmatter + body | Body slice (borrowed) | unit |
-| 1.4 | PENDING | `config_validate.zig:validateZombieSkills` | Config with unknown skill | `ZombieConfigError.UnknownSkill` | unit |
+| 1.1 | DONE | `config_types.zig` | N/A (type module) | File compiles, exports 9 symbols, 137L (with tests split out) | unit |
+| 1.2 | DONE | `config_parser.zig:parseZombieConfig` | Valid config JSON | Returns populated `ZombieConfig` identical to pre-split | unit |
+| 1.3 | DONE | `config_markdown.zig:extractZombieInstructions` | TRIGGER.md with frontmatter + body | Body slice (borrowed) | unit |
+| 1.4 | DONE | `config_validate.zig:validateZombieSkills` | Config with unknown skill | `ZombieConfigError.UnknownSkill` | unit |
 
 ## §2 — `parseZombieConfig` decomposition
 
@@ -76,9 +76,9 @@ The current 104-line `parseZombieConfig` is broken into eight per-field helpers,
 
 | Dim | Status | Target | Input | Expected | Test type |
 |-----|--------|--------|-------|----------|-----------|
-| 2.1 | PENDING | `config_parser.zig:parseZombieConfig` | Valid JSON → drop a field mid-way | Earlier dupes freed; no leak reported by `std.testing.allocator` | unit (leak) |
-| 2.2 | PENDING | Each per-field helper | wc -l of each function body | ≤ 50 lines | lint |
-| 2.3 | PENDING | `parseZombieConfig` orchestrator | wc -l of function body | ≤ 50 lines | lint |
+| 2.1 | DONE | `config_parser.zig:parseZombieConfig` | Invalid budget after valid skills | Earlier dupes freed; no leak (see `partial-build leak check` test) | unit (leak) |
+| 2.2 | DONE | Each per-field helper | awk 50-line gate | All ≤ 50 lines | lint |
+| 2.3 | DONE | `parseZombieConfig` orchestrator | awk 50-line gate | 47 lines | lint |
 
 ## §3 — Per-module test files
 
@@ -90,8 +90,8 @@ Every new module gets a sibling `_test.zig`. Tests currently inline in `config.z
 
 | Dim | Status | Target | Input | Expected | Test type |
 |-----|--------|--------|-------|----------|-----------|
-| 3.1 | PENDING | `config_{types,parser,markdown,validate}_test.zig` | `zig build test` | All tests run; total assertion count ≥ pre-split count | integration |
-| 3.2 | PENDING | Test filenames | grep `M[0-9]` in test filenames + `test "..."` strings | 0 matches | lint |
+| 3.1 | DONE | `config_{types,parser,markdown,validate}_test.zig` | `zig build test` | All tests run; assertion count ≥ pre-split (tests relocated + new leak + cron/api/empty-body cases added) | integration |
+| 3.2 | DONE | Test filenames | grep `M[0-9]` in test filenames + `test "..."` strings | 0 matches | lint |
 
 ---
 
