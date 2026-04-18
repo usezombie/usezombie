@@ -4,10 +4,10 @@
 **Milestone:** M29
 **Workstream:** 002
 **Date:** Apr 18, 2026
-**Status:** PENDING
+**Status:** IN_PROGRESS
 **Priority:** P1 — Pure cleanup. The spec→run flow is no longer the product model; zombies are. Leaving the v1 scaffolding around adds surface area for reviewers to interpret, makes the CLI help confusing, and keeps dead code paths in the build. Not a production blocker because nothing in the v1 flow is relied on today, but worth doing before v1.0.0.
 **Batch:** B1 — runs in parallel with M29_001.
-**Branch:** feat/m29-remove-v1-spec-run (added when work begins)
+**Branch:** feat/m29-remove-v1-spec-run
 **Depends on:** M29_001 ships the replacement docs so users landing on docs.usezombie.com see the zombie-centric model before the CLI subcommands vanish. M28_001 (OpenAPI split) must merge before this workstream touches `public/openapi.json` to avoid bundle conflicts.
 
 ---
