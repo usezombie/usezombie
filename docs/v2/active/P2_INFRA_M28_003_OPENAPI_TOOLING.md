@@ -4,10 +4,10 @@
 **Milestone:** M28
 **Workstream:** 003
 **Date:** Apr 18, 2026
-**Status:** PENDING
+**Status:** IN_PROGRESS
 **Priority:** P2 — `public/openapi.json` is currently 4,323 lines of hand-edited JSON. M28_002 pushes it past 4,500. Mintlify reads it directly from `main` for `docs.usezombie.com`. Drift between the Zig handlers and the hand-edited spec is a matter of time, not probability. This spec removes that risk with a split-source + bundler + CI gate.
 **Batch:** B3 (blocked on M28_001 + M28_002 landing — avoid conflicts in openapi.json during split)
-**Branch:** `feat/m28-openapi-tooling` (when started)
+**Branch:** `feat/m28-openapi-tooling`
 **Depends on:** M28_001 (webhook auth middleware), M28_002 (tenant API key management)
 
 ---
