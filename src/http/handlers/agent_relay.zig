@@ -14,7 +14,6 @@ const hx_mod = @import("hx.zig");
 const error_codes = @import("../../errors/error_registry.zig");
 const crypto_store = @import("../../secrets/crypto_store.zig");
 const nullclaw = @import("nullclaw");
-const obs_log = @import("../../observability/logging.zig");
 
 const Config = nullclaw.config.Config;
 const providers = nullclaw.providers;
@@ -23,8 +22,6 @@ const ChatMessage = providers.ChatMessage;
 const ToolSpec = providers.ToolSpec;
 
 const log = std.log.scoped(.http);
-
-const MAX_ROUND_TRIPS: u32 = 10;
 
 // ── JSON request payload ────────────────────────────────────────────────────
 

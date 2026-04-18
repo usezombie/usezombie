@@ -160,6 +160,10 @@ test {
     _ = @import("http/handlers/hx_test.zig");
     _ = @import("http/handlers/memory_handler_test.zig");
     _ = @import("http/handlers/memory_handler_shapes_test.zig");
+    // M29_002: agent_relay became a generic primitive with no current callers;
+    // wired here so its jsonEscapeString tests + comptime invariant guards
+    // against SPEC_* reintroduction stay live.
+    _ = @import("http/handlers/agent_relay.zig");
     _ = @import("cmd/serve_test.zig");
     _ = @import("queue/redis.zig");
     _ = @import("queue/redis_pubsub_test.zig");
