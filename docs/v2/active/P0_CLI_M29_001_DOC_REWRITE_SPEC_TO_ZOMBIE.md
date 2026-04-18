@@ -4,10 +4,10 @@
 **Milestone:** M29
 **Workstream:** 001
 **Date:** Apr 18, 2026
-**Status:** PENDING
+**Status:** IN_PROGRESS
 **Priority:** P0 — Public documentation on docs.usezombie.com currently describes the v1 spec→run lifecycle that is being removed in M29_002. Users who follow the docs today land on commands and endpoints that either don't work or are slated for deletion. Customer-facing correctness beats internal cleanup.
 **Batch:** B1 — runs in parallel with M29_002; doc rewrite doesn't wait on code removal.
-**Branch:** feat/m29-docs-zombie (added when work begins)
+**Branch:** feat/m29-docs-zombie
 **Depends on:** None. Docs can describe `zombiectl zombie` today because those commands already exist.
 
 ---
