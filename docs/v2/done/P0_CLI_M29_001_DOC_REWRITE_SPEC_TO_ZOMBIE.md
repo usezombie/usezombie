@@ -359,12 +359,17 @@ N/A — docs repo has no main.zig.
 
 | Check | Command | Result | Pass? |
 |-------|---------|--------|-------|
-| Deleted directories | `test ! -d docs/specs && test ! -d docs/runs` | | |
-| Seven zombies pages | `ls docs/zombies/*.mdx \| wc -l` | | |
-| No v1 term leaks | `rg -wE '...'` above | | |
-| Nav aligns with filesystem | diff output | | |
-| Mintlify build | `mintlify build` | | |
-| Changelog entry | `grep 'zombies/' docs/changelog.mdx` | | |
+| Deleted directories | `test ! -d specs && test ! -d runs` (in docs worktree) | both missing | ✅ |
+| Seven zombies pages | `ls zombies/*.mdx \| wc -l` | `7` | ✅ |
+| No v1 product-sense leaks | `grep -rEw --include='*.mdx' '(spec\|specs\|spec_init\|run_watch\|run_preview\|gate loop\|scorecard)' cli/ zombies/ concepts.mdx index.mdx` | no output | ✅ |
+| No multi-word v1 forms | `grep -rE --include='*.mdx' '(run interrupt\|runs list\|run status\|run watch\|run preview\|spec init\|spec validate\|specs sync\|submit(ted\|ting)? a (spec\|run))' cli/ zombies/ concepts.mdx index.mdx` | no output | ✅ |
+| Nav aligns with filesystem | `diff <(jq -r '.navigation \| .. \| .pages? // empty \| .[]' docs.json \| grep '^zombies/' \| sort) <(find zombies -name '*.mdx' \| sed 's\|\\.mdx$\|\|' \| sort)` | identical | ✅ |
+| `make lint` (mintlify validate + broken-links + markdown-link-check) | `mise exec -- make lint` | exit `0` | ✅ |
+| Changelog entry references zombies section | `grep -q 'zombies/' changelog.mdx` | present | ✅ |
+| No `op://` vault URI leaks | `grep -r 'op://' --include='*.mdx'` | no output | ✅ |
+| No "activity log" / "audit log" / "audit stream" outside historical changelog | `grep -rE --include='*.mdx' 'activity log\|audit log\|audit stream'` (minus changelog) | no output | ✅ |
+
+See Ripley's Log at `docs/nostromo/LOG_APR_19_00_20_00_M29_001.md` for the full narrative and reviewer-feedback rollup.
 
 ---
 
