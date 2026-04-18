@@ -15,7 +15,7 @@ const KEK_VERSION: u32 = 1;
 /// Safe to call once per test. Value is a fixed test key — not a secret.
 pub fn setTestEncryptionKey() void {
     const c = @cImport(@cInclude("stdlib.h"));
-    _ = c.setenv("ENCRYPTION_MASTER_KEY_V1", "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", 1);
+    _ = c.setenv("ENCRYPTION_MASTER_KEY", "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", 1);
 }
 
 pub const Fixture = struct {
