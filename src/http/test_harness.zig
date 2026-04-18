@@ -312,9 +312,10 @@ pub const Response = struct {
 
     /// Assert the RFC7807 problem+json error code matches. Tolerant of
     /// surrounding whitespace and field ordering — does a substring match
-    /// on "\"code\":\"<code>\"".
+    /// on "\"error_code\":\"<code>\"" (the field name used in this repo's
+    /// error envelope; see src/http/handlers/common.zig errorResponse).
     pub fn expectErrorCode(self: Response, code: []const u8) !void {
-        const needle = try std.fmt.allocPrint(self.alloc, "\"code\":\"{s}\"", .{code});
+        const needle = try std.fmt.allocPrint(self.alloc, "\"error_code\":\"{s}\"", .{code});
         defer self.alloc.free(needle);
         if (std.mem.indexOf(u8, self.body, needle) == null) {
             std.debug.print("expectErrorCode: {s} not in body={s}\n", .{ code, self.body });
