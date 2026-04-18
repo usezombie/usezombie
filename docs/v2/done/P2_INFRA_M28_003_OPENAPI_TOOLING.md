@@ -4,7 +4,7 @@
 **Milestone:** M28
 **Workstream:** 003
 **Date:** Apr 18, 2026
-**Status:** IN_PROGRESS
+**Status:** DONE
 **Priority:** P2 — `public/openapi.json` is currently 4,323 lines of hand-edited JSON. M28_002 pushes it past 4,500. Mintlify reads it directly from `main` for `docs.usezombie.com`. Drift between the Zig handlers and the hand-edited spec is a matter of time, not probability. This spec removes that risk with a split-source + bundler + CI gate.
 **Batch:** B3 (blocked on M28_001 + M28_002 landing — avoid conflicts in openapi.json during split)
 **Branch:** `feat/m28-openapi-tooling`
@@ -70,7 +70,7 @@
 
 ### §1 — YAML split (source of truth)
 
-**Status:** PENDING
+**Status:** DONE
 
 Convert the current 4,323-line monolithic `public/openapi.json` into a directory of small YAML files. Shape:
 
@@ -116,14 +116,14 @@ components:
 
 | Dim | Status | Target | Input | Expected | Test type |
 |-----|--------|--------|-------|----------|-----------|
-| 1.1 | PENDING | `public/openapi/` directory | Split existing 4.3K-line `openapi.json` into YAML files by tag | Every path in the original `openapi.json` appears in exactly one `paths/*.yaml`; every shared schema appears in `components/schemas.yaml` | manual diff |
-| 1.2 | PENDING | `public/openapi/root.yaml` | YAML parse | Parses cleanly; all `$ref` targets resolve to existing files | unit (redocly lint) |
-| 1.3 | PENDING | `make openapi` after mechanical split | Run bundler against split source | `public/openapi.json` byte-diff against the pre-split version is empty after `jq -S` canonicalization — the split commit MUST preserve content exactly. Lint-blocking content bugs (see Dim 1.4) are fixed in a separate follow-up commit so this byte-parity claim is auditable in history. | integration |
-| 1.4 | PENDING | Tag normalization follow-up commit | Recon surfaced two content bugs that will fail Redocly's `operation-tag-defined: error`: (a) `/v1/workspaces/{id}/zombies/{id}/stop` uses tag `"Zombie"` (singular typo), (b) `/v1/workspaces/{id}/activity` uses undeclared tag `"Activity"`. Fix: rename `"Zombie"` → `"Zombies"` in the `/stop` operation; add `"Activity"` to the top-level `tags` array in `root.yaml` (or rename to `"Workspaces"` if we decide activity is a workspace sub-feature — decision captured in the Ripley's Log). | Committed as a narrow follow-up after the byte-parity split. `make openapi` + Redocly lint pass. | integration |
+| 1.1 | DONE | `public/openapi/` directory | Split existing 4.3K-line `openapi.json` into YAML files by tag | Every path in the original `openapi.json` appears in exactly one `paths/*.yaml`; every shared schema appears in `components/schemas.yaml` | manual diff |
+| 1.2 | DONE | `public/openapi/root.yaml` | YAML parse | Parses cleanly; all `$ref` targets resolve to existing files | unit (redocly lint) |
+| 1.3 | DONE | `make openapi` after mechanical split | Run bundler against split source | `public/openapi.json` byte-diff against the pre-split version is empty after `jq -S` canonicalization — the split commit MUST preserve content exactly. Lint-blocking content bugs (see Dim 1.4) are fixed in a separate follow-up commit so this byte-parity claim is auditable in history. | integration |
+| 1.4 | DONE | Tag normalization follow-up commit | Recon surfaced two content bugs that will fail Redocly's `operation-tag-defined: error`: (a) `/v1/workspaces/{id}/zombies/{id}/stop` uses tag `"Zombie"` (singular typo), (b) `/v1/workspaces/{id}/activity` uses undeclared tag `"Activity"`. Fix: rename `"Zombie"` → `"Zombies"` in the `/stop` operation; add `"Activity"` to the top-level `tags` array in `root.yaml` (or rename to `"Workspaces"` if we decide activity is a workspace sub-feature — decision captured in the Ripley's Log). | Committed as a narrow follow-up after the byte-parity split. `make openapi` + Redocly lint pass. | integration |
 
 ### §2 — Bundler + lint (`make openapi`)
 
-**Status:** PENDING
+**Status:** DONE
 
 New make target that (a) bundles the YAML tree into `public/openapi.json` via Redocly CLI, (b) runs Redocly's structural lint, (c) runs the existing `scripts/check_openapi_errors.py` against the bundled output. The existing `make check-openapi-errors` target is folded in here; the standalone target is removed.
 
@@ -167,14 +167,14 @@ rules:
 
 | Dim | Status | Target | Input | Expected | Test type |
 |-----|--------|--------|-------|----------|-----------|
-| 2.1 | PENDING | `make openapi` | clean YAML source | Exits 0; `public/openapi.json` regenerated; Redocly lint passes; `check_openapi_errors.py` prints `OK` | integration |
-| 2.2 | PENDING | `make openapi` with a bad 4xx response | Edit a path to reference a schema that is not `ErrorBody` | `check_openapi_errors.py` fails with the specific path + expected schema (Redocly's structural pass is insufficient here — this is what the Python script catches) | integration |
-| 2.3 | PENDING | `make openapi` idempotency | Run `make openapi` twice in a row | Second run produces byte-identical output to the first | unit |
-| 2.4 | PENDING | `make openapi` with an undeclared tag | Add a path with `tags: [MadeUp]` without declaring `MadeUp` in `root.yaml` | Redocly lint fails with `operation-tag-defined` citing the exact path | integration |
+| 2.1 | DONE | `make openapi` | clean YAML source | Exits 0; `public/openapi.json` regenerated; Redocly lint passes; `check_openapi_errors.py` prints `OK` | integration |
+| 2.2 | DONE | `make openapi` with a bad 4xx response | Edit a path to reference a schema that is not `ErrorBody` | `check_openapi_errors.py` fails with the specific path + expected schema (Redocly's structural pass is insufficient here — this is what the Python script catches) | integration |
+| 2.3 | DONE | `make openapi` idempotency | Run `make openapi` twice in a row | Second run produces byte-identical output to the first | unit |
+| 2.4 | DONE | `make openapi` with an undeclared tag | Add a path with `tags: [MadeUp]` without declaring `MadeUp` in `root.yaml` | Redocly lint fails with `operation-tag-defined` citing the exact path | integration |
 
 ### §3 — Router ↔ OpenAPI sync gate (`make check-openapi-sync`)
 
-**Status:** PENDING
+**Status:** DONE
 
 Python script that asserts **(method, path) parity** between `src/http/router.zig` and `public/openapi.json`. Runs in CI on every PR.
 
@@ -255,15 +255,15 @@ check-openapi-sync:  ## Assert router.zig route_manifest ↔ openapi.json (metho
 
 | Dim | Status | Target | Input | Expected | Test type |
 |-----|--------|--------|-------|----------|-----------|
-| 3.1 | PENDING | `make check-openapi-sync` on a clean tree | main at merge time | Exits 0; prints `OK: router ↔ openapi.json path parity (N paths)` | integration |
-| 3.2 | PENDING | `make check-openapi-sync` with a synthetic drift | Add a router arm without an OpenAPI entry | Exits 1; prints the unmatched path | integration |
-| 3.3 | PENDING | `make check-openapi-sync` with a reverse drift | Add an OpenAPI path without a router arm | Exits 1; prints the unmatched path | integration |
-| 3.4 | PENDING | CI workflow | `.github/workflows/ci.yml` adds `make check-openapi-sync` to the lint job | A synthetic drift PR fails CI before merge | manual |
-| 3.5 | PENDING | CI "bundle is in sync" check | Re-run `make openapi` in CI and assert `git diff --exit-code public/openapi.json` | A PR that edited YAML but forgot to re-bundle fails CI | manual |
+| 3.1 | DONE | `make check-openapi-sync` on a clean tree | main at merge time | Exits 0; prints `OK: router ↔ openapi.json path parity (N paths)` | integration |
+| 3.2 | DONE | `make check-openapi-sync` with a synthetic drift | Add a router arm without an OpenAPI entry | Exits 1; prints the unmatched path | integration |
+| 3.3 | DONE | `make check-openapi-sync` with a reverse drift | Add an OpenAPI path without a router arm | Exits 1; prints the unmatched path | integration |
+| 3.4 | DONE | CI workflow | `.github/workflows/ci.yml` adds `make check-openapi-sync` to the lint job | A synthetic drift PR fails CI before merge | manual |
+| 3.5 | DONE | CI "bundle is in sync" check | Re-run `make openapi` in CI and assert `git diff --exit-code public/openapi.json` | A PR that edited YAML but forgot to re-bundle fails CI | manual |
 
 ### §4 — Docs update + `public/openapi.json` hand-edit prevention
 
-**Status:** PENDING
+**Status:** DONE
 
 Update `docs/REST_API_DESIGN_GUIDELINES.md` to document the split workflow. Add `public/openapi/AGENTS.md` explaining "edit the YAML, run `make openapi`, never hand-edit `public/openapi.json`". Optionally, add a pre-commit hook (advisory — not a hard gate) that warns when `public/openapi.json` is staged without corresponding YAML changes.
 
@@ -271,12 +271,12 @@ Update `docs/REST_API_DESIGN_GUIDELINES.md` to document the split workflow. Add 
 
 | Dim | Status | Target | Input | Expected | Test type |
 |-----|--------|--------|-------|----------|-----------|
-| 4.1 | PENDING | `docs/REST_API_DESIGN_GUIDELINES.md` | Read the "Adding a new endpoint" section | Documents: (1) create YAML under `public/openapi/paths/`, (2) run `make openapi`, (3) commit both YAML and bundled JSON | manual |
-| 4.2 | PENDING | `public/openapi/AGENTS.md` | Read | States: source of truth is YAML; `public/openapi.json` is a build artifact; direct edits will be lost on the next `make openapi`. Links back to `public/AGENTS.md` for the full public-surface index. | manual |
+| 4.1 | DONE | `docs/REST_API_DESIGN_GUIDELINES.md` | Read the "Adding a new endpoint" section | Documents: (1) create YAML under `public/openapi/paths/`, (2) run `make openapi`, (3) commit both YAML and bundled JSON | manual |
+| 4.2 | DONE | `public/openapi/AGENTS.md` | Read | States: source of truth is YAML; `public/openapi.json` is a build artifact; direct edits will be lost on the next `make openapi`. Links back to `public/AGENTS.md` for the full public-surface index. | manual |
 
 ### §5 — Agent-edit ergonomics (`public/openapi/AGENTS.md` recipe)
 
-**Status:** PENDING
+**Status:** DONE
 
 Autonomous agents are first-class editors of this spec. Daily operations: rename a path, append a path, remove a path, update a description. The split YAML localises each edit to a single small file (≤ 400 lines), and the CI gates (§2, §3) catch the common failure modes — hand-editing the bundled JSON, renaming the OpenAPI path without the router arm, or vice versa.
 
@@ -317,10 +317,10 @@ Update a description or summary:
 
 | Dim | Status | Target | Input | Expected | Test type |
 |-----|--------|--------|-------|----------|-----------|
-| 5.1 | PENDING | `public/openapi/AGENTS.md` | Read | Contains all four recipes (rename / append / remove / update description), the hard rule, and a link to `public/AGENTS.md` | manual |
-| 5.2 | PENDING | Rename rehearsal | Follow the rename recipe on a throwaway path in a scratch branch | `make openapi` + `make check-openapi-sync` both pass; `git diff` shows exactly 2 changed files (one YAML, `router.zig`) plus the regenerated `openapi.json` | integration (manual) |
-| 5.3 | PENDING | Append rehearsal | Follow the append recipe for a dummy `GET /v1/_probe` | Bundle succeeds; sync gate passes; Redocly lint does not complain about missing `operationId`/`tags`/`ErrorBody` | integration (manual) |
-| 5.4 | PENDING | Hand-edit detection | Edit `public/openapi.json` directly and commit without running `make openapi` | CI "bundle in sync" check fails with the diff; the error message points the agent at `public/openapi/AGENTS.md` | manual (CI rehearsal) |
+| 5.1 | DONE | `public/openapi/AGENTS.md` | Read | Contains all four recipes (rename / append / remove / update description), the hard rule, and a link to `public/AGENTS.md` | manual |
+| 5.2 | DONE | Rename rehearsal | Follow the rename recipe on a throwaway path in a scratch branch | `make openapi` + `make check-openapi-sync` both pass; `git diff` shows exactly 2 changed files (one YAML, `router.zig`) plus the regenerated `openapi.json` | integration (manual) |
+| 5.3 | DONE | Append rehearsal | Follow the append recipe for a dummy `GET /v1/_probe` | Bundle succeeds; sync gate passes; Redocly lint does not complain about missing `operationId`/`tags`/`ErrorBody` | integration (manual) |
+| 5.4 | DONE | Hand-edit detection | Edit `public/openapi.json` directly and commit without running `make openapi` | CI "bundle in sync" check fails with the diff; the error message points the agent at `public/openapi/AGENTS.md` | manual (CI rehearsal) |
 
 ---
 
@@ -336,7 +336,7 @@ No new Zig interfaces. The contract surface is:
 
 ## Failure Modes
 
-**Status:** PENDING
+**Status:** DONE
 
 | Failure | Trigger | System behavior | User observes |
 |---------|---------|----------------|---------------|
@@ -370,7 +370,7 @@ No new Zig interfaces. The contract surface is:
 
 ## Test Specification
 
-**Status:** PENDING
+**Status:** DONE
 
 ### Integration Tests
 
@@ -479,7 +479,7 @@ curl -sI https://raw.githubusercontent.com/usezombie/usezombie/main/public/opena
 
 ## Dead Code Sweep
 
-**Status:** PENDING
+**Status:** DONE
 
 **1. Orphaned files — must be deleted from disk and git.**
 
