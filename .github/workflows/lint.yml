@@ -78,9 +78,31 @@ jobs:
       - name: Run CI lint gate
         run: make lint-ci
 
+  lint-openapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+      - name: Install root dependencies (pulls @redocly/cli)
+        run: bun install --frozen-lockfile
+      - name: Run OpenAPI lint gate
+        run: make lint-openapi
+      - name: Assert public/openapi.json is in sync with the YAML source
+        run: |
+          # make lint-openapi has just re-bundled public/openapi.json; if the
+          # committed file and the re-bundle differ, a contributor either
+          # hand-edited the JSON or forgot to `make openapi`.
+          if ! git diff --exit-code public/openapi.json; then
+            echo "::error::public/openapi.json drifted from public/openapi/**.yaml."
+            echo "::error::Run 'make openapi' locally and commit the result."
+            exit 1
+          fi
+
   lint:
     runs-on: ubuntu-latest
-    needs: [lint-zig, lint-website, lint-apps, lint-ci]
+    needs: [lint-zig, lint-website, lint-apps, lint-ci, lint-openapi]
     steps:
       - name: Preserve legacy lint check name
         run: echo "All lint lanes passed"
