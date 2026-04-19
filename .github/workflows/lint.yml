@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.3.12
       - name: Install website dependencies
         run: bun install --frozen-lockfile
         working-directory: ui/packages/website
@@ -53,7 +53,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
+          bun-version: 1.3.12
       - name: Install app dependencies
         run: bun install --frozen-lockfile
         working-directory: ui/packages/app
@@ -84,10 +84,10 @@ jobs:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.10
-      - uses: actions/setup-python@v5
+          bun-version: 1.3.12
+      - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Install root dependencies (pulls @redocly/cli)
         run: bun install --frozen-lockfile
       - name: Assert public/openapi.json is produced purely from YAML
