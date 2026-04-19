@@ -316,6 +316,39 @@ test "loadApiKeys rejects whitespace-only API_KEY without OIDC" {
     try std.testing.expectError(ValidationError.InvalidApiKeyList, loader.loadApiKeys(alloc, false));
 }
 
+test "loadApiKeys rejects empty API_KEY without OIDC (greptile P1)" {
+    // Pre-existing bug surfaced by greptile: API_KEY="" bypassed the usable-key
+    // check because of a `keys.len > 0` guard. Server would start with no auth.
+    const alloc = std.testing.allocator;
+    const env_pairs = [_][2][]const u8{.{ "API_KEY", "" }};
+    try setTestEnv(&env_pairs);
+    defer unsetTestEnv(&env_pairs);
+    try std.testing.expectError(ValidationError.InvalidApiKeyList, loader.loadApiKeys(alloc, false));
+}
+
+test "loadApiKeys treats empty API_KEY as OIDC-only when OIDC enabled" {
+    // Intent-preserving counterpart: operator who sets API_KEY="" with OIDC
+    // on is deliberately disabling env-key auth. Loader returns owned empty
+    // slice (caller continues with OIDC-only auth path).
+    const alloc = std.testing.allocator;
+    const env_pairs = [_][2][]const u8{.{ "API_KEY", "" }};
+    try setTestEnv(&env_pairs);
+    defer unsetTestEnv(&env_pairs);
+    const keys = try loader.loadApiKeys(alloc, true);
+    defer alloc.free(keys);
+    try std.testing.expectEqual(@as(usize, 0), keys.len);
+}
+
+test "loadApiKeys treats whitespace-only API_KEY as OIDC-only when OIDC enabled" {
+    const alloc = std.testing.allocator;
+    const env_pairs = [_][2][]const u8{.{ "API_KEY", "   " }};
+    try setTestEnv(&env_pairs);
+    defer unsetTestEnv(&env_pairs);
+    const keys = try loader.loadApiKeys(alloc, true);
+    defer alloc.free(keys);
+    try std.testing.expectEqual(@as(usize, 0), keys.len);
+}
+
 test "loadEncryption rejects short ENCRYPTION_MASTER_KEY_V2 when KEK_VERSION=2" {
     const alloc = std.testing.allocator;
     const env_pairs = [_][2][]const u8{

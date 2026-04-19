@@ -97,8 +97,13 @@ pub fn freeOidc(alloc: Allocator, cfg: OidcConfig) void {
 pub fn loadApiKeys(alloc: Allocator, oidc_enabled: bool) ![]u8 {
     const configured = std.process.getEnvVarOwned(alloc, "API_KEY") catch null;
     if (configured) |keys| {
-        if (keys.len > 0 and !validate.hasUsableApiKey(keys)) {
+        // Empty-string and whitespace-only API_KEY are both unusable — treat
+        // them as "operator wants to disable env-key auth". If OIDC is on,
+        // fall through to the OIDC-only path (return owned empty slice). If
+        // OIDC is off, reject — server would start without any usable auth.
+        if (!validate.hasUsableApiKey(keys)) {
             alloc.free(keys);
+            if (oidc_enabled) return try alloc.dupe(u8, "");
             return ValidationError.InvalidApiKeyList;
         }
         return keys;
