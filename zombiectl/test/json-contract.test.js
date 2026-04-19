@@ -59,6 +59,14 @@ describe("M30 §1 — route inventory matches command registry", () => {
     { cmd: "doctor", args: [], key: "doctor" },
     { cmd: "skill-secret", args: ["put"], key: "skill-secret" },
     { cmd: "admin", args: ["config"], key: "admin" },
+    { cmd: "agent", args: ["create"], key: "agent" },
+    { cmd: "grant", args: ["list"], key: "grant" },
+    { cmd: "install", args: [], key: "zombie.install" },
+    { cmd: "up", args: [], key: "zombie.up" },
+    { cmd: "status", args: [], key: "zombie.status" },
+    { cmd: "kill", args: [], key: "zombie.kill" },
+    { cmd: "logs", args: [], key: "zombie.logs" },
+    { cmd: "credential", args: [], key: "zombie.credential" },
   ];
 
   for (const { cmd, args, key } of expectedRoutes) {
@@ -69,15 +77,30 @@ describe("M30 §1 — route inventory matches command registry", () => {
     });
   }
 
-  test("all route keys have matching registry handlers", () => {
-    const noop = () => {};
+  test("every registered route has a matching registry handler", () => {
+    // Closes the gap where a route is declared in routes.js but the command
+    // registry silently drops the handler — a previous greptile catch that
+    // let `zombiectl agent/grant/install/...` fall through to UNKNOWN_COMMAND.
+    const sentinel = () => "handled";
     const handlers = registerProgramCommands({
-      login: noop, logout: noop, workspace: noop,
-      specsSync: noop, doctor: noop,
-      skillSecret: noop, admin: noop,
+      login: sentinel,
+      logout: sentinel,
+      workspace: sentinel,
+      specsSync: sentinel,
+      doctor: sentinel,
+      skillSecret: sentinel,
+      admin: sentinel,
+      agent: sentinel,
+      grant: sentinel,
+      zombieInstall: sentinel,
+      zombieUp: sentinel,
+      zombieStatus: sentinel,
+      zombieKill: sentinel,
+      zombieLogs: sentinel,
+      zombieCredential: sentinel,
     });
     for (const { key } of expectedRoutes) {
-      expect(handlers[key]).toBeDefined();
+      expect(handlers[key]).toBe(sentinel);
     }
   });
 
