@@ -25,7 +25,7 @@ Source layout decisions:
 
 ## Four recipes
 
-Copy-paste-ready. After each, run `make lint-openapi` before committing — it chains bundle, Redocly lint, `check_openapi_errors.py`, and the router↔spec parity gate.
+Copy-paste-ready. After each, run `make openapi` before committing — it chains bundle, Redocly lint, `check_openapi_errors.py`, and the router↔spec parity gate.
 
 ### Rename a path (e.g. `/v1/external-agents` → `/v1/agent-keys`)
 
@@ -45,7 +45,7 @@ grep -rl "external-agents:" public/openapi/paths/
 # 5. Update src/http/route_manifest.zig — same method + new path.
 
 # 6. Verify.
-make lint-openapi
+make openapi
 ```
 
 ### Append a new path
@@ -68,7 +68,7 @@ make lint-openapi
 #    entry in src/http/route_manifest.zig.
 
 # 5. Verify.
-make lint-openapi
+make openapi
 ```
 
 ### Remove a path
@@ -82,7 +82,7 @@ make lint-openapi
 #    src/http/route_manifest.zig. Delete the handler if nothing else uses it.
 
 # 3. Verify.
-make lint-openapi
+make openapi
 ```
 
 ### Update a description, summary, or parameter
@@ -92,7 +92,7 @@ make lint-openapi
 
 # 2. Re-bundle. Router changes are not required for content-only edits, but
 #    running the sync gate is cheap and catches accidental path edits.
-make lint-openapi
+make openapi
 ```
 
 ## Cross-reference: agent-facing public surfaces
@@ -103,5 +103,5 @@ If a rename/add/remove changes the **operation surface**, update `public/llms.tx
 
 ## Related specs
 
-- `docs/v2/active/P2_INFRA_M28_003_OPENAPI_TOOLING.md` — the spec that set up this tree and the CI gates.
+- `docs/v2/done/P2_INFRA_M28_003_OPENAPI_TOOLING.md` — the spec that set up this tree and the CI gates.
 - `docs/REST_API_DESIGN_GUIDELINES.md` §10a — the human-facing short version of this document.

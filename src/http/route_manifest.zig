@@ -1,16 +1,15 @@
 // Canonical route manifest — the full (method, path) surface the server dispatches.
 // Kept in sync with match() in router.zig AND with public/openapi.json via the
 // sync gate (scripts/check_openapi_sync.py). A drift between any two of these
-// three sources fails the `make check-openapi-sync` / `make lint-openapi` gate.
+// three sources fails `make openapi`.
 //
 // Paths use {param} placeholders (OpenAPI style). Methods are uppercase.
 //
 // To add / rename / remove a route:
 //   1. Update match() in router.zig so the path actually dispatches.
 //   2. Update this manifest.
-//   3. Update the corresponding YAML under public/openapi/paths/<tag>.yaml and
-//      run `make openapi`.
-//   4. `make lint-openapi` must pass before commit.
+//   3. Update the corresponding YAML under public/openapi/paths/<tag>.yaml.
+//   4. `make openapi` must pass before commit.
 
 pub const Entry = struct {
     method: []const u8,

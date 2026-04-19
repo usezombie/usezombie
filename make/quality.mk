@@ -2,7 +2,7 @@
 # QUALITY — code quality, formatting, analysis
 # =============================================================================
 
-.PHONY: lint lint-zig lint-website lint-apps lint-ci lint-openapi openapi check-openapi-sync doctor check-pg-drain _fmt _fmt_check _zlint_check _pg_drain_check _zig_target_lint _zig_line_limit_check _hardcoded_role_check _website_lint _app_lint _zombiectl_lint _actionlint_check
+.PHONY: lint lint-zig lint-website lint-apps lint-ci openapi doctor check-pg-drain _fmt _fmt_check _zlint_check _pg_drain_check _zig_target_lint _zig_line_limit_check _hardcoded_role_check _website_lint _app_lint _zombiectl_lint _actionlint_check
 
 ZLINT ?= zlint
 ACTIONLINT ?= actionlint
@@ -148,18 +148,16 @@ check-pg-drain: _pg_drain_check  ## Check that all conn.query() calls have a .dr
 
 REDOCLY := bun x redocly
 
-openapi:  ## Bundle public/openapi/**.yaml into public/openapi.json, lint, check error schema
+openapi:  ## Bundle YAML → openapi.json, lint, check error schema, assert router↔spec parity
 	@echo "→ [openapi] Bundling split YAML → public/openapi.json..."
 	@$(REDOCLY) bundle public/openapi/root.yaml -o public/openapi.json >/dev/null
 	@echo "→ [openapi] Redocly lint..."
 	@$(REDOCLY) lint public/openapi.json --config .redocly.yaml
 	@echo "→ [openapi] ErrorBody + application/problem+json schema check..."
 	@python3 scripts/check_openapi_errors.py
-	@echo "✓ [openapi] Bundled, linted, and error-schema verified"
-
-check-openapi-sync:  ## Assert src/http/router.zig route_manifest ↔ openapi.json parity
 	@echo "→ [openapi] Router ↔ openapi.json (method, path) parity..."
 	@python3 scripts/check_openapi_sync.py
+	@echo "✓ [openapi] Bundle + lint + error-schema + router parity all green"
 
 lint-zig: _fmt_check _zlint_check _pg_drain_check _zig_target_lint _zig_line_limit_check _hardcoded_role_check  ## Lint zombied (Zig)
 	@echo "✓ [zombied] Lint passed"
@@ -170,10 +168,7 @@ lint-apps: _app_lint _zombiectl_lint  ## Lint app and zombiectl (Next.js ESLint 
 
 lint-ci: _actionlint_check  ## Lint GitHub Actions workflows (actionlint)
 
-lint-openapi: openapi check-openapi-sync  ## Lint OpenAPI (bundle + lint + error-schema + router sync)
-	@echo "✓ [openapi] Lint passed"
-
-lint: lint-zig lint-website lint-apps lint-ci lint-openapi  ## Lint everything (Zig + website + app + CLI + CI + OpenAPI)
+lint: lint-zig lint-website lint-apps lint-ci openapi  ## Lint everything (Zig + website + app + CLI + CI + OpenAPI)
 	@echo "✓ All lint checks passed"
 
 doctor:  ## Run zombied doctor (connectivity + config check)

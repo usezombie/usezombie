@@ -89,12 +89,12 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Assert public/openapi.json is produced purely from YAML
         run: |
-          # Delete the committed JSON first, then let `make lint-openapi`
+          # Delete the committed JSON first, then let `make openapi`
           # rebundle it from the YAML source alone. If `git diff` then shows
           # any delta vs HEAD, either the YAML is out of sync or someone
           # hand-edited the JSON.
           rm public/openapi.json
-          make lint-openapi
+          make openapi
           if ! git diff --exit-code public/openapi.json; then
             echo "::error::public/openapi.json drifted from public/openapi/**.yaml."
             echo "::error::Run 'make openapi' locally and commit the result."
