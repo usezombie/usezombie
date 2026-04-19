@@ -87,6 +87,16 @@ test "integration: github webhook — valid signature yields 202" {
     return error.SkipZigTest; // TRACKED — see block comment above
 }
 
+// Compile-only anchor. Zig analyzes functions lazily; an unreferenced private
+// fn is never type-checked. Calling _tracked_github_happy_path from a test
+// (guarded by an immediate skip) keeps it on the reachable-from-entry-point
+// graph, so refactors to TestHarness / fixtures / signers surface as compile
+// errors here instead of silently rotting the tracked body.
+test "comptime: tracked github happy path compiles" {
+    if (true) return error.SkipZigTest;
+    try _tracked_github_happy_path(std.testing.allocator);
+}
+
 fn _tracked_github_happy_path(alloc: std.mem.Allocator) !void {
     const h = startHarness(alloc) catch |err| switch (err) {
         error.SkipZigTest => return error.SkipZigTest,
