@@ -112,8 +112,8 @@ test "integration: POST /v1/api-keys returns 201 with zmb_t_ key and persists SH
     };
     defer h.deinit();
 
-    const resp = try (try h.post("/v1/api-keys").bearer(TOKEN_OPERATOR))
-        .json("{\"key_name\":\"ci-pipeline\",\"description\":\"GH Actions\"}").send();
+    const resp = try (try (try h.post("/v1/api-keys").bearer(TOKEN_OPERATOR))
+        .json("{\"key_name\":\"ci-pipeline\",\"description\":\"GH Actions\"}")).send();
     defer resp.deinit();
     try resp.expectStatus(.created);
 
@@ -145,13 +145,13 @@ test "integration: POST /v1/api-keys duplicate key_name returns 409 UZ-APIKEY-00
     };
     defer h.deinit();
 
-    const first = try (try h.post("/v1/api-keys").bearer(TOKEN_OPERATOR))
-        .json("{\"key_name\":\"duplicate-name\"}").send();
+    const first = try (try (try h.post("/v1/api-keys").bearer(TOKEN_OPERATOR))
+        .json("{\"key_name\":\"duplicate-name\"}")).send();
     defer first.deinit();
     try first.expectStatus(.created);
 
-    const second = try (try h.post("/v1/api-keys").bearer(TOKEN_OPERATOR))
-        .json("{\"key_name\":\"duplicate-name\"}").send();
+    const second = try (try (try h.post("/v1/api-keys").bearer(TOKEN_OPERATOR))
+        .json("{\"key_name\":\"duplicate-name\"}")).send();
     defer second.deinit();
     try second.expectStatus(.conflict);
     try std.testing.expect(second.bodyContains("UZ-APIKEY-005"));
@@ -165,8 +165,8 @@ test "integration: minted zmb_t_ key authenticates GET, revoked by PATCH {active
     };
     defer h.deinit();
 
-    const create_resp = try (try h.post("/v1/api-keys").bearer(TOKEN_OPERATOR))
-        .json("{\"key_name\":\"round-trip\"}").send();
+    const create_resp = try (try (try h.post("/v1/api-keys").bearer(TOKEN_OPERATOR))
+        .json("{\"key_name\":\"round-trip\"}")).send();
     defer create_resp.deinit();
     try create_resp.expectStatus(.created);
     const raw_key = (try parseJsonString(ALLOC, create_resp.body, "key")) orelse return error.TestExpectedEqual;
@@ -183,8 +183,8 @@ test "integration: minted zmb_t_ key authenticates GET, revoked by PATCH {active
     // Revoke via PATCH.
     const patch_url = try std.fmt.allocPrint(ALLOC, "/v1/api-keys/{s}", .{id});
     defer ALLOC.free(patch_url);
-    const patch_resp = try (try h.request(.PATCH, patch_url).bearer(TOKEN_OPERATOR))
-        .json("{\"active\":false}").send();
+    const patch_resp = try (try (try h.request(.PATCH, patch_url).bearer(TOKEN_OPERATOR))
+        .json("{\"active\":false}")).send();
     defer patch_resp.deinit();
     try patch_resp.expectStatus(.ok);
 
@@ -203,8 +203,8 @@ test "integration: DELETE active key → 409, revoked key → 204" {
     };
     defer h.deinit();
 
-    const create_resp = try (try h.post("/v1/api-keys").bearer(TOKEN_OPERATOR))
-        .json("{\"key_name\":\"delete-flow\"}").send();
+    const create_resp = try (try (try h.post("/v1/api-keys").bearer(TOKEN_OPERATOR))
+        .json("{\"key_name\":\"delete-flow\"}")).send();
     defer create_resp.deinit();
     try create_resp.expectStatus(.created);
     const id = (try parseJsonString(ALLOC, create_resp.body, "id")) orelse return error.TestExpectedEqual;
@@ -217,8 +217,8 @@ test "integration: DELETE active key → 409, revoked key → 204" {
     defer del_active.deinit();
     try del_active.expectStatus(.conflict);
 
-    const patch_resp = try (try h.request(.PATCH, del_path).bearer(TOKEN_OPERATOR))
-        .json("{\"active\":false}").send();
+    const patch_resp = try (try (try h.request(.PATCH, del_path).bearer(TOKEN_OPERATOR))
+        .json("{\"active\":false}")).send();
     defer patch_resp.deinit();
     try patch_resp.expectStatus(.ok);
 
@@ -246,8 +246,8 @@ test "integration: GET /v1/api-keys returns only the calling tenant's rows" {
     }
 
     // Operator for TEST_TENANT_ID mints one key of their own.
-    const create_resp = try (try h.post("/v1/api-keys").bearer(TOKEN_OPERATOR))
-        .json("{\"key_name\":\"own-tenant-key\"}").send();
+    const create_resp = try (try (try h.post("/v1/api-keys").bearer(TOKEN_OPERATOR))
+        .json("{\"key_name\":\"own-tenant-key\"}")).send();
     defer create_resp.deinit();
     try create_resp.expectStatus(.created);
 

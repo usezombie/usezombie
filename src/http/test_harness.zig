@@ -44,6 +44,10 @@ pub const Config = struct {
     issuer: []const u8 = "https://test.invalid",
     audience: []const u8 = "https://test.invalid",
     api_keys: []const u8 = "",
+    /// Max time to wait for the in-process server's `/healthz` to return 200
+    /// before `start()` returns `error.ServerStartTimeout`. Default 4 s tolerates
+    /// CI contention; raise for very slow runners.
+    wait_timeout_ms: u32 = 4000,
 };
 
 const DEFAULT_JWKS =
@@ -136,7 +140,7 @@ pub const TestHarness = struct {
             h.thread.join();
             h.server.deinit();
         }
-        try waitForServer(alloc, port);
+        try waitForServer(alloc, port, cfg.wait_timeout_ms);
         return h;
     }
 
@@ -206,11 +210,13 @@ fn serverThread(srv: *http_server.Server) void {
     srv.listen() catch |err| std.debug.panic("harness server: {s}", .{@errorName(err)});
 }
 
-fn waitForServer(alloc: std.mem.Allocator, port: u16) !void {
+fn waitForServer(alloc: std.mem.Allocator, port: u16, timeout_ms: u32) !void {
     const url = try std.fmt.allocPrint(alloc, "http://127.0.0.1:{d}/healthz", .{port});
     defer alloc.free(url);
-    var i: usize = 0;
-    while (i < 40) : (i += 1) {
+    const poll_interval_ms: u32 = 25;
+    const max_attempts: u32 = (timeout_ms + poll_interval_ms - 1) / poll_interval_ms; // ceil div
+    var i: u32 = 0;
+    while (i < max_attempts) : (i += 1) {
         var client: std.http.Client = .{ .allocator = alloc };
         defer client.deinit();
         var buf: std.ArrayList(u8) = .{};
@@ -220,13 +226,13 @@ fn waitForServer(alloc: std.mem.Allocator, port: u16) !void {
             .method = .GET,
             .response_writer = &writer.writer,
         }) catch {
-            std.Thread.sleep(25 * std.time.ns_per_ms);
+            std.Thread.sleep(poll_interval_ms * std.time.ns_per_ms);
             continue;
         };
         const body = writer.toOwnedSlice() catch &.{};
         alloc.free(body);
         if (@intFromEnum(result.status) == 200) return;
-        std.Thread.sleep(25 * std.time.ns_per_ms);
+        std.Thread.sleep(poll_interval_ms * std.time.ns_per_ms);
     }
     return error.ServerStartTimeout;
 }
@@ -265,15 +271,11 @@ pub const Request = struct {
         return r;
     }
 
-    /// Non-fallible convenience — adds Content-Type: application/json and sets body.
-    /// Asserts header-slot availability; writing tests with >MAX_HEADERS headers is a
-    /// programming error (raise the const). Keeps call chains readable: no `try` needed.
-    pub fn json(self: Request, body: []const u8) Request {
-        var r = self;
-        std.debug.assert(r.hdr_count < MAX_HEADERS);
-        r.hdr_names[r.hdr_count] = "content-type";
-        r.hdr_values[r.hdr_count] = "application/json";
-        r.hdr_count += 1;
+    /// Adds `Content-Type: application/json` and sets body. Returns
+    /// `error.TooManyHeaders` on slot overflow, matching `header()`'s contract —
+    /// mixed assert/error is a footgun (Greptile #233 3106330937).
+    pub fn json(self: Request, body: []const u8) !Request {
+        var r = try self.header("content-type", "application/json");
         r.body = body;
         return r;
     }
@@ -425,7 +427,7 @@ test "Request.bearer sets authorization header and owns the allocation" {
 test "Request.json adds content-type header and sets body" {
     var h = fakeHarness(std.testing.allocator);
     const body = "{\"k\":1}";
-    const r = Request.init(&h, .POST, "/y").json(body);
+    const r = try Request.init(&h, .POST, "/y").json(body);
     try std.testing.expectEqual(@as(usize, 1), r.hdr_count);
     try std.testing.expectEqualStrings("content-type", r.hdr_names[0]);
     try std.testing.expectEqualStrings("application/json", r.hdr_values[0]);
@@ -443,7 +445,7 @@ test "Request.rawBody sets body without content-type" {
 
 test "Request.header + json preserves prior headers" {
     var h = fakeHarness(std.testing.allocator);
-    const r = (try Request.init(&h, .POST, "/q").header("x-trace", "abc")).json("{}");
+    const r = try (try Request.init(&h, .POST, "/q").header("x-trace", "abc")).json("{}");
     try std.testing.expectEqual(@as(usize, 2), r.hdr_count);
     try std.testing.expectEqualStrings("x-trace", r.hdr_names[0]);
     try std.testing.expectEqualStrings("content-type", r.hdr_names[1]);

@@ -141,15 +141,15 @@ test "integration: RBAC endpoints enforce operator and admin roles over live HTT
         try r.expectErrorCode(error_codes.ERR_INSUFFICIENT_ROLE);
     }
     { // User role on billing POST → 403
-        const r = try (try h.post(billing_event_path).bearer(TEST_USER_TOKEN))
-            .json("{\"event_type\":\"PAYMENT_FAILED\",\"reason\":\"rbac-test\"}").send();
+        const r = try (try (try h.post(billing_event_path).bearer(TEST_USER_TOKEN))
+            .json("{\"event_type\":\"PAYMENT_FAILED\",\"reason\":\"rbac-test\"}")).send();
         defer r.deinit();
         try r.expectStatus(.forbidden);
         try r.expectErrorCode(error_codes.ERR_INSUFFICIENT_ROLE);
     }
     { // Operator rejected for admin-only billing endpoint
-        const r = try (try h.post(billing_event_path).bearer(TEST_OPERATOR_TOKEN))
-            .json("{\"event_type\":\"PAYMENT_FAILED\",\"reason\":\"rbac-test\"}").send();
+        const r = try (try (try h.post(billing_event_path).bearer(TEST_OPERATOR_TOKEN))
+            .json("{\"event_type\":\"PAYMENT_FAILED\",\"reason\":\"rbac-test\"}")).send();
         defer r.deinit();
         try r.expectStatus(.forbidden);
         try r.expectErrorCode(error_codes.ERR_INSUFFICIENT_ROLE);
@@ -161,8 +161,8 @@ test "integration: RBAC endpoints enforce operator and admin roles over live HTT
         try std.testing.expect(r.bodyContains("\"deleted\":true"));
     }
     { // Admin posts billing event — ok
-        const r = try (try h.post(billing_event_path).bearer(TEST_ADMIN_TOKEN))
-            .json("{\"event_type\":\"PAYMENT_FAILED\",\"reason\":\"rbac-test\"}").send();
+        const r = try (try (try h.post(billing_event_path).bearer(TEST_ADMIN_TOKEN))
+            .json("{\"event_type\":\"PAYMENT_FAILED\",\"reason\":\"rbac-test\"}")).send();
         defer r.deinit();
         try r.expectStatus(.ok);
         try std.testing.expect(r.bodyContains("\"billing_status\":\"GRACE\""));

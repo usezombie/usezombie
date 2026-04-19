@@ -124,7 +124,7 @@ test "integration: admin platform key PUT-GET-DELETE lifecycle" {
     defer alloc.free(put_body);
 
     { // PUT: upsert — T1 + T12 + T8 (no key material leak)
-        const r = try (try h.put(path).bearer(TOKEN_ADMIN)).json(put_body).send();
+        const r = try (try (try h.put(path).bearer(TOKEN_ADMIN)).json(put_body)).send();
         defer r.deinit();
         try r.expectStatus(.ok);
         try std.testing.expect(r.bodyContains(TEST_PROVIDER));
@@ -167,24 +167,24 @@ test "integration: admin platform key enforces admin role and validates input" {
     defer alloc.free(valid_body);
 
     { // T3: no token → 401
-        const r = try h.put(path).json(valid_body).send();
+        const r = try (try h.put(path).json(valid_body)).send();
         defer r.deinit();
         try r.expectStatus(.unauthorized);
     }
     { // T3: user role → 403
-        const r = try (try h.put(path).bearer(TOKEN_USER)).json(valid_body).send();
+        const r = try (try (try h.put(path).bearer(TOKEN_USER)).json(valid_body)).send();
         defer r.deinit();
         try r.expectStatus(.forbidden);
         try r.expectErrorCode(error_codes.ERR_INSUFFICIENT_ROLE);
     }
     { // T3: operator role → 403
-        const r = try (try h.put(path).bearer(TOKEN_OPERATOR)).json(valid_body).send();
+        const r = try (try (try h.put(path).bearer(TOKEN_OPERATOR)).json(valid_body)).send();
         defer r.deinit();
         try r.expectStatus(.forbidden);
     }
     { // T2: empty provider → 400
-        const r = try (try h.put(path).bearer(TOKEN_ADMIN))
-            .json("{\"provider\":\"\",\"source_workspace_id\":\"0195b4ba-8d3a-7f13-8abc-2b3e1e0a6f11\"}").send();
+        const r = try (try (try h.put(path).bearer(TOKEN_ADMIN))
+            .json("{\"provider\":\"\",\"source_workspace_id\":\"0195b4ba-8d3a-7f13-8abc-2b3e1e0a6f11\"}")).send();
         defer r.deinit();
         try r.expectStatus(.bad_request);
     }
@@ -192,18 +192,18 @@ test "integration: admin platform key enforces admin role and validates input" {
         const long = "a" ** 33;
         const b = try std.fmt.allocPrint(alloc, "{{\"provider\":\"{s}\",\"source_workspace_id\":\"{s}\"}}", .{ long, TEST_WS_ID });
         defer alloc.free(b);
-        const r = try (try h.put(path).bearer(TOKEN_ADMIN)).json(b).send();
+        const r = try (try (try h.put(path).bearer(TOKEN_ADMIN)).json(b)).send();
         defer r.deinit();
         try r.expectStatus(.bad_request);
     }
     { // T2: non-UUIDv7 source_workspace_id → 400
-        const r = try (try h.put(path).bearer(TOKEN_ADMIN))
-            .json("{\"provider\":\"kimi\",\"source_workspace_id\":\"not-a-uuid\"}").send();
+        const r = try (try (try h.put(path).bearer(TOKEN_ADMIN))
+            .json("{\"provider\":\"kimi\",\"source_workspace_id\":\"not-a-uuid\"}")).send();
         defer r.deinit();
         try r.expectStatus(.bad_request);
     }
     { // T3: malformed JSON → 400
-        const r = try (try h.put(path).bearer(TOKEN_ADMIN)).json("{bad json").send();
+        const r = try (try (try h.put(path).bearer(TOKEN_ADMIN)).json("{bad json")).send();
         defer r.deinit();
         try r.expectStatus(.bad_request);
     }
@@ -236,7 +236,7 @@ test "integration: workspace BYOK credential lifecycle and key never in response
     { // PUT: store key — T1 + T12
         const b = try std.fmt.allocPrint(alloc, "{{\"provider\":\"anthropic\",\"api_key\":\"{s}\"}}", .{secret_key});
         defer alloc.free(b);
-        const r = try (try h.put(path).bearer(TOKEN_OPERATOR)).json(b).send();
+        const r = try (try (try h.put(path).bearer(TOKEN_OPERATOR)).json(b)).send();
         defer r.deinit();
         try r.expectStatus(.no_content);
         try std.testing.expectEqual(@as(usize, 0), r.body.len);
@@ -285,17 +285,17 @@ test "integration: workspace BYOK enforces operator role and workspace boundary"
     const valid_body = "{\"provider\":\"anthropic\",\"api_key\":\"sk-test-1234\"}";
 
     { // T3: no token → 401
-        const r = try h.put(path).json(valid_body).send();
+        const r = try (try h.put(path).json(valid_body)).send();
         defer r.deinit();
         try r.expectStatus(.unauthorized);
     }
     { // T3: user role → 403
-        const r = try (try h.put(path).bearer(TOKEN_USER)).json(valid_body).send();
+        const r = try (try (try h.put(path).bearer(TOKEN_USER)).json(valid_body)).send();
         defer r.deinit();
         try r.expectStatus(.forbidden);
     }
     { // T8: cross-workspace → 403 or 400
-        const r = try (try h.put(other_path).bearer(TOKEN_OPERATOR)).json(valid_body).send();
+        const r = try (try (try h.put(other_path).bearer(TOKEN_OPERATOR)).json(valid_body)).send();
         defer r.deinit();
         try std.testing.expect(r.status == 403 or r.status == 400);
     }
@@ -303,7 +303,7 @@ test "integration: workspace BYOK enforces operator role and workspace boundary"
         const long = "a" ** 33;
         const b = try std.fmt.allocPrint(alloc, "{{\"provider\":\"{s}\",\"api_key\":\"sk-x\"}}", .{long});
         defer alloc.free(b);
-        const r = try (try h.put(path).bearer(TOKEN_OPERATOR)).json(b).send();
+        const r = try (try (try h.put(path).bearer(TOKEN_OPERATOR)).json(b)).send();
         defer r.deinit();
         try r.expectStatus(.bad_request);
     }
@@ -311,13 +311,13 @@ test "integration: workspace BYOK enforces operator role and workspace boundary"
         const long_key = "sk-" ++ ("a" ** 254);
         const b = try std.fmt.allocPrint(alloc, "{{\"provider\":\"anthropic\",\"api_key\":\"{s}\"}}", .{long_key});
         defer alloc.free(b);
-        const r = try (try h.put(path).bearer(TOKEN_OPERATOR)).json(b).send();
+        const r = try (try (try h.put(path).bearer(TOKEN_OPERATOR)).json(b)).send();
         defer r.deinit();
         try r.expectStatus(.bad_request);
     }
     { // T2: empty api_key → 400
-        const r = try (try h.put(path).bearer(TOKEN_OPERATOR))
-            .json("{\"provider\":\"anthropic\",\"api_key\":\"\"}").send();
+        const r = try (try (try h.put(path).bearer(TOKEN_OPERATOR))
+            .json("{\"provider\":\"anthropic\",\"api_key\":\"\"}")).send();
         defer r.deinit();
         try r.expectStatus(.bad_request);
     }
@@ -339,10 +339,15 @@ const ConcurrentPutCtx = struct {
     body: []const u8,
     result: *u16,
     fn run(self: ConcurrentPutCtx) void {
-        const r = (self.h.put("/v1/admin/platform-keys").bearer(TOKEN_ADMIN) catch {
+        const bearer_req = self.h.put("/v1/admin/platform-keys").bearer(TOKEN_ADMIN) catch {
             self.result.* = 0;
             return;
-        }).json(self.body).send() catch {
+        };
+        const json_req = bearer_req.json(self.body) catch {
+            self.result.* = 0;
+            return;
+        };
+        const r = json_req.send() catch {
             self.result.* = 0;
             return;
         };

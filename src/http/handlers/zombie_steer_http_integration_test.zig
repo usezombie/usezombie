@@ -113,22 +113,22 @@ test "integration: zombie steer — auth and body validation" {
     const body_toolong = "{\"message\":\"" ++ "x" ** 8193 ++ "\"}";
 
     { // no bearer → 401
-        const r = try h.post(steer_idle).json(body_valid).send();
+        const r = try (try h.post(steer_idle).json(body_valid)).send();
         defer r.deinit();
         try r.expectStatus(.unauthorized);
     }
     { // zombie in different workspace → 404
-        const r = try (try h.post(steer_other).bearer(TOKEN_OPERATOR)).json(body_valid).send();
+        const r = try (try (try h.post(steer_other).bearer(TOKEN_OPERATOR)).json(body_valid)).send();
         defer r.deinit();
         try r.expectStatus(.not_found);
     }
     { // empty message → 400
-        const r = try (try h.post(steer_idle).bearer(TOKEN_OPERATOR)).json(body_empty).send();
+        const r = try (try (try h.post(steer_idle).bearer(TOKEN_OPERATOR)).json(body_empty)).send();
         defer r.deinit();
         try r.expectStatus(.bad_request);
     }
     { // message > 8192 bytes → 400
-        const r = try (try h.post(steer_idle).bearer(TOKEN_OPERATOR)).json(body_toolong).send();
+        const r = try (try (try h.post(steer_idle).bearer(TOKEN_OPERATOR)).json(body_toolong)).send();
         defer r.deinit();
         try r.expectStatus(.bad_request);
     }
@@ -151,7 +151,7 @@ test "integration: zombie steer idle — queued, execution_active=false" {
     const url = try std.fmt.allocPrint(ALLOC, "/v1/workspaces/{s}/zombies/{s}/steer", .{ TEST_WORKSPACE_ID, ZOMBIE_IDLE });
     defer ALLOC.free(url);
 
-    const r = try (try h.post(url).bearer(TOKEN_OPERATOR)).json("{\"message\":\"proceed to phase 2\"}").send();
+    const r = try (try (try h.post(url).bearer(TOKEN_OPERATOR)).json("{\"message\":\"proceed to phase 2\"}")).send();
     defer r.deinit();
 
     try r.expectStatus(.ok);
@@ -179,7 +179,7 @@ test "integration: zombie steer active — queued, execution_active=true, execut
     const url = try std.fmt.allocPrint(ALLOC, "/v1/workspaces/{s}/zombies/{s}/steer", .{ TEST_WORKSPACE_ID, ZOMBIE_ACTIVE });
     defer ALLOC.free(url);
 
-    const r = try (try h.post(url).bearer(TOKEN_OPERATOR)).json("{\"message\":\"new objective\"}").send();
+    const r = try (try (try h.post(url).bearer(TOKEN_OPERATOR)).json("{\"message\":\"new objective\"}")).send();
     defer r.deinit();
 
     try r.expectStatus(.ok);

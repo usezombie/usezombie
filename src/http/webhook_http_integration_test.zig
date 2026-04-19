@@ -121,7 +121,7 @@ fn _tracked_github_happy_path(alloc: std.mem.Allocator) !void {
     const url = try std.fmt.allocPrint(alloc, "/v1/webhooks/{s}", .{fx.zombie_id});
     defer alloc.free(url);
 
-    const r = try (try h.post(url).header(sig.header_name, sig.header_value)).json(body).send();
+    const r = try (try (try h.post(url).header(sig.header_name, sig.header_value)).json(body)).send();
     defer r.deinit();
 
     // ── Assert + clean up ─────────────────────────────────────────────────
