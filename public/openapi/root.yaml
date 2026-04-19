@@ -164,10 +164,6 @@ paths:
     $ref: ./paths/agent-keys.yaml#/~1v1~1workspaces~1{workspace_id}~1agent-keys~1{agent_id}
   /v1/workspaces/{workspace_id}/scoring/config:
     $ref: ./paths/scoring.yaml#/~1v1~1workspaces~1{workspace_id}~1scoring~1config
-  /v1/workspaces/{workspace_id}/spec/preview:
-    $ref: ./paths/spec.yaml#/~1v1~1workspaces~1{workspace_id}~1spec~1preview
-  /v1/workspaces/{workspace_id}/spec/template:
-    $ref: ./paths/spec.yaml#/~1v1~1workspaces~1{workspace_id}~1spec~1template
   /v1/workspaces/{workspace_id}/zombies:
     $ref: ./paths/zombies.yaml#/~1v1~1workspaces~1{workspace_id}~1zombies
   /v1/workspaces/{workspace_id}/zombies/{zombie_id}:

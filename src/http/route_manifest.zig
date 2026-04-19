@@ -54,10 +54,6 @@ pub const entries = [_]Entry{
     .{ .method = "PUT", .path = "/v1/workspaces/{workspace_id}/credentials/llm" },
     .{ .method = "DELETE", .path = "/v1/workspaces/{workspace_id}/credentials/llm" },
 
-    // Spec
-    .{ .method = "POST", .path = "/v1/workspaces/{workspace_id}/spec/preview" },
-    .{ .method = "POST", .path = "/v1/workspaces/{workspace_id}/spec/template" },
-
     // Scoring
     .{ .method = "POST", .path = "/v1/workspaces/{workspace_id}/scoring/config" },
 
