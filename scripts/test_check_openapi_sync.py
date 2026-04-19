@@ -28,8 +28,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
 from check_openapi_sync import (  # noqa: E402
     HTTP_METHODS,
-    METHOD_FIRST,
-    PATH_FIRST,
     parse_manifest,
     parse_spec,
 )
