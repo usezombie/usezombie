@@ -47,7 +47,8 @@ pub const ServeConfig = struct {
     /// Read every env var, validate, and return a populated ServeConfig.
     /// Caller owns the result and must call deinit. Sub-loaders use their
     /// own errdefer chains; this orchestrator threads one errdefer per
-    /// produced section so a late failure frees every prior section.
+    /// heap-owning section so a late failure frees every prior section
+    /// (loadSizes returns POD only; loadMisc is last so no errdefer follows).
     pub fn load(alloc: std.mem.Allocator) !ServeConfig {
         const sizes = try loader.loadSizes(alloc);
         const oidc_cfg = try loader.loadOidc(alloc);
