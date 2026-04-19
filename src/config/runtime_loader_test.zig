@@ -129,7 +129,7 @@ test "ServeConfig.load accepts oidc plus api key auth mode" {
     try std.testing.expectEqualStrings("issued-key", cfg.api_keys);
 }
 
-test "ServeConfig.load rejects empty api key when explicitly configured with oidc" {
+test "ServeConfig.load accepts whitespace api key as oidc-only when oidc enabled" {
     const env_pairs = [_][2][]const u8{
         .{ "OIDC_JWKS_URL", "https://idp.example.com/.well-known/jwks.json" },
         .{ "API_KEY", "   " },
@@ -138,7 +138,9 @@ test "ServeConfig.load rejects empty api key when explicitly configured with oid
     try setTestEnv(&env_pairs);
     defer unsetTestEnv(&env_pairs);
 
-    try std.testing.expectError(ValidationError.InvalidApiKeyList, ServeConfig.load(std.testing.allocator));
+    var cfg = try ServeConfig.load(std.testing.allocator);
+    defer cfg.deinit();
+    try std.testing.expectEqual(@as(usize, 0), cfg.api_keys.len);
 }
 
 test "ServeConfig.load applies default port" {
