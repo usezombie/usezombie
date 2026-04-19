@@ -28,7 +28,7 @@
 
 ## Files Changed (blast radius)
 
-Usezombie repo (`/Users/kishore/Projects/usezombie`):
+Usezombie repo (`<usezombie worktree>`):
 
 | File | Action | Why |
 |------|--------|-----|
@@ -46,7 +46,7 @@ Usezombie repo (`/Users/kishore/Projects/usezombie`):
 | `public/openapi.json` | MODIFY | Remove paths and schemas tagged with the skill_secrets operation. |
 | `docs/v2/pending/P1_API_CLI_INFRA_M30_001_SKILL_SECRET_TEARDOWN.md` | MOVE | pending → active → done per spec lifecycle. |
 
-Docs repo (`/Users/kishore/Projects/docs`) — companion PR:
+Docs repo (`<docs worktree>`) — companion PR:
 
 | File | Action | Why |
 |------|--------|-----|
@@ -294,8 +294,9 @@ psql "$HANDLER_DB_TEST_URL" -c '\dt vault.workspace_skill_secrets' 2>&1 | grep -
 make test && make test-integration && echo PASS || echo FAIL
 make memleak && echo PASS || echo FAIL
 
-# E6: Docs lint (in the docs repo)
-cd /Users/kishore/Projects/docs && make lint && echo PASS || echo FAIL
+# E6: Docs lint (in the docs repo worktree — set DOCS_REPO_ROOT to your checkout,
+# or rely on the sibling-worktree default `../docs`)
+(cd "${DOCS_REPO_ROOT:-../docs}" && make lint) && echo PASS || echo FAIL
 ```
 
 ---
