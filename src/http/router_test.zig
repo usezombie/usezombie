@@ -406,23 +406,28 @@ test "custom-method subpath: empty ids are rejected" {
 // Guards the in-repo invariant that route_manifest.zig stays aligned with
 // router.zig's match() body. The OpenAPI ↔ manifest half of the sync is
 // enforced by scripts/check_openapi_sync.py (run via `make openapi`).
+//
+// Placeholders are substituted with a UUIDv7-shaped fixture rather than a
+// single char so that today's isSingleSegment checks AND any future
+// format-stricter matcher (e.g. stdlib UUID parse on `{workspace_id}`)
+// both succeed with the same test.
 test "route_manifest: every entry dispatches through match()" {
     const manifest = @import("route_manifest.zig");
-    var buf: [256]u8 = undefined;
+    const fixture = "01234567-89ab-7def-8123-456789abcdef"; // 36-char UUIDv7 shape
+    var buf: [512]u8 = undefined;
 
     for (manifest.entries) |entry| {
-        // Substitute every `{...}` placeholder with a single alnum segment
-        // that satisfies isSingleSegment / the various matcher format checks.
         var out_len: usize = 0;
         var i: usize = 0;
         while (i < entry.path.len) : (i += 1) {
-            if (out_len >= buf.len) return error.ManifestPathTooLongForTestBuffer;
             if (entry.path[i] == '{') {
-                // Skip to '}' and emit a placeholder.
+                // Skip to '}' and emit the UUID fixture.
                 while (i < entry.path.len and entry.path[i] != '}') : (i += 1) {}
-                buf[out_len] = 'x';
-                out_len += 1;
+                if (out_len + fixture.len > buf.len) return error.ManifestPathTooLongForTestBuffer;
+                @memcpy(buf[out_len .. out_len + fixture.len], fixture);
+                out_len += fixture.len;
             } else {
+                if (out_len >= buf.len) return error.ManifestPathTooLongForTestBuffer;
                 buf[out_len] = entry.path[i];
                 out_len += 1;
             }

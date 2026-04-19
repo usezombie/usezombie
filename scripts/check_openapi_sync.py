@@ -53,7 +53,9 @@ def parse_manifest(src: str) -> "set[tuple[str, str]]":
 
 def parse_spec(spec: dict) -> "set[tuple[str, str]]":
     pairs: "set[tuple[str, str]]" = set()
-    for path, methods in spec.get("paths", {}).items():
+    # `.get("paths") or {}` guards against an explicit null — `.get("paths", {})`
+    # alone returns None for `{"paths": null}`, which would then crash on .items().
+    for path, methods in (spec.get("paths") or {}).items():
         for method, _op in (methods or {}).items():
             if method.lower() in HTTP_METHODS:
                 pairs.add((method.upper(), path))
