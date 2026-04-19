@@ -73,9 +73,7 @@ pub fn parseZombieFromTriggerMarkdown(
     const fm = scanFrontmatter(trigger_markdown) orelse
         return ZombieConfigError.MissingRequiredField;
 
-    const json = yaml_frontmatter.yamlFrontmatterToJson(alloc, fm.yaml) catch {
-        return ZombieConfigError.MissingRequiredField;
-    };
+    const json = try yaml_frontmatter.yamlFrontmatterToJson(alloc, fm.yaml);
     defer alloc.free(json);
 
     return config_parser.parseZombieConfig(alloc, json);

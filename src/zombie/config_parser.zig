@@ -33,8 +33,9 @@ pub fn parseZombieConfig(
     alloc: Allocator,
     config_json: []const u8,
 ) (Allocator.Error || ZombieConfigError)!ZombieConfig {
-    const parsed = std.json.parseFromSlice(std.json.Value, alloc, config_json, .{}) catch {
-        return ZombieConfigError.MissingRequiredField;
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, config_json, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return ZombieConfigError.MissingRequiredField,
     };
     defer parsed.deinit();
 
