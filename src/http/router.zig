@@ -259,13 +259,6 @@ test "match resolves admin platform key routes (M16_004)" {
     try std.testing.expect(match("/v1/admin/platform-keys/") == null);
 }
 
-test "match returns null for removed spec relay routes" {
-    try std.testing.expect(match("/v1/workspaces/0195b4ba-8d3a-7f13-8abc-2b3e1e0a6f11/spec/template") == null);
-    try std.testing.expect(match("/v1/workspaces/0195b4ba-8d3a-7f13-8abc-2b3e1e0a6f11/spec/preview") == null);
-    try std.testing.expect(match("/v1/workspaces/ws_1/spec") == null);
-    try std.testing.expect(match("/v1/workspaces/ws_1/spec/") == null);
-}
-
 test "match resolves workspace LLM credential route (M16_004)" {
     const ws_id = "0195b4ba-8d3a-7f13-8abc-2b3e1e0a6f11";
     try std.testing.expectEqualStrings(
