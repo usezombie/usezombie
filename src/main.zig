@@ -96,7 +96,21 @@ pub fn main() !void {
         log.warn("startup.debug_build hint=not_for_production", .{});
     }
 
-    const cmd = cli_commands.parseSubcommandFromProcessArgs();
+    const cmd = cli_commands.parseSubcommandFromProcessArgs() catch |err| switch (err) {
+        error.UnknownSubcommand => {
+            // Fail loudly so a stale script invoking a removed subcommand
+            // doesn't silently start the HTTP server.
+            var argv = std.process.args();
+            _ = argv.next();
+            const bad = argv.next() orelse "";
+            std.debug.print(
+                "zombied: unknown subcommand: {s}\n" ++
+                    "usage: zombied [serve|worker|doctor|migrate|reconcile]\n",
+                .{bad},
+            );
+            std.process.exit(1);
+        },
+    };
     switch (cmd) {
         .serve => try cmd_serve.run(alloc),
         .worker => try cmd_worker.run(alloc),
@@ -160,10 +174,6 @@ test {
     _ = @import("http/handlers/hx_test.zig");
     _ = @import("http/handlers/memory_handler_test.zig");
     _ = @import("http/handlers/memory_handler_shapes_test.zig");
-    // M29_002: agent_relay became a generic primitive with no current callers;
-    // wired here so its jsonEscapeString tests + comptime invariant guards
-    // against SPEC_* reintroduction stay live.
-    _ = @import("http/handlers/agent_relay.zig");
     _ = @import("cmd/serve_test.zig");
     _ = @import("queue/redis.zig");
     _ = @import("queue/redis_pubsub_test.zig");
