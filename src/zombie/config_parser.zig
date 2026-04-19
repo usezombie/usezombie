@@ -159,8 +159,10 @@ fn parseGatesField(
         .object => |o| o,
         else => return ZombieConfigError.MissingRequiredField,
     };
-    return config_gates.parseGatePolicy(alloc, obj) catch
-        ZombieConfigError.MissingRequiredField;
+    return config_gates.parseGatePolicy(alloc, obj) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return ZombieConfigError.MissingRequiredField,
+    };
 }
 
 const ExtendedFields = struct {

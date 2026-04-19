@@ -104,11 +104,9 @@ pub const ZombieConfig = struct {
     }
 };
 
-// Guards against silent field drift: if someone adds a field to ZombieConfig
-// without updating deinit(), @sizeOf changes and this assert fails at compile time.
-// 216 bytes on 64-bit: 9 pointer/slice fields + trigger union + budget + gates optional.
 // Guards against silent field drift: if a field is added to ZombieConfig
 // without updating deinit(), @sizeOf changes and this assert fails at compile.
+// 288 bytes on 64-bit: 9 pointer/slice fields + trigger union + budget + gates optional.
 comptime {
     std.debug.assert(@sizeOf(ZombieConfig) == 288);
 }

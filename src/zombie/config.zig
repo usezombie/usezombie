@@ -49,10 +49,6 @@ pub const validateZombieSkills = config_validate.validateZombieSkills;
 // Test discovery — Zig only runs tests in transitively imported files. The
 // implementation modules are already reached via the `const` imports above,
 // but test files contain no `pub` symbols the façade consumes, so pull them
-// in explicitly here. main.zig imports config.zig; config.zig fans out.
-// Test discovery — Zig only runs tests in transitively imported files. The
-// implementation modules are already reached via the `const` imports above,
-// but test files contain no `pub` symbols the façade consumes, so pull them
 // in explicitly here. test {} blocks are stripped in release builds, so
 // this adds zero bytes to production binaries. main.zig imports config.zig
 // once; config.zig fans out to the implementation + test modules.
