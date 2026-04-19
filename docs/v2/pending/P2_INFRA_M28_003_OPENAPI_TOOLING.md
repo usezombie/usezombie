@@ -163,8 +163,25 @@ Python script (~60 lines, matches existing `scripts/check_openapi_errors.py` pat
 
 ```python
 #!/usr/bin/env python3
-"""Fail if router.zig paths and openapi.json paths diverge."""
+"""Fail if router.zig paths and openapi.json paths diverge.
+
+ASSUMPTION: src/http/router.zig registers every /v1 route as a LITERAL string
+match arm of the form `"/v1/..." =>`. This script's regex cannot see through
+string interpolation, variable-based path construction, comptime concatenation,
+or macro-expanded route tables. If router.zig is ever refactored to register
+routes dynamically, this gate will silently drop coverage — it will still exit
+0 but compare an incomplete set.
+
+DEFENSIVE FLOOR: the script asserts a minimum known-good path count. If the
+extracted router set drops below MIN_EXPECTED_PATHS, we fail the build and
+force a human review of the regex. Bump MIN_EXPECTED_PATHS in lockstep when
+new endpoints land.
+"""
 import json, re, sys, pathlib
+
+# Floor — bump when new endpoints land. If the regex silently breaks, this
+# fires before path parity does.
+MIN_EXPECTED_PATHS = 30
 
 ROUTER = pathlib.Path("src/http/router.zig").read_text()
 SPEC = json.loads(pathlib.Path("public/openapi.json").read_text())
@@ -173,6 +190,15 @@ SPEC = json.loads(pathlib.Path("public/openapi.json").read_text())
 router_paths = set(re.findall(r'"(/v1/[^"]+)"\s*=>', ROUTER))
 # Normalize :id → {id} for OpenAPI-style path params.
 router_paths = {re.sub(r':(\w+)', r'{\1}', p) for p in router_paths}
+
+if len(router_paths) < MIN_EXPECTED_PATHS:
+    print(
+        f"FAIL: router_paths set has {len(router_paths)} entries, "
+        f"below floor of {MIN_EXPECTED_PATHS}. "
+        "The regex may have silently stopped matching — review "
+        "scripts/check_openapi_sync.py against the current router.zig shape."
+    )
+    sys.exit(1)
 
 spec_paths = set(SPEC.get("paths", {}).keys())
 
@@ -188,6 +214,13 @@ if missing_in_spec or missing_in_router:
 
 print(f"OK: router ↔ openapi.json path parity ({len(router_paths)} paths)")
 ```
+
+**Regex coverage invariant:** the pattern `"/v1/..." =>` matches every literal
+route arm in `router.zig` today. If a future refactor moves routes into a
+variable-driven table or a comptime-built dispatch map, this script will miss
+them. The `MIN_EXPECTED_PATHS` floor is the canary — it fails loudly if the
+regex stops matching enough routes. Update it in the same commit that adds a
+new literal route.
 
 **`make check-openapi-sync`:**
 
