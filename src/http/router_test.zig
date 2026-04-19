@@ -404,8 +404,16 @@ test "custom-method subpath: empty ids are rejected" {
 
 // Every entry in the route manifest must be dispatchable through match().
 // Guards the in-repo invariant that route_manifest.zig stays aligned with
-// router.zig's match() body. The OpenAPI ↔ manifest half of the sync is
-// enforced by scripts/check_openapi_sync.py (run via `make openapi`).
+// router.zig's match() body.
+//
+// Scope: PATH dispatchability only. match() takes a path, not a method —
+// HTTP method dispatch is handled downstream in src/http/server.zig /
+// route_table.zig. A manifest entry with a correct path but a wrong method
+// (e.g. DELETE where the server actually implements PATCH) will pass this
+// test. Method parity is enforced by scripts/check_openapi_sync.py against
+// public/openapi.json, where method is part of the (method, path) tuple.
+// Together, the two gates catch method+path drift; neither alone is
+// sufficient.
 //
 // Placeholders are substituted with a UUIDv7-shaped fixture rather than a
 // single char so that today's isSingleSegment checks AND any future

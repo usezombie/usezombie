@@ -333,4 +333,7 @@ class ParityAgainstCommittedArtifactsTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    # Default verbosity (dots + summary) — keeps `make openapi` output terse.
+    # Run with `python3 -m unittest -v scripts.test_check_openapi_sync` for
+    # per-test output when debugging a regression.
+    unittest.main()

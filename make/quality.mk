@@ -158,7 +158,7 @@ openapi:  ## Bundle YAML → openapi.json, lint, check error schema, assert rout
 	@echo "→ [openapi] Router ↔ openapi.json (method, path) parity..."
 	@python3 scripts/check_openapi_sync.py
 	@echo "→ [openapi] Sync-gate parser regression tests..."
-	@python3 scripts/test_check_openapi_sync.py 2>&1 | tail -3
+	@python3 scripts/test_check_openapi_sync.py
 	@echo "✓ [openapi] Bundle + lint + error-schema + router parity + parser tests all green"
 
 lint-zig: _fmt_check _zlint_check _pg_drain_check _zig_target_lint _zig_line_limit_check _hardcoded_role_check  ## Lint zombied (Zig)
