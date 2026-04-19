@@ -416,6 +416,7 @@ test "route_manifest: every entry dispatches through match()" {
         var out_len: usize = 0;
         var i: usize = 0;
         while (i < entry.path.len) : (i += 1) {
+            if (out_len >= buf.len) return error.ManifestPathTooLongForTestBuffer;
             if (entry.path[i] == '{') {
                 // Skip to '}' and emit a placeholder.
                 while (i < entry.path.len and entry.path[i] != '}') : (i += 1) {}

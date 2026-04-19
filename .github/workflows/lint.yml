@@ -87,13 +87,14 @@ jobs:
           bun-version: 1.3.10
       - name: Install root dependencies (pulls @redocly/cli)
         run: bun install --frozen-lockfile
-      - name: Run OpenAPI lint gate
-        run: make lint-openapi
-      - name: Assert public/openapi.json is in sync with the YAML source
+      - name: Assert public/openapi.json is produced purely from YAML
         run: |
-          # make lint-openapi has just re-bundled public/openapi.json; if the
-          # committed file and the re-bundle differ, a contributor either
-          # hand-edited the JSON or forgot to `make openapi`.
+          # Delete the committed JSON first, then let `make lint-openapi`
+          # rebundle it from the YAML source alone. If `git diff` then shows
+          # any delta vs HEAD, either the YAML is out of sync or someone
+          # hand-edited the JSON.
+          rm public/openapi.json
+          make lint-openapi
           if ! git diff --exit-code public/openapi.json; then
             echo "::error::public/openapi.json drifted from public/openapi/**.yaml."
             echo "::error::Run 'make openapi' locally and commit the result."

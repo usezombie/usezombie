@@ -12,7 +12,7 @@ rules:
   path-declaration-must-exist: error
   # 4xx/5xx bodies: Redocly only checks presence. Shape/media-type/ErrorBody-field
   # checks live in scripts/check_openapi_errors.py (run from `make openapi` after
-  # this lint pass). See docs/v2/active/P2_INFRA_M28_003_OPENAPI_TOOLING.md §2.
+  # this lint pass). See docs/v2/done/P2_INFRA_M28_003_OPENAPI_TOOLING.md §2.
   operation-4xx-response: warn
   operation-2xx-response: warn
   # Pre-existing content issues out of scope for M28_003. Turned off so the CI

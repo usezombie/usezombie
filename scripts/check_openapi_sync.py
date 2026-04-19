@@ -27,16 +27,28 @@ MANIFEST_PATH = pathlib.Path("src/http/route_manifest.zig")
 SPEC_PATH = pathlib.Path("public/openapi.json")
 
 # Matches `.{ .method = "POST", .path = "/v1/foo/{bar}" },` entries in the
-# manifest's initializer list. Whitespace and order are flexible.
-ENTRY_RE = re.compile(
+# manifest's initializer list. Zig struct literals allow either field order,
+# so parse both and union the results — relying on a fixed "method first"
+# convention would silently drop any entry a contributor reorders.
+METHOD_FIRST = re.compile(
     r'\.method\s*=\s*"(?P<method>[A-Z]+)"\s*,\s*\.path\s*=\s*"(?P<path>[^"]+)"'
 )
+PATH_FIRST = re.compile(
+    r'\.path\s*=\s*"(?P<path>[^"]+)"\s*,\s*\.method\s*=\s*"(?P<method>[A-Z]+)"'
+)
 
+# OpenAPI 3.1 PathItem objects hold both HTTP-verb keys and sibling keys like
+# `parameters`, `summary`, `servers`, `description`. Only the 7 HTTP verbs map
+# to a route pair; the rest must be ignored when building the spec-side set.
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 
 
 def parse_manifest(src: str) -> "set[tuple[str, str]]":
-    return {(m.group("method"), m.group("path")) for m in ENTRY_RE.finditer(src)}
+    pairs: "set[tuple[str, str]]" = set()
+    for pattern in (METHOD_FIRST, PATH_FIRST):
+        for m in pattern.finditer(src):
+            pairs.add((m.group("method"), m.group("path")))
+    return pairs
 
 
 def parse_spec(spec: dict) -> "set[tuple[str, str]]":
