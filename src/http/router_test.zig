@@ -405,7 +405,7 @@ test "custom-method subpath: empty ids are rejected" {
 // Every entry in the route manifest must be dispatchable through match().
 // Guards the in-repo invariant that route_manifest.zig stays aligned with
 // router.zig's match() body. The OpenAPI ↔ manifest half of the sync is
-// enforced by scripts/check_openapi_sync.py (run via `make check-openapi-sync`).
+// enforced by scripts/check_openapi_sync.py (run via `make openapi`).
 test "route_manifest: every entry dispatches through match()" {
     const manifest = @import("route_manifest.zig");
     var buf: [256]u8 = undefined;
