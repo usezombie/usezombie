@@ -200,7 +200,7 @@ fn parseChainArray(
     const val = root.get("chain") orelse return try alloc.alloc([]const u8, 0);
     const arr = switch (val) {
         .array => |a| a,
-        else => return try alloc.alloc([]const u8, 0),
+        else => return ZombieConfigError.MissingRequiredField,
     };
     return try helpers.dupeStringArray(alloc, arr.items);
 }
