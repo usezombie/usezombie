@@ -77,29 +77,36 @@ fn setTestEncryptionKey() void {
 
 fn setupSeedData(conn: *pg.Conn) !void {
     const now_ms = std.time.milliTimestamp();
+    // Idempotent — other integration suites share TEST_TENANT_ID / TEST_WS_ID.
+    // Only wipe rows THIS suite owns; tenants/workspaces use ON CONFLICT DO NOTHING
+    // so a prior test's seed survives intact (and FK-referencing rows in sibling
+    // suites don't get cascaded out from under them).
     _ = try conn.exec("DELETE FROM platform_llm_keys WHERE provider LIKE '\\__test\\_%' ESCAPE '\\'", .{});
     _ = try conn.exec("DELETE FROM vault.secrets WHERE workspace_id IN ($1, $2)", .{ TEST_WS_ID, TEST_ADMIN_WS_ID });
-    _ = try conn.exec("DELETE FROM workspaces WHERE workspace_id IN ($1, $2)", .{ TEST_WS_ID, TEST_ADMIN_WS_ID });
-    _ = try conn.exec("DELETE FROM tenants WHERE tenant_id = $1", .{TEST_TENANT_ID});
     _ = try conn.exec(
-        "INSERT INTO tenants (tenant_id, name, api_key_hash, created_at, updated_at) VALUES ($1, 'M16_004 Test', 'x', $2, $2)",
-        .{ TEST_TENANT_ID, now_ms },
-    );
+        \\INSERT INTO tenants (tenant_id, name, api_key_hash, created_at, updated_at)
+        \\VALUES ($1, 'M16_004 Test', 'x', $2, $2)
+        \\ON CONFLICT (tenant_id) DO NOTHING
+    , .{ TEST_TENANT_ID, now_ms });
     _ = try conn.exec(
         \\INSERT INTO workspaces (workspace_id, tenant_id, repo_url, default_branch, paused, version, created_at, updated_at)
         \\VALUES ($1, $2, $3, 'main', false, 1, $4, $4)
+        \\ON CONFLICT (workspace_id) DO NOTHING
     , .{ TEST_WS_ID, TEST_TENANT_ID, TEST_REPO_URL, now_ms });
     _ = try conn.exec(
         \\INSERT INTO workspaces (workspace_id, tenant_id, repo_url, default_branch, paused, version, created_at, updated_at)
         \\VALUES ($1, $2, $3, 'main', false, 1, $4, $4)
+        \\ON CONFLICT (workspace_id) DO NOTHING
     , .{ TEST_ADMIN_WS_ID, TEST_TENANT_ID, TEST_REPO_URL, now_ms });
 }
 
 fn cleanupSeedData(conn: *pg.Conn) void {
+    // Narrow scope — only delete rows THIS suite owns (platform keys + workspace BYOK
+    // secrets). Tenants/workspaces are shared across the integration suite via the
+    // baked-in JWT claims; wiping them here breaks sibling tests and forces a
+    // `make test-integration` reset. See docs/ZIG_RULES.md "HTTP Integration Tests".
     _ = conn.exec("DELETE FROM platform_llm_keys WHERE provider LIKE '\\__test\\_%' ESCAPE '\\'", .{}) catch {};
     _ = conn.exec("DELETE FROM vault.secrets WHERE workspace_id IN ($1, $2)", .{ TEST_WS_ID, TEST_ADMIN_WS_ID }) catch {};
-    _ = conn.exec("DELETE FROM workspaces WHERE workspace_id IN ($1, $2)", .{ TEST_WS_ID, TEST_ADMIN_WS_ID }) catch {};
-    _ = conn.exec("DELETE FROM tenants WHERE tenant_id = $1", .{TEST_TENANT_ID}) catch {};
 }
 
 // ── T1 + T12: Admin platform key lifecycle ────────────────────────────────────

@@ -56,21 +56,20 @@ fn seedAndHarness(alloc: std.mem.Allocator) !*TestHarness {
 
 fn setupSeedData(conn: *pg.Conn) !void {
     const now_ms = std.time.milliTimestamp();
+    // Idempotent — shared tenant/workspace across integration suites.
     _ = try conn.exec("DELETE FROM workspace_billing_audit WHERE workspace_id = $1", .{TEST_WORKSPACE_ID});
-    _ = try conn.exec("DELETE FROM workspace_billing_state WHERE workspace_id = $1", .{TEST_WORKSPACE_ID});
-    _ = try conn.exec("DELETE FROM workspace_entitlements WHERE workspace_id = $1", .{TEST_WORKSPACE_ID});
     _ = try conn.exec("DELETE FROM vault.workspace_skill_secrets WHERE workspace_id = $1", .{TEST_WORKSPACE_ID});
-    _ = try conn.exec("DELETE FROM workspaces WHERE workspace_id = $1", .{TEST_WORKSPACE_ID});
-    _ = try conn.exec("DELETE FROM tenants WHERE tenant_id = $1", .{TEST_TENANT_ID});
 
     _ = try conn.exec(
         \\INSERT INTO tenants (tenant_id, name, api_key_hash, created_at, updated_at)
         \\VALUES ($1, 'RBAC Test Tenant', 'managed', $2, $2)
+        \\ON CONFLICT (tenant_id) DO NOTHING
     , .{ TEST_TENANT_ID, now_ms });
     _ = try conn.exec(
         \\INSERT INTO workspaces
         \\  (workspace_id, tenant_id, repo_url, default_branch, paused, version, created_at, updated_at)
         \\VALUES ($1, $2, $3, 'main', false, 1, $4, $4)
+        \\ON CONFLICT (workspace_id) DO NOTHING
     , .{ TEST_WORKSPACE_ID, TEST_TENANT_ID, TEST_REPO_URL, now_ms });
     _ = try conn.exec(
         \\INSERT INTO workspace_entitlements
@@ -103,12 +102,13 @@ fn setupSeedData(conn: *pg.Conn) !void {
 }
 
 fn cleanupSeedData(conn: *pg.Conn) !void {
+    // Narrow scope — only delete rows THIS suite owns. Tenants/workspaces are shared
+    // across the integration suite via the baked-in JWT claims; wiping them here
+    // breaks sibling tests (byok, telemetry, dashboard, tenant_api_keys, zombie_steer
+    // all use TEST_TENANT_ID "…6f01" and TEST_WORKSPACE_ID "…6f11").
+    // See docs/ZIG_RULES.md "HTTP Integration Tests".
     _ = try conn.exec("DELETE FROM workspace_billing_audit WHERE workspace_id = $1", .{TEST_WORKSPACE_ID});
-    _ = try conn.exec("DELETE FROM workspace_billing_state WHERE workspace_id = $1", .{TEST_WORKSPACE_ID});
-    _ = try conn.exec("DELETE FROM workspace_entitlements WHERE workspace_id = $1", .{TEST_WORKSPACE_ID});
     _ = try conn.exec("DELETE FROM vault.workspace_skill_secrets WHERE workspace_id = $1", .{TEST_WORKSPACE_ID});
-    _ = try conn.exec("DELETE FROM workspaces WHERE workspace_id = $1", .{TEST_WORKSPACE_ID});
-    _ = try conn.exec("DELETE FROM tenants WHERE tenant_id = $1", .{TEST_TENANT_ID});
 }
 
 // ── Test: role gates for skill-secret + billing + zombie-lifecycle ─────────────

@@ -29,9 +29,12 @@ const TestHarness = harness_mod.TestHarness;
 //
 // The harness passes `*TestHarness` into configureRegistry; we construct
 // WebhookSig + SvixSignature pinned to the harness's pool and register them.
-// The middleware instances live in a module-level struct so their addresses
-// remain stable for the lifetime of the test (chain.Middleware holds raw
-// pointers into them).
+// The middleware instances live at module scope so their addresses stay stable
+// across the test body (chain.Middleware holds raw pointers into them).
+//
+// `zig build test` runs tests sequentially within a single process, so
+// reassigning across tests is safe. If the runner ever parallelizes, these
+// need to move into TestHarness as a lifetime-managed extension.
 
 var wired_webhook_sig: webhook_sig.WebhookSig(*pg.Pool) = undefined;
 var wired_svix: svix_signature.SvixSignature(*pg.Pool) = undefined;
@@ -81,8 +84,10 @@ test "integration: webhook harness — healthz reachable" {
 // extension. Follow-up workstream: harness Redis wiring.
 
 test "integration: github webhook — valid signature yields 202" {
-    if (true) return error.SkipZigTest; // TRACKED — see block comment above
-    const alloc = std.testing.allocator;
+    return error.SkipZigTest; // TRACKED — see block comment above
+}
+
+fn _tracked_github_happy_path(alloc: std.mem.Allocator) !void {
     const h = startHarness(alloc) catch |err| switch (err) {
         error.SkipZigTest => return error.SkipZigTest,
         else => return err,
@@ -116,10 +121,7 @@ test "integration: github webhook — valid signature yields 202" {
     const url = try std.fmt.allocPrint(alloc, "/v1/webhooks/{s}", .{fx.zombie_id});
     defer alloc.free(url);
 
-    const r = try h.post(url)
-        .header(sig.header_name, sig.header_value)
-        .json(body)
-        .send();
+    const r = try (try h.post(url).header(sig.header_name, sig.header_value)).json(body).send();
     defer r.deinit();
 
     // ── Assert + clean up ─────────────────────────────────────────────────

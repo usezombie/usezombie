@@ -241,15 +241,15 @@ pub const Request = struct {
     hdr_values: [MAX_HEADERS][]const u8 = undefined,
     hdr_count: usize = 0,
     body: ?[]const u8 = null,
-    bearer_owned: ?[]u8 = null, // owned by send() → freed on Response.deinit
+    bearer_owned: ?[]u8 = null, // allocated by bearer(); freed in send()'s defer
 
     fn init(h: *TestHarness, method: std.http.Method, path: []const u8) Request {
         return .{ .harness = h, .method = method, .path = path };
     }
 
-    pub fn header(self: Request, name: []const u8, value: []const u8) Request {
+    pub fn header(self: Request, name: []const u8, value: []const u8) !Request {
         var r = self;
-        if (r.hdr_count >= MAX_HEADERS) @panic("Request: too many headers (raise MAX_HEADERS)");
+        if (r.hdr_count >= MAX_HEADERS) return error.TooManyHeaders;
         r.hdr_names[r.hdr_count] = name;
         r.hdr_values[r.hdr_count] = value;
         r.hdr_count += 1;
@@ -257,14 +257,23 @@ pub const Request = struct {
     }
 
     pub fn bearer(self: Request, token: []const u8) !Request {
+        std.debug.assert(self.bearer_owned == null); // double-bearer would leak the first allocation
         const val = try std.fmt.allocPrint(self.harness.alloc, "Bearer {s}", .{token});
-        var r = self.header("authorization", val);
+        errdefer self.harness.alloc.free(val);
+        var r = try self.header("authorization", val);
         r.bearer_owned = val;
         return r;
     }
 
+    /// Non-fallible convenience — adds Content-Type: application/json and sets body.
+    /// Asserts header-slot availability; writing tests with >MAX_HEADERS headers is a
+    /// programming error (raise the const). Keeps call chains readable: no `try` needed.
     pub fn json(self: Request, body: []const u8) Request {
-        var r = self.header("content-type", "application/json");
+        var r = self;
+        std.debug.assert(r.hdr_count < MAX_HEADERS);
+        r.hdr_names[r.hdr_count] = "content-type";
+        r.hdr_values[r.hdr_count] = "application/json";
+        r.hdr_count += 1;
         r.body = body;
         return r;
     }
