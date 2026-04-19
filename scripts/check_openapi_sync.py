@@ -42,11 +42,20 @@ PATH_FIRST = re.compile(
 # to a route pair; the rest must be ignored when building the spec-side set.
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 
+# Strip Zig `// ...\n` line comments before the regex sees the source. Two
+# reasons: (1) an entry shaped like `.{ .method = "X", .path = "Y" }` written
+# inside a comment should NOT produce a phantom route pair; (2) a real entry
+# with a comment between `.method = "X",` and `.path = "Y"` would otherwise
+# fail both METHOD_FIRST and PATH_FIRST — the comment interrupts the
+# `,\s*\.path` sequence — and be silently dropped from the parity set.
+LINE_COMMENT = re.compile(r"//[^\n]*")
+
 
 def parse_manifest(src: str) -> "set[tuple[str, str]]":
+    stripped = LINE_COMMENT.sub("", src)
     pairs: "set[tuple[str, str]]" = set()
     for pattern in (METHOD_FIRST, PATH_FIRST):
-        for m in pattern.finditer(src):
+        for m in pattern.finditer(stripped):
             pairs.add((m.group("method"), m.group("path")))
     return pairs
 

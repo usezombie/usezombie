@@ -253,12 +253,33 @@ class DriftDetectionTests(unittest.TestCase):
 
 
 class AdversarialInputTests(unittest.TestCase):
-    def test_entry_inside_zig_line_comment_is_picked_up(self):
-        # Acknowledged limitation — the regex doesn't strip comments. In
-        # practice contributors don't write manifest-shaped content in
-        # comments. This test pins the behavior so future changes are deliberate.
+    def test_entry_inside_zig_line_comment_is_stripped(self):
+        # parse_manifest strips `// ...\n` comments before the regex runs, so
+        # example manifest entries in doc comments do NOT produce phantom
+        # routes. This also prevents a hypothetical `// .{ .method = "DELETE",
+        # .path = "/admin" }` example from appearing in the parity set.
         src = '// example: .{ .method = "POST", .path = "/docs-only" }'
-        self.assertEqual(parse_manifest(src), {("POST", "/docs-only")})
+        self.assertEqual(parse_manifest(src), set())
+
+    def test_comment_between_method_and_path_still_parses(self):
+        # Without the comment-stripping pre-pass, a comment between the two
+        # fields would break both METHOD_FIRST and PATH_FIRST (the `,\s*\.path`
+        # sequence cannot cross `// ...\n`), silently dropping the entry from
+        # the parity set. Greptile P2 on PR #232.
+        src = (
+            '.{\n'
+            '    .method = "POST",\n'
+            '    // explain why this one is special\n'
+            '    .path = "/v1/special",\n'
+            '}'
+        )
+        self.assertEqual(parse_manifest(src), {("POST", "/v1/special")})
+
+    def test_real_entry_with_trailing_comment_still_parses(self):
+        # Block-level `//` after the entry is fine — the regex only needs the
+        # fields themselves.
+        src = '.{ .method = "GET", .path = "/ok" },  // M28_003 §3'
+        self.assertEqual(parse_manifest(src), {("GET", "/ok")})
 
     def test_method_first_and_path_first_dedupe_identical_entry(self):
         # Both regexes can match the same logical entry if it's malformed —
