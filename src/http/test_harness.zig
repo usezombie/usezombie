@@ -56,12 +56,27 @@ pub const TestHarness = struct {
     session_store: auth_sessions.SessionStore,
     verifier: oidc.Verifier,
     queue: queue_redis.Client,
+    has_redis: bool = false,
     telemetry: telemetry_mod.Telemetry,
     registry: auth_mw.MiddlewareRegistry,
     ctx: handler.Context,
     server: *http_server.Server,
     thread: std.Thread,
     port: u16,
+
+    /// Opportunistic Redis connect. Sets `has_redis = true` on success so
+    /// tests that need the queue can `if (!h.has_redis) return error.SkipZigTest;`.
+    /// Reads REDIS_URL (role .default); returns false silently if unset/unreachable.
+    pub fn tryConnectRedis(self: *TestHarness) bool {
+        if (self.has_redis) return true;
+        if (queue_redis.Client.connectFromEnv(self.alloc, .default)) |client| {
+            self.queue = client;
+            self.has_redis = true;
+            return true;
+        } else |_| {
+            return false;
+        }
+    }
 
     /// Start an in-process server on a free port. Returns `error.SkipZigTest`
     /// when the test DB is not configured (`TEST_DATABASE_URL` unset).
@@ -131,6 +146,7 @@ pub const TestHarness = struct {
         self.server.deinit();
         self.verifier.deinit();
         self.session_store.deinit();
+        if (self.has_redis) self.queue.deinit();
         self.pool.deinit();
         self.alloc.destroy(self);
     }
