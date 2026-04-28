@@ -1,17 +1,13 @@
-// Integration tests for the worker write path against the executor harness
-// binary. The harness emits scripted progress frames (see runner_harness.zig);
-// the worker should ingest them via its real ExecutorClient + ProgressEmitter
-// wiring and PUBLISH them onto `zombie:{id}:activity`.
+// Heartbeat-cadence test for the worker write path against the executor
+// harness. Scripts the harness with 3× tool_call_progress frames, each
+// preceded by a 2 s sleep, and asserts the worker's PUBLISH side observes
+// them at ~2 s intervals — the same shape the SSE handler exposes to the
+// dashboard's "tool still running" spinner.
 //
-// Requires:
-//   - LIVE_DB=1 (Postgres reachable via TEST_DATABASE_URL / DATABASE_URL).
-//   - TEST_REDIS_TLS_URL pointing at a reachable Redis.
-//   - `zig-out/bin/zombied-executor-harness` present (test step depends on it).
-// Skipped otherwise.
+// Same env requirements as event_loop_harness_integration_test.zig.
 
 const std = @import("std");
 const pg = @import("pg");
-const PgQuery = @import("../db/pg_query.zig").PgQuery;
 const Allocator = std.mem.Allocator;
 
 const event_loop = @import("event_loop.zig");
@@ -19,6 +15,7 @@ const writepath = @import("event_loop_writepath.zig");
 const types = @import("event_loop_types.zig");
 const queue_redis = @import("../queue/redis_client.zig");
 const redis_zombie = @import("../queue/redis_zombie.zig");
+const redis_pubsub = @import("../queue/redis_pubsub.zig");
 const EventEnvelope = @import("event_envelope.zig");
 const base = @import("../db/test_fixtures.zig");
 const activity_publisher = @import("activity_publisher.zig");
@@ -27,30 +24,52 @@ const helpers = @import("test_harness_helpers.zig");
 
 const ALLOC = std.testing.allocator;
 
-const TEST_WORKSPACE_ID = "0195b4ba-8d3a-7f13-8abc-2b3e1e0c6f20";
-const TEST_ZOMBIE_ID = "0195b4ba-8d3a-7f13-8abc-2b3e1e0caa20";
-const TEST_SESSION_ID = "0195b4ba-8d3a-7f13-8abc-2b3e1e0caa21";
+// Distinct workspace + zombie ids so a flaky teardown in the
+// progress-callbacks test can't bleed state into this one.
+const TEST_WORKSPACE_ID = "0195b4ba-8d3a-7f13-8abc-2b3e1e0c6f30";
+const TEST_ZOMBIE_ID = "0195b4ba-8d3a-7f13-8abc-2b3e1e0caa30";
+const TEST_SESSION_ID = "0195b4ba-8d3a-7f13-8abc-2b3e1e0caa31";
 const ACTIVITY_CHANNEL = "zombie:" ++ TEST_ZOMBIE_ID ++ ":activity";
 const TEST_ACTOR = "steer:test-user";
-const TEST_REQUEST_JSON = "{\"message\":\"ping\"}";
+const TEST_REQUEST_JSON = "{\"message\":\"long-tool\"}";
 const EMPTY_CONTEXT_JSON = "{}";
-const TEST_CONSUMER = "harness-test-consumer";
+const TEST_CONSUMER = "harness-heartbeat-consumer";
 
-const DRAIN_OVERALL_BUDGET_MS: u64 = 8_000;
-
-const PROGRESS_SCRIPT =
+// 3× tool_call_progress, each preceded by a 2 s sleep — exercises the
+// "long tool call still alive" heartbeat path. Total wall ≈ 6 s.
+const HEARTBEAT_SCRIPT =
     \\{"frames":[
-    \\  {"kind":"tool_call_started","name":"http.request","args_redacted":"{\"url\":\"https://example.com\"}"},
-    \\  {"kind":"tool_call_started","name":"file.read","args_redacted":"{\"path\":\"/etc/hosts\"}"},
-    \\  {"kind":"agent_response_chunk","text":"Hello"},
-    \\  {"kind":"agent_response_chunk","text":" "},
-    \\  {"kind":"agent_response_chunk","text":"world"},
-    \\  {"kind":"agent_response_chunk","text":"!"},
-    \\  {"kind":"agent_response_chunk","text":"\n"},
-    \\  {"kind":"tool_call_completed","name":"http.request","ms":120},
-    \\  {"kind":"tool_call_completed","name":"file.read","ms":80}
+    \\  {"kind":"tool_call_progress","name":"http.request","elapsed_ms":2000,"delay_before_ms":2000},
+    \\  {"kind":"tool_call_progress","name":"http.request","elapsed_ms":4000,"delay_before_ms":2000},
+    \\  {"kind":"tool_call_progress","name":"http.request","elapsed_ms":6000,"delay_before_ms":2000}
     \\],"result":{"content":"ok","exit_ok":true}}
 ;
+
+// Each progress frame should land at the subscriber roughly 2 s after the
+// prior one. Allow a ±1.5 s window to absorb RPC round-trip + scheduler
+// jitter on busy CI runners.
+const HEARTBEAT_INTERVAL_MIN_MS: i64 = 500;
+const HEARTBEAT_INTERVAL_MAX_MS: i64 = 3_500;
+const HEARTBEAT_DRAIN_BUDGET_MS: u64 = 15_000;
+const EXPECTED_PROGRESS_FRAMES: usize = 3;
+
+// Drain runs on a background thread so it samples readMessage() in real
+// time while writepath.run blocks the main thread for ~6s. Without
+// concurrency, all 3 frames buffer in the kernel/Redis pipeline and
+// collapse to ms-level intervals when the test thread drains afterwards.
+const DrainCtx = struct {
+    sub: *redis_pubsub.Subscriber,
+    alloc: Allocator,
+    frames: *helpers.FrameList,
+    budget_ms: u64,
+    err: ?anyerror = null,
+};
+
+fn drainThread(ctx: *DrainCtx) void {
+    helpers.drainFrames(ctx.sub, ctx.alloc, ctx.frames, ctx.budget_ms) catch |e| {
+        ctx.err = e;
+    };
+}
 
 fn deleteEventStream(redis: *queue_redis.Client) void {
     var resp = redis.command(&.{ "DEL", "zombie:" ++ TEST_ZOMBIE_ID ++ ":events" }) catch return;
@@ -61,7 +80,7 @@ fn cleanupZombieEventsRows(conn: *pg.Conn) void {
     _ = conn.exec("DELETE FROM core.zombie_events WHERE zombie_id = $1::uuid", .{TEST_ZOMBIE_ID}) catch {};
 }
 
-test "integration: harness emits started/chunk/completed frames in order via real worker pipeline" {
+test "integration: harness emits ≥3 tool_call_progress frames at ~2s intervals" {
     if (std.process.getEnvVarOwned(ALLOC, helpers.SKIP_ENV_VAR)) |s| {
         defer ALLOC.free(s);
         return error.SkipZigTest;
@@ -71,8 +90,6 @@ test "integration: harness emits started/chunk/completed frames in order via rea
     defer db_ctx.pool.deinit();
     defer db_ctx.pool.release(db_ctx.conn);
 
-    // The default RedisRole reads REDIS_URL, but integration tests run with
-    // TEST_REDIS_TLS_URL set instead — connect via URL directly.
     var redis = blk: {
         const tls_url = std.process.getEnvVarOwned(ALLOC, helpers.REDIS_TLS_URL_ENV_VAR) catch return error.SkipZigTest;
         defer ALLOC.free(tls_url);
@@ -99,7 +116,7 @@ test "integration: harness emits started/chunk/completed frames in order via rea
 
     try redis_zombie.ensureZombieConsumerGroup(&redis, TEST_ZOMBIE_ID);
 
-    var harness = try Harness.start(ALLOC, .{ .script_json = PROGRESS_SCRIPT });
+    var harness = try Harness.start(ALLOC, .{ .script_json = HEARTBEAT_SCRIPT });
     defer harness.deinit();
 
     const envelope = EventEnvelope{
@@ -129,43 +146,41 @@ test "integration: harness emits started/chunk/completed frames in order via rea
         .running = &running,
         .balance_policy = .stop,
     };
+    var frames = helpers.FrameList{};
+    defer helpers.freeFrames(ALLOC, &frames);
+
+    var drain_ctx = DrainCtx{
+        .sub = &sub,
+        .alloc = ALLOC,
+        .frames = &frames,
+        .budget_ms = HEARTBEAT_DRAIN_BUDGET_MS,
+    };
+    const drainer = try std.Thread.spawn(.{}, drainThread, .{&drain_ctx});
+
     var consec: u32 = 0;
     const next_consec = writepath.run(ALLOC, &session, &evt, cfg, &consec);
     try std.testing.expectEqual(@as(u32, 0), next_consec);
 
-    var frames = helpers.FrameList{};
-    defer helpers.freeFrames(ALLOC, &frames);
-    try helpers.drainFrames(&sub, ALLOC, &frames, DRAIN_OVERALL_BUDGET_MS);
+    drainer.join();
+    if (drain_ctx.err) |e| return e;
 
-    // Expected sequence: event_received, 2× tool_call_started, 5× chunk,
-    // 2× tool_call_completed, event_complete. Strict order — the worker
-    // PUBLISHes synchronously per frame received from the executor RPC.
-    const expected = [_][]const u8{
-        activity_publisher.KIND_EVENT_RECEIVED,
-        activity_publisher.KIND_TOOL_CALL_STARTED,
-        activity_publisher.KIND_TOOL_CALL_STARTED,
-        activity_publisher.KIND_CHUNK,
-        activity_publisher.KIND_CHUNK,
-        activity_publisher.KIND_CHUNK,
-        activity_publisher.KIND_CHUNK,
-        activity_publisher.KIND_CHUNK,
-        activity_publisher.KIND_TOOL_CALL_COMPLETED,
-        activity_publisher.KIND_TOOL_CALL_COMPLETED,
-        activity_publisher.KIND_EVENT_COMPLETE,
-    };
-    try std.testing.expectEqual(expected.len, frames.items.len);
-    for (expected, frames.items) |want, got| {
-        try std.testing.expectEqualStrings(want, got.kind);
+    // Filter to just the heartbeat frames; cadence assertion is over the
+    // worker's PUBLISH timestamps, not interleaved with received/complete.
+    var progress_ts = std.ArrayList(i64){};
+    defer progress_ts.deinit(ALLOC);
+    for (frames.items) |f| {
+        if (std.mem.eql(u8, f.kind, activity_publisher.KIND_TOOL_CALL_PROGRESS)) {
+            try progress_ts.append(ALLOC, f.ts_ms);
+        }
     }
 
-    // Verify zombie_events row landed status=processed (terminal).
-    const conn = try db_ctx.pool.acquire();
-    defer db_ctx.pool.release(conn);
-    var q = PgQuery.from(try conn.query(
-        \\SELECT status FROM core.zombie_events
-        \\WHERE zombie_id = $1::uuid AND event_id = $2
-    , .{ TEST_ZOMBIE_ID, evt.event_id }));
-    defer q.deinit();
-    const row = (try q.next()) orelse return error.RowNotFound;
-    try std.testing.expectEqualStrings("processed", try row.get([]const u8, 0));
+    try std.testing.expect(progress_ts.items.len >= EXPECTED_PROGRESS_FRAMES);
+
+    // Inter-frame intervals: each adjacent pair should fall in the budget.
+    var i: usize = 1;
+    while (i < progress_ts.items.len) : (i += 1) {
+        const delta = progress_ts.items[i] - progress_ts.items[i - 1];
+        try std.testing.expect(delta >= HEARTBEAT_INTERVAL_MIN_MS);
+        try std.testing.expect(delta <= HEARTBEAT_INTERVAL_MAX_MS);
+    }
 }
