@@ -246,10 +246,13 @@ zombiectl: --byok was renamed to --self-managed in M66.
 See https://docs.usezombie.com/zombies/credentials.
 ```
 
-### Schema — `core.tenant_providers.mode`
+### Schema — `core.tenant_providers.mode` and `billing.tenant_billing`
 
-**Before:** `tenant_provider_mode` Postgres enum with values `('platform', 'byok')`.
-**After:** `('platform', 'self_managed')`. Migration scales `core.tenant_billing.balance_cents` by × 10,000,000 (cents → nanos: 1¢ = 10M nanos) and renames to `balance_nanos`.
+**Before:** `core.tenant_providers.mode TEXT` with comment-documented value-set `{platform, byok}`; value enforcement in `src/state/tenant_provider.zig` (RULE STS — no static-string CHECKs). `billing.tenant_billing.balance_cents BIGINT NOT NULL CHECK (balance_cents >= 0)`.
+
+**After:** `core.tenant_providers.mode TEXT` with comment-documented value-set `{platform, self_managed}`; value enforcement still in `Mode.parse()` — schema-side change is comment-only. `billing.tenant_billing.balance_nanos BIGINT NOT NULL CHECK (balance_nanos >= 0)`.
+
+**Procedure:** in-place edit of `schema/017_tenant_billing.sql` and `schema/020_tenant_providers.sql` per §1's pre-v2.0 clean-break path. **No migration script, no `ALTER`, no rescaling step.** Dev DB is reseeded via `make down && make up`; CI starts from clean Postgres so the schema change is invisible there. See `docs/gates/schema-removal.md` pre-v2.0 path.
 
 ### TS — `Mode` type alias
 
@@ -330,7 +333,8 @@ See https://docs.usezombie.com/zombies/credentials.
 - [ ] No file over 350 lines added — verify: `git diff --name-only origin/main | grep -v -E '\.md$|^vendor/' | xargs wc -l 2>/dev/null | awk '$1 > 350'`
 - [ ] BYOK term sweep passes — verify: `grep -rn '\bBYOK\b' src/ ui/ zombiectl/ public/ docs/architecture/ | grep -v -E '(historical|legacy lineage)' | wc -l` → 0
 - [ ] `hello@usezombie.com` literal sweep passes — verify: `grep -rn 'hello@usezombie\.com' src/ ui/ zombiectl/ docs/ public/ ~/Projects/docs/ | wc -l` → 0
-- [ ] Migration runs cleanly on dev Docker — verify: `make down && make up && make migrate && psql -c "SELECT enum_range(NULL::tenant_provider_mode)"` returns `{platform,self_managed}`
+- [ ] Schema reseed yields the new column shape — verify: `make down && make up && psql "$DATABASE_URL" -c "\d billing.tenant_billing" | grep -E '^ balance_(cents|nanos)\s'` shows `balance_nanos` (and zero `balance_cents` rows). No migration runner is invoked — pre-v2.0 clean-break path per §1.
+- [ ] No `byok` literal in `schema/*.sql` — verify: `grep -rn '\bbyok\b' schema/ | wc -l` → 0
 - [ ] OpenAPI updated — verify: `cat public/openapi.json | jq '.components.schemas.TenantProviderMode.enum'` returns `["platform","self_managed"]`
 - [ ] `bun run test` green in `ui/packages/{website,app}` — verify: `cd ui && bun run test`
 - [ ] `make check-pg-drain` clean — verify: `make check-pg-drain`
