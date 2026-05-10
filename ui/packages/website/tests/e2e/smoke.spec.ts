@@ -12,16 +12,18 @@ test.describe("Smoke", () => {
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   });
 
-  test("pricing page loads", async ({ page }) => {
-    await page.goto("/pricing");
-    await expect(page).toHaveURL(/\/pricing$/);
-    await expect(page.locator(".pricing-page")).toBeVisible();
-    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  test("pricing section renders inline on home", async ({ page }) => {
+    await page.goto("/#pricing");
+    await expect(page.getByTestId("pricing-block")).toBeVisible();
+    await expect(page.getByTestId("pricing-rate-event")).toHaveText("$0.01");
+    await expect(page.getByTestId("pricing-rate-stage")).toHaveText("$0.10");
   });
 
   test("agents page loads", async ({ page }) => {
     await page.goto("/agents");
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("autonomous agents");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText(
+      "This page is for autonomous agents.",
+    );
   });
 
   test("privacy page loads", async ({ page }) => {
@@ -37,13 +39,13 @@ test.describe("Smoke", () => {
   test("nav links are present on home", async ({ page }) => {
     await page.goto("/");
     const nav = page.getByRole("navigation", { name: /primary/i });
-    await expect(nav.getByRole("link", { name: "Home" })).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Pricing" })).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Docs" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: /^home$/i })).toBeVisible();
+    await expect(nav.getByRole("link", { name: /^pricing$/i })).toBeVisible();
+    await expect(nav.getByRole("link", { name: /^docs$/i })).toBeVisible();
   });
 
   test("footer renders on all routes", async ({ page }) => {
-    for (const route of ["/", "/pricing", "/agents", "/privacy", "/terms"]) {
+    for (const route of ["/", "/agents", "/privacy", "/terms"]) {
       await page.goto(route);
       await page.waitForLoadState("domcontentloaded");
       await expect(page.getByRole("contentinfo")).toBeVisible({ timeout: 10_000 });
@@ -52,7 +54,7 @@ test.describe("Smoke", () => {
 
   test("Discord link uses canonical URL", async ({ page }) => {
     await page.goto("/");
-    const discord = page.getByRole("contentinfo").getByRole("link", { name: "Discord" });
+    const discord = page.getByRole("contentinfo").getByRole("link", { name: /^discord$/i });
     await expect(discord).toHaveAttribute("href", "https://discord.gg/H9hH2nqQjh");
   });
 });

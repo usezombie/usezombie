@@ -15,11 +15,17 @@ export {
   type CardProps,
 } from "./Card";
 export { default as Terminal } from "./Terminal";
+export {
+  LogLine,
+  LogToken,
+  type LogLineProps,
+  type LogTokenProps,
+  type LogSeverity,
+} from "./LogLine";
 export { default as Grid } from "./Grid";
 export { default as Section } from "./Section";
 export { default as InstallBlock } from "./InstallBlock";
-export { default as AnimatedIcon } from "./AnimatedIcon";
-export { default as ZombieHandIcon } from "./ZombieHandIcon";
+export { WakePulse, type WakePulseProps } from "./WakePulse";
 export {
   Badge,
   badgeVariants,
@@ -111,6 +117,7 @@ export {
 export { PageHeader, type PageHeaderProps } from "./PageHeader";
 export { PageTitle, type PageTitleProps } from "./PageTitle";
 export { SectionLabel, type SectionLabelProps } from "./SectionLabel";
+export { DisplayXL, DisplayLG, type DisplayXLProps, type DisplayLGProps } from "./Display";
 export {
   DataTable,
   type DataTableColumn,

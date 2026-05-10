@@ -14,7 +14,9 @@ function renderCtaBlock() {
 describe("CTABlock", () => {
   it("renders the heading", () => {
     renderCtaBlock();
-    expect(screen.getByRole("heading", { level: 2, name: /building agents on usezombie\?/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 2, name: /building agents on usezombie\?/i }),
+    ).toBeInTheDocument();
   });
 
   it("renders the description", () => {
@@ -28,9 +30,9 @@ describe("CTABlock", () => {
     expect(cta).toHaveAttribute("href", "https://docs.usezombie.com/quickstart");
   });
 
-  it("renders pricing CTA as internal link", () => {
+  it("renders pricing CTA as anchor to home #pricing section", () => {
     renderCtaBlock();
     const cta = screen.getByRole("link", { name: /view pricing/i });
-    expect(cta).toHaveAttribute("href", "/pricing");
+    expect(cta).toHaveAttribute("href", "/#pricing");
   });
 });

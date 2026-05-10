@@ -10,6 +10,9 @@ export type ApiError = {
 
 // ── Zombies ──
 
+// `status` is typed as the loose `string` because the wire format may carry
+// values the front-end doesn't recognise (forward-compat). Consumers should
+// narrow with `ZOMBIE_STATUS` from `lib/api/zombies` before branching.
 export type Zombie = {
   id: string;
   name: string;
@@ -41,8 +44,6 @@ export type ZombieListResponse = {
 // server's `*_at_ms` fields (src/state/tenant_billing_store.zig). Pass them
 // straight to `new Date(n)`; never multiply by 1000.
 export type TenantBilling = {
-  plan_tier: string;
-  plan_sku: string;
   balance_cents: number;
   updated_at: number;
   is_exhausted: boolean;
