@@ -136,7 +136,7 @@ Switch the canonical billing unit from cents (`i64`) to **nanos (1/1,000,000,000
 
 **Why nanos, not micros:** micros (1/1,000,000 USD = 6 decimals) bottom out at $0.000001. Nanos give 3 more decimals of headroom, enough to express $0.000000001 (one billionth) cleanly. `i64` BIGINT holding nanos caps a single tenant balance at ~$9.2 billion (`i64::MAX` = 9.22e18 nanos = ~9.22e9 USD), so the type has no realistic overflow risk.
 
-**Implementation default:** use Postgres native column rename + `ALTER TABLE … ALTER COLUMN balance_cents TYPE BIGINT USING balance_cents * 1000000` then `ALTER COLUMN … RENAME TO balance_nanos`. If the column type stays `BIGINT`, only the `× 1000000` UPDATE + RENAME is needed. The agent confirms PG version supports this on the dev Docker image.
+**Implementation default:** use Postgres native column rename + `ALTER TABLE … ALTER COLUMN balance_cents TYPE BIGINT USING balance_cents * 10000000` then `ALTER COLUMN … RENAME TO balance_nanos`. If the column type stays `BIGINT`, only the `× 10_000_000` UPDATE + RENAME is needed (1¢ = 10M nanos at 1B nanos/USD). The agent confirms PG version supports this on the dev Docker image.
 
 ### §2 — M66 traction rates
 
@@ -262,11 +262,11 @@ See https://docs.usezombie.com/zombies/credentials.
 
 | Test | Asserts |
 |---|---|
-| `test_starter_credit_nanos_pinned` | `STARTER_CREDIT_NANOS == 5_000_000` |
+| `test_starter_credit_nanos_pinned` | `STARTER_CREDIT_NANOS == 5_000_000_000` |
 | `test_event_nanos_zero_both_postures` | `compute_event_charge(.platform) == 0`, `compute_event_charge(.self_managed) == 0` |
-| `test_stage_platform_nanos_pinned` | `STAGE_PLATFORM_NANOS == 1000` |
-| `test_stage_self_managed_nanos_pinned` | `STAGE_SELF_MANAGED_NANOS == 100` |
-| `test_compute_stage_charge_dispatches_on_posture` | `.platform` → 1000 nanos, `.self_managed` → 100 nanos |
+| `test_stage_platform_nanos_pinned` | `STAGE_PLATFORM_NANOS == 1_000_000` |
+| `test_stage_self_managed_nanos_pinned` | `STAGE_SELF_MANAGED_NANOS == 100_000` |
+| `test_compute_stage_charge_dispatches_on_posture` | `.platform` → 1_000_000 nanos, `.self_managed` → 100_000 nanos |
 | `test_mode_parse_self_managed_succeeds` | `Mode.parse("self_managed")` → `.self_managed` |
 | `test_mode_parse_byok_fails` | `Mode.parse("byok")` → `error.UnknownMode` |
 | `test_migration_renames_existing_byok_rows` | After migration, `SELECT mode FROM core.tenant_providers WHERE mode = 'byok'` returns 0 rows; previously-byok rows now show `'self_managed'` |
