@@ -1,4 +1,3 @@
-import "@testing-library/jest-dom/vitest";
 import { afterEach, vi } from "vitest";
 
 // Reset to real timers after every test so a previous test's
